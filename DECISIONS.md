@@ -4,6 +4,29 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-18 — Decode and mesh on one worker thread, paced by pts
+
+How `StreamPlayer` plays a stream; its header says what each call does.
+
+- **One worker thread does a frame's GPU work** (read, decode, mesh,
+  publish), and the drawing thread only takes meshes from recon's
+  `MeshExchange`. Why: drawing never waits on a decode, and recon's decoder
+  and grid, which are not thread-safe, stay on one thread. The controls sit
+  under a mutex with a condition variable, so any change wakes the worker,
+  paused or playing.
+- **It meshes a frame only once the consumer has taken the last mesh,**
+  rather than publishing over it. Why: each untaken mesh would hold a ring
+  slot the consumer's `frames_in_flight + 1` do not cover. A consumer that
+  stops drawing, such as a minimized window, so stops playback, and the clock
+  re-anchors on the late frame.
+- **Resync rests on the decoder.** A damaged record is skipped, and the
+  decoder refuses each P-frame whose reference was skipped (`NotFound`: it
+  checks the reference's hash), so playback resumes at the next key record
+  with no key tracking in the player. Any other failure stops the worker.
+- **With loop off, the last frame holds and play restarts,** as in a video
+  player. A pass that showed no frame holds even with loop on, so a stream of
+  damaged records is not reread in a busy loop.
+
 ## 2026-10-18 — CI: build and test on the family's GPU runners, lint and the gate hosted
 
 `.github/workflows/ci.yml` is the only workflow.

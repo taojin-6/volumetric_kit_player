@@ -13,3 +13,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   runners, with lint and the `required` gate hosted.
 - `player::Playback`, the clock that paces a stream's frames by their
   timestamps, with play, pause and step.
+- `player::StreamPlayer`, which plays a `.vrst` stream's geometry on a worker
+  thread: each frame decoded and meshed on the GPU when it is due, resynced
+  at the next key after a damaged record, looped or held at the end, and
+  handed to the drawing thread through recon's `MeshExchange`. Core and recon
+  are fetched pinned.
