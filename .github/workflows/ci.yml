@@ -160,10 +160,10 @@ jobs:
       - run: pre-commit run --all-files --show-diff-on-failure
 
   required:
-    # The one check branch protection requires (its context is `required`).
-    # It passes only when every build leg and lint succeeded, and FAILS (never
+    # The one check for branch protection (its context is `required`). It
+    # passes only when every build leg and lint succeeded, and FAILS (never
     # skips) on any other outcome: a skipped required check never reports. It
-    # runs hosted, so it reports even while the self-hosted runners are down.
+    # runs hosted, so it never queues for a runner itself (DECISIONS.md).
     needs: [build, lint]
     if: always()
     runs-on: ubuntu-24.04

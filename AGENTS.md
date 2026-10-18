@@ -48,10 +48,10 @@ drawing it in a window. [README.md](README.md) says what is implemented;
 ## Tests
 
 - Every change carries unit tests for what it changes.
-- **Tests and agents never open a window.** No test or agent runs the player,
-  a gfx example or anything else that calls `glfwInit`, and agents skip gfx's
-  `GlfwNativeWindowTest`. The window code is build-only; the owner checks it
-  by hand.
+- **Tests and agents never open a window.** Nothing they run may reach
+  `glfwInit`: a test may run the player only on input it refuses first, and
+  agents skip gfx's `GlfwNativeWindowTest`. The window code is build-only;
+  the owner checks it by hand.
 - Logic is tested headless: host-only where it can be, otherwise on a device
   through the core's fixtures, which skip without one locally and fail in CI.
 - Run GPU tests under the validation layer: `VKC_TEST_VALIDATION=1`, and on
@@ -72,8 +72,9 @@ drawing it in a window. [README.md](README.md) says what is implemented;
 Build and test from the task's worktree as
 [README.md](README.md#build-and-test) shows, then run
 `pre-commit run --all-files --show-diff-on-failure` and `git diff --check`.
-CI (`.github/workflows/ci.yml`) runs the same on the family's self-hosted Mac
-and Linux GPU runners; its `required` job is the merge gate.
+CI (`.github/workflows/ci.yml`) builds and tests on the family's self-hosted
+Mac and Linux GPU runners, runs the hooks on a hosted runner, and its
+`required` job is the merge gate.
 
 ## Keeping guidance current
 

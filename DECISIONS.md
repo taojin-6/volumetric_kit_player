@@ -18,9 +18,11 @@ is implemented.
   registers the runners. A job on the Mac installs nothing and fails naming
   any formula missing.
 - **Lint and the `required` gate run hosted:** they are free for a public
-  repository, and a hosted gate reports even while the self-hosted runners
-  are down. Branch protection on `main` requires that one check, whose
-  context is `required`.
+  repository, and once the legs finish or are cancelled a hosted gate always
+  runs and reports, where a self-hosted one could queue as well. A leg queued
+  for an offline runner still holds the gate pending until it is cancelled.
+  Branch protection on `main` is set to require that one check (context
+  `required`) once it has first reported.
 - **Left out until a need shows:** Debug on Linux, as the GPU hosts are
   shared with gfx and recon; a second Ubuntu; sanitizers, the first to add,
   for the decode worker's lifetimes; a dependency cache, which would save
