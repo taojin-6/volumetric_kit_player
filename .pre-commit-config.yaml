@@ -1,0 +1,36 @@
+# Formatting + hygiene hooks. Run once after cloning:
+#   pre-commit install
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+
+  - repo: https://github.com/pocc/pre-commit-hooks
+    rev: v1.3.5
+    hooks:
+      - id: clang-format
+        args: [-i, --style=file]
+        types_or: [c, c++, cuda, objective-c++]
+        # Pin the clang-format binary so formatting is identical locally and in
+        # CI; pre-commit installs it, so contributors need not install it too.
+        additional_dependencies: ['clang-format==22.1.8']
+
+  - repo: https://github.com/cheshirekow/cmake-format-precommit
+    rev: v0.6.13
+    hooks:
+      - id: cmake-format
+        additional_dependencies: [cmakelang, pyyaml]
+
+  # First-party code includes Vulkan through the core's
+  # "volumetric_kit/core/vulkan/vulkan.hpp", never <vulkan/...> directly, as in
+  # core, recon and gfx. Anchored to the start of a line, so a path quoted in a
+  # comment or a Doxygen @code block does not match.
+  - repo: local
+    hooks:
+      - id: vulkan-include-umbrella
+        name: enforce the core's vulkan.hpp Vulkan-include umbrella
+        entry: '^\s*#\s*include\s*[<"]vulkan/'
+        language: pygrep
+        files: \.(h|hpp|hxx|inl|ipp|c|cc|cpp|cxx|cu|cuh|mm)$
