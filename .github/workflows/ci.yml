@@ -1,0 +1,181 @@
+name: ci
+
+# Build and test on the family's self-hosted GPU runners, lint on a hosted one,
+# and one hosted `required` gate over both (DECISIONS.md, 2026-10-18).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to a PR supersedes its running CI. A push to main never cancels a
+# running main run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Only the owner triggers this repository's workflows, so no job carries a fork
+# guard (the core's DECISIONS.md, "Only the owner triggers CI").
+jobs:
+  build:
+    name: ${{ matrix.os }} (${{ matrix.build_type }})
+    runs-on: [self-hosted, '${{ matrix.runner }}']
+    # The Linux leg runs in an OS-matched container with the GPU passed
+    # through, as gfx's and recon's do: NVIDIA_DRIVER_CAPABILITIES=all makes
+    # the toolkit mount the Vulkan ICD. A runner's .env does not reach a job
+    # container, so the container sets the build and test levels: 4 is a
+    # 24-core host over a repository's 6 runners. The Mac legs run on the host.
+    container: ${{ matrix.container && fromJSON(matrix.container) || null }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        # A container runs `run:` steps under `sh` (dash) by default.
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            runner: mac
+            build_type: Debug
+          - os: macos-26
+            runner: mac
+            build_type: Release
+          - os: ubuntu-24.04
+            runner: vk-linux-gpu
+            build_type: Release
+            container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
+    steps:
+      # The bare image runs us as root and lacks git (checkout needs it) and a
+      # toolchain. The NVIDIA ICD needs libXext.so.6 and libEGL.so.1 before it
+      # hands the loader an instance; without them every GPU test would skip
+      # (gfx's _build.yml). libglfw3-dev is GLFW for gfx's window glue, which
+      # links the distro's GLFW and so needs no X11 headers.
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git \
+            cmake build-essential libglm-dev libvulkan-dev \
+            vulkan-validationlayers spirv-tools glslang-tools vulkan-tools \
+            libglfw3-dev libxext6 libegl1
+
+      # A self-hosted workspace is readable by other repositories' jobs on the
+      # host, so the token is not left in .git/config.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The Mac's Homebrew is shared, so a job installs nothing and fails
+      # naming any formula missing (the core's tools/runners/README.md).
+      # TODO: take this check from a core action, as gfx, recon and calib copy
+      # it too, once the core has one.
+      - name: Check dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          command -v brew >/dev/null || {
+            echo "::error::brew is not on this runner's PATH"
+            exit 1
+          }
+          missing=""
+          for pkg in cmake glm molten-vk vulkan-headers vulkan-loader \
+              vulkan-validationlayers shaderc glslang spirv-tools glfw; do
+            brew list --formula "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::install by hand on this runner's host, while CI is idle:${missing}"
+            exit 1
+          fi
+          # The layer's manifest names its library without a path; the Test
+          # step alone searches Homebrew's lib for it.
+          echo "VP_LAYER_LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+          echo "VK_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
+
+      # The Linux leg exists for the GPU behind --gpus all, so it fails rather
+      # than passing with no device.
+      - name: GPU diagnostic (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          vulkaninfo --summary || {
+            echo "::error::no Vulkan device visible inside the GPU container"
+            exit 1
+          }
+
+      - name: Configure
+        # Retry to ride out transient FetchContent clone failures.
+        run: |
+          ok=0
+          for attempt in 1 2 3; do
+            if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+                -DVP_WARNINGS_AS_ERRORS=ON; then
+              ok=1
+              break
+            fi
+            echo "::warning::cmake configure attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          [ "${ok}" = 1 ] || {
+            echo "::error::cmake configure failed after 3 attempts"
+            exit 1
+          }
+
+      # The levels come from the runner's .env on the Mac and from the
+      # container's env on Linux. They are passed explicitly: a bare
+      # `--parallel` runs make with no job limit.
+      - name: Build
+        run: |
+          cmake --build build \
+            --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
+
+      - name: Test
+        env:
+          # The core's test policy: a GPU test fails, rather than skips,
+          # without a device or the validation layer, and fails on any error
+          # the layer reports.
+          VKC_REQUIRE_VULKAN_DEVICE: '1'
+          VKC_TEST_VALIDATION: '1'
+        # Set on the command, as macOS strips DYLD_* from a step's env when it
+        # starts the system's bash.
+        run: |
+          DYLD_FALLBACK_LIBRARY_PATH="${VP_LAYER_LIBRARY_PATH:-}" \
+            ctest --test-dir build --output-on-failure \
+              --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      # pre-commit's hook environments, rebuilt only when the config changes.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: |
+            pre-commit-
+      # Pinned, so a new pre-commit release cannot change the gate unseen.
+      - run: python -m pip install pre-commit==4.6.2
+      - run: pre-commit run --all-files --show-diff-on-failure
+
+  required:
+    # The one check branch protection requires (its context is `required`).
+    # It passes only when every build leg and lint succeeded, and FAILS (never
+    # skips) on any other outcome: a skipped required check never reports. It
+    # runs hosted, so it reports even while the self-hosted runners are down.
+    needs: [build, lint]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Assert every required job succeeded
+        run: |
+          echo "build=${{ needs.build.result }} lint=${{ needs.lint.result }}"
+          if [ "${{ needs.build.result }}" = success ] \
+             && [ "${{ needs.lint.result }}" = success ]; then
+            echo "All required CI jobs passed."
+          else
+            echo "::error::one or more required CI jobs did not succeed (see results above)"
+            exit 1
+          fi
