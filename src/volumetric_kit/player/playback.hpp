@@ -22,9 +22,9 @@ namespace volumetric_kit::player {
 /// pause. A frame shown more than one nominal period late counts as due when
 /// it was shown, so the frames behind it follow it rather than come in a
 /// burst. A pts at or before the last one's, as at a loop's first frame or
-/// in a stream whose pts do not increase, is due one nominal period after
-/// the last frame. While paused, nothing is due but one frame per
-/// @ref step, each at once.
+/// in a stream whose pts do not increase, or more than a second after it, is
+/// due one nominal period after the last frame. While paused, nothing is due
+/// but one frame per @ref step, each at once.
 ///
 /// The caller passes the time in, so a test never sleeps. It is not
 /// thread-safe: a caller that shares it guards it with its own lock.

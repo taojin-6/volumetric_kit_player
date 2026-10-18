@@ -42,11 +42,18 @@ TEST(Playback, AFrameLateByUnderAPeriodKeepsTheSchedule) {
   EXPECT_EQ(clock.due(ms(66), t0), t0 + milliseconds(66));
 }
 
-TEST(Playback, ALateFrameReanchors) {
+TEST(Playback, AFrameExactlyAPeriodLateKeepsTheSchedule) {
+  Playback clock(25, 1);
+  clock.shown(0, t0);
+  clock.shown(ms(40), t0 + milliseconds(80));
+  EXPECT_EQ(clock.due(ms(80), t0), t0 + milliseconds(80));
+}
+
+TEST(Playback, AFrameOverAPeriodLateReanchors) {
   Playback clock(30, 1);
   clock.shown(0, t0);
-  clock.shown(ms(33), t0 + milliseconds(100));
-  EXPECT_EQ(clock.due(ms(66), t0), t0 + milliseconds(133));
+  clock.shown(ms(33), t0 + milliseconds(73));
+  EXPECT_EQ(clock.due(ms(66), t0), t0 + milliseconds(106));
 }
 
 TEST(Playback, PauseFreezes) {
@@ -87,6 +94,13 @@ TEST(Playback, AStepReleasesExactlyOneFrame) {
   EXPECT_FALSE(clock.due(ms(133), t1).has_value());
 }
 
+TEST(Playback, PlayWhilePlayingKeepsTheSchedule) {
+  Playback clock(30, 1);
+  clock.shown(0, t0);
+  clock.play();
+  EXPECT_EQ(clock.due(ms(33), t0 + milliseconds(5)), t0 + milliseconds(33));
+}
+
 TEST(Playback, PlayDropsStepsNotTaken) {
   Playback clock(30, 1);
   clock.step();
@@ -102,6 +116,14 @@ TEST(Playback, PtsThatDoNotIncreaseFallBackToTheNominalPeriod) {
   EXPECT_EQ(clock.due(ms(100), t0), t0 + milliseconds(40));
   clock.shown(ms(100), t0 + milliseconds(40));
   EXPECT_EQ(clock.due(ms(50), t0), t0 + milliseconds(80));
+}
+
+TEST(Playback, AGapOverASecondFallsBackToTheNominalPeriod) {
+  Playback clock(25, 1);
+  clock.shown(0, t0);
+  EXPECT_EQ(clock.due(ms(1000), t0), t0 + seconds(1));
+  EXPECT_EQ(clock.due(ms(1000) + 1, t0), t0 + milliseconds(40));
+  EXPECT_EQ(clock.due(UINT64_MAX, t0), t0 + milliseconds(40));
 }
 
 TEST(Playback, AnUnknownRateIsThirtyFramesASecond) {
