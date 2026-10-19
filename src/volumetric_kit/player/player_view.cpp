@@ -139,10 +139,8 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   // 2. The controls, as of the last frame drawn.
   overlay_.new_frame();
   draw_controls(*player_, shown_);
-  // 3. The newest mesh; the slot's last frame has completed.
-  // TODO: recon's exchange commits an empty mesh without calling commit and
-  // drops its stamp, so a frame that meshes empty leaves shown_ on the frame
-  // before (a recon task: hand commit the empty mesh too).
+  // 3. The newest mesh, an empty one included; the slot's last frame has
+  // completed.
   exchange_.begin_frame(
       frame.slot, [this](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
         shown_ = stamp;

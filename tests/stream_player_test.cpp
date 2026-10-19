@@ -3,7 +3,8 @@
 
 // StreamPlayer on a device, over the tests' stream (test_stream.hpp). Paused
 // and stepped, so each frame goes when the test says: frames arrive in order
-// with their index and pts, each mesh non-empty on the device; with loop on a
+// with their index and pts, each mesh non-empty on the device, and a frame
+// that meshes nothing still reaches the commit with its stamp; with loop on a
 // step past the end wraps, with loop off the last frame holds until play
 // restarts; a corrupt P-frame, a damaged record header or a record this
 // version cannot read resyncs at the next key, and a stream with no key left
@@ -157,8 +158,9 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   }
 
   // The next mesh the worker publishes, taken as a renderer's frame takes
-  // it, and checked non-empty on the device: its stamp, or empty when none
-  // comes within `wait`.
+  // it, through the commit, and checked on the device: non-empty but for
+  // the stream's empty_frame_. Its stamp, or empty when none comes within
+  // `wait`.
   std::optional<FrameStamp> next_frame(
       std::chrono::milliseconds wait = kArrival) {
     const SteadyClock::time_point deadline = SteadyClock::now() + wait;
@@ -175,11 +177,19 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
         return std::nullopt;
       }
       if (outcome == recon::mesh::ExchangeOutcome::kCommitted) {
-        // An empty mesh commits without the callback.
+        // Every mesh committed, an empty one included, came through the
+        // commit with its stamp.
+        EXPECT_TRUE(taken.has_value()) << "a mesh committed without its stamp";
         const recon::mesh::DeviceMesh& mesh = exchange_.live();
-        EXPECT_GT(mesh.triangle_count, 0u);
-        EXPECT_EQ(index_count(mesh),
-                  recon::mesh::kIndicesPerTriangle * mesh.triangle_count);
+        if (taken) {
+          EXPECT_EQ(mesh.empty(), taken->index == empty_frame_)
+              << "frame " << taken->index;
+        }
+        // An empty mesh may name null buffers: no draw command to read.
+        if (mesh.valid()) {
+          EXPECT_EQ(index_count(mesh),
+                    recon::mesh::kIndicesPerTriangle * mesh.triangle_count);
+        }
         return taken;
       }
       std::this_thread::sleep_for(1ms);
@@ -310,7 +320,9 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   }
 
   Scratch scratch_;
-  const std::string path_ = scratch_.file("sphere.vrst");
+  std::string path_ = scratch_.file("sphere.vrst");
+  // The stream's frame that meshes nothing (write_stream's `empty`), if any.
+  std::optional<std::uint64_t> empty_frame_;
   FrameExchange exchange_;
   std::uint32_t slot_ = 0;
   // Destroyed first: its worker uses the exchange.
@@ -329,6 +341,27 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
     EXPECT_EQ(frame->index, i);
     EXPECT_EQ(frame->pts_ns, pts_of(i));
     EXPECT_GT(frame->decode_mesh_ms, 0.0);
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, AFrameThatMeshesNothingReachesTheCommitWithItsStamp) {
+  path_ = scratch_.file("empty_frame.vrst");
+  empty_frame_ = 1;
+  const core::Status written =
+      write_stream(device(), allocator(), path_, empty_frame_);
+  ASSERT_TRUE(written.ok()) << written.message();
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  // Frame 1 is committed through the commit, with its stamp (next_frame
+  // checks both), and the live mesh is then the empty one.
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 1));
+  EXPECT_TRUE(exchange_.live().empty());
+  // The frames after it mesh again.
+  for (std::uint64_t i = 2; i < kFrames; ++i) {
+    ASSERT_NO_FATAL_FAILURE(step_to(*player, i));
   }
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();

@@ -11,7 +11,7 @@ include(FetchContent)
 
 # --- volumetric_kit_core -----------------------------------------------------
 # The device, Status/Result and the GPU test fixtures, declared first
-# (DECISIONS.md). The pin is the core recon fa4a41e pins (7a1219e, 0.10.0, core
+# (DECISIONS.md). The pin is the core recon 8c8dec2 pins (7a1219e, 0.10.0, core
 # #36's merge), and the floor below is that version, so an older
 # FETCHCONTENT_SOURCE_DIR override is refused. The player installs nothing, so
 # the core's install rules are off too.
@@ -30,12 +30,13 @@ vkc_require_core(0.10.0 VULKAN)
 # --- volumetric_kit_recon ----------------------------------------------------
 # The stream reader, the codec's decode grid, Marching Cubes and the mesh
 # exchange. Its tests, examples, install and -Werror stay off in a subproject.
-# The pin is recon main at #255's merge (fa4a41e): volume::kDefaultBucketSize /
-# kDefaultMaxChain, beside #253's codec::make_decode_grid and decode_growing.
+# The pin is recon main at #256's merge (8c8dec2): an empty mesh's payload
+# reaches MeshExchange's commit, beside #255's volume::kDefaultBucketSize /
+# kDefaultMaxChain and #253's codec::make_decode_grid and decode_growing.
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG fa4a41e17ffa02cab2be98805acf1fafdb83dbf2)
+  GIT_TAG 8c8dec2ece8287ac3d05ab843accfb90efa1b05e)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------

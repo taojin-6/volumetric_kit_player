@@ -3,7 +3,8 @@
 
 // PlayerView on a device, over gfx's headless surface and the tests' stream
 // (test_stream.hpp), with gfx's ImGuiTouch as the platform half: create
-// refuses what it cannot use; frames present and shown() advances; 0 x 0
+// refuses what it cannot use; frames present and shown() advances, onto a
+// frame that meshes nothing too, which still presents; 0 x 0
 // skips without blocking; a step moves one frame; the worker's failure
 // surfaces from frame(); the panel draws at a phone's scale;
 // ui_wants_pointer() follows a finger on the panel; and teardown mid-playback
@@ -259,6 +260,30 @@ TEST_F(PlayerViewTest, FramesPresentAndShownAdvances) {
     presented += ticked.value() ? 1 : 0;
   }
   EXPECT_EQ(presented, 3u) << "a headless surface never settles";
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
+
+TEST_F(PlayerViewTest, ShownMovesOntoAFrameThatMeshesNothing) {
+  const std::string path = scratch_.file("empty_frame.vrst");
+  const core::Status written =
+      vp_test::write_stream(device(), allocator(), path, /*empty=*/1);
+  ASSERT_TRUE(written.ok()) << written.message();
+  ASSERT_TRUE(make_view(path, /*playing=*/false));
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  EXPECT_EQ(view_->shown()->index, 0u);
+  // Frame 1 draws nothing, and the read-out moves onto it.
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown()->index != 0; }))
+      << "shown() stayed on frame 0";
+  EXPECT_EQ(view_->shown()->index, 1u);
+  EXPECT_EQ(view_->shown()->pts_ns, vp_test::pts_of(1));
+  ASSERT_TRUE(present());  // drawing nothing, the frame still presents
+  // The frame after it draws again.
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown()->index != 1; }));
+  EXPECT_EQ(view_->shown()->index, 2u);
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
 }
