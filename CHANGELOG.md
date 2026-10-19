@@ -13,3 +13,5 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   runners, with lint and the `required` gate hosted.
 - `player::Playback`, the clock that paces a stream's frames by their
   timestamps, with play, pause and step.
+- `player::StreamPlayer`: plays a `.vrst` stream's geometry on a worker
+  thread, paced by its pts.

@@ -4,6 +4,33 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-18 — Decode and mesh on one worker thread, paced by pts
+
+How `StreamPlayer` plays a stream; its header says what each call does.
+
+- **One worker thread does a frame's GPU work** (read, decode, mesh,
+  publish), and the drawing thread only takes meshes from recon's
+  `MeshExchange`. Why: drawing never waits on a decode, and recon's decoder
+  and grid, which are not thread-safe, stay on one thread.
+- **It meshes a frame only once the consumer has taken the last mesh,**
+  rather than publishing over it. Why: each untaken mesh would hold a ring
+  slot the consumer's `frames_in_flight + 1` do not cover. A consumer that
+  stops drawing, such as a minimized window, so stops playback, and the clock
+  re-anchors on the late frame.
+- **Resync rests on the decoder.** A damaged record is skipped, and the
+  decoder refuses each P-frame whose reference was skipped (`NotFound`: it
+  checks the reference's hash), so playback resumes at the next key record
+  with no key tracking in the player. A record this version cannot read
+  (`Unsupported`) is skipped alike, as a newer writer's may be.
+- **A pass that shows no frame stops the worker with its first refusal,**
+  which caused the rest. Why: a refusal that lasts, such as a newer codec's
+  or a frame the device cannot hold, would otherwise look like a pause with
+  nothing to report, and a loop would reread the file in a busy loop.
+- **With loop off, the last frame holds and play restarts,** as in a video
+  player.
+- **The sanitizer leg the CI entry defers is now due,** as this is the
+  worker it waits for: a ThreadSanitizer leg, a `TODO:` in ci.yml.
+
 ## 2026-10-18 — CI: build and test on the family's GPU runners, lint and the gate hosted
 
 `.github/workflows/ci.yml` is the only workflow.
@@ -11,9 +38,9 @@ is implemented.
 - **Build and test on self-hosted runners with a GPU,** as gfx and recon do:
   the family's Mac (label `mac`; Debug and Release, on MoltenVK) and its Linux
   GPU hosts (label `vk-linux-gpu`; Release, in `ubuntu:24.04` and
-  `ubuntu:26.04` containers with `--gpus all`, on the NVIDIA driver). Why: every tier past the clock
-  needs a Vulkan device, and these are the family's GPUs; a hosted runner has
-  only a software one. The core's
+  `ubuntu:26.04` containers with `--gpus all`, on the NVIDIA driver). Why:
+  every tier past the clock needs a Vulkan device, and these are the family's
+  GPUs; a hosted runner has only a software one. The core's
   [runner tooling](https://github.com/taojin-6/volumetric_kit_core/blob/main/tools/runners/README.md)
   registers the runners. A job on the Mac installs nothing and fails naming
   any formula missing.
