@@ -334,12 +334,16 @@ TEST_F(PlayerViewTest, UiWantsPointerFollowsAFingerOnThePanel) {
   touch_->touch_ended(2);
 }
 
-// Twice the scale takes gfx's larger font, which must hold the status line's
-// glyphs.
+// Twice the scale takes ImGui's vector font rather than its pixel one, which
+// must also hold the status line's dot.
 TEST_F(PlayerViewTest, ThePanelDrawsAtAPhonesScale) {
   ui_scale_ = 2.0f;
   ASSERT_TRUE(make_view(/*playing=*/false));
   EXPECT_TRUE(present());
+  ImGui::SetCurrentContext(view_->ui_context());
+  const ImVector<ImFont*>& fonts = ImGui::GetIO().Fonts->Fonts;
+  ASSERT_FALSE(fonts.empty()) << "the first frame adds the font";
+  EXPECT_TRUE(fonts[0]->IsGlyphInFont(0x00B7));
 }
 
 TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {
