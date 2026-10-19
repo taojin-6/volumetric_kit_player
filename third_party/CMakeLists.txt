@@ -2,8 +2,9 @@
 # Copyright (c) 2026 Tao Jin
 
 # Third-party dependencies, fetched pinned (FetchContent): volumetric_kit_core,
-# volumetric_kit_recon, and googletest when the tests are built. recon takes
-# Vulkan and GLM from the system. Work on a sibling's checkout at once with
+# volumetric_kit_recon, volumetric_kit_gfx, and googletest when the tests are
+# built. recon and gfx take Vulkan and GLM from the system. Work on a sibling's
+# checkout at once with
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_<NAME>=<checkout>.
 
 include(FetchContent)
@@ -36,6 +37,20 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
   GIT_TAG fa4a41e17ffa02cab2be98805acf1fafdb83dbf2)
 FetchContent_MakeAvailable(volumetric_kit_recon)
+
+# --- volumetric_kit_gfx ------------------------------------------------------
+# The swapchain on a shared device, the mesh pipeline, the orbit camera and the
+# controls panel (ImGui). Its tests, examples, install and -Werror stay off in a
+# subproject, and so does its GLFW tier: the library links no window system
+# (DECISIONS.md). gfx's own core pin yields to the one above.
+#
+# TODO(P3): bump to the merge of gfx #143-#146 before pushing
+set(VG_WITH_GLFW OFF)
+FetchContent_Declare(
+  volumetric_kit_gfx
+  GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
+  GIT_TAG 76d0655ab04672c9971e0681adf8d937aa52eca0)
+FetchContent_MakeAvailable(volumetric_kit_gfx)
 
 if(VP_BUILD_TESTS)
   set(INSTALL_GTEST

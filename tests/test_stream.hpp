@@ -6,8 +6,9 @@
 /// @file test_stream.hpp
 /// The tests' stream, written with recon's MeshIntegrator, Encoder and
 /// StreamWriter: kFrames frames of a sphere moving a block a frame, at 25 fps
-/// with a pause before the fourth, an I-frame every third. And a scratch
-/// directory of the test's own to write it into.
+/// with a pause before the fourth, an I-frame every third. A stream that opens
+/// but never decodes. And a scratch directory of the test's own to write them
+/// into.
 
 #include <gtest/gtest.h>
 #include <unistd.h>
@@ -169,6 +170,30 @@ inline core::Status write_stream(core::Device& device,
     record.pts_ns = pts_of(i);
     record.seq = i;
     VKC_TRY(writer->append(record, frame.data(), frame.size()));
+  }
+  return writer->finish();
+}
+
+// A stream that opens, with no device, but never decodes: a 25 fps geometry
+// track of `records` one-byte key records.
+inline core::Status write_undecodable_stream(const std::string& path,
+                                             std::uint64_t records) {
+  namespace stream = recon::stream;
+  stream::Session session;
+  session.writer = "volumetric_kit_player tests";
+  stream::Track track;
+  track.kind = stream::TrackKind::Geometry;
+  track.rate = {25, 1};
+  session.tracks.push_back(track);
+  VKC_ASSIGN(std::unique_ptr<stream::StreamWriter> writer,
+             stream::StreamWriter::create(path, session));
+  const std::uint8_t byte = 0;
+  for (std::uint64_t i = 0; i < records; ++i) {
+    stream::RecordInfo record;
+    record.key = true;
+    record.pts_ns = pts_of(i);
+    record.seq = i;
+    VKC_TRY(writer->append(record, &byte, 1));
   }
   return writer->finish();
 }
