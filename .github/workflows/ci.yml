@@ -195,7 +195,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       # pre-commit's hook environments, rebuilt only when the config changes.
       - uses: actions/cache@v6
         with:
