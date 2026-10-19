@@ -28,6 +28,8 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   nothing to report, and a loop would reread the file in a busy loop.
 - **With loop off, the last frame holds and play restarts,** as in a video
   player.
+- **The sanitizer leg the CI entry defers is now due,** as this is the
+  worker it waits for: a ThreadSanitizer leg, a `TODO:` in ci.yml.
 
 ## 2026-10-18 — CI: build and test on the family's GPU runners, lint and the gate hosted
 
@@ -49,11 +51,10 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   Branch protection on `main` is set to require that one check (context
   `required`) once it has first reported.
 - **Left out until a need shows:** Debug on Linux, as the GPU hosts are
-  shared with gfx and recon; a second Ubuntu; a dependency cache, which would
-  save about 30 s a job on the Mac and could go stale after a brew upgrade;
-  and the siblings' split into reusable workflows. A ThreadSanitizer leg is
-  the first to add, now that `StreamPlayer` has its worker (the `TODO:` in
-  ci.yml).
+  shared with gfx and recon; a second Ubuntu; sanitizers, the first to add,
+  for the decode worker's lifetimes; a dependency cache, which would save
+  about 30 s a job on the Mac and could go stale after a brew upgrade; and
+  the siblings' split into reusable workflows.
 - **The window is build-only in CI:** the Mac's runners are daemons with no
   window server, and no test opens a window (AGENTS.md).
 
