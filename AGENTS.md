@@ -31,14 +31,15 @@ drawing it in a window. [README.md](README.md) says what is implemented;
 - `apps/volumetric_kit_player/`: the desktop app, the one target that links
   GLFW.
 - `tests/<name>_test.cpp`, each added with `vp_add_test` in
-  `tests/CMakeLists.txt`.
+  `tests/CMakeLists.txt`; `tests/ios_link_check/`, the iOS build's app,
+  linked and never run.
 - Namespace `volumetric_kit::player`; `VP_*` for the player's macros and
   CMake options. The siblings' names stay theirs.
 
 ## Conventions
 
 - C++17 with no compiler extensions, built with GCC or Clang on Linux and
-  macOS. Add no `_WIN32`/`_MSC_VER` paths or MSVC flags.
+  macOS, and for iOS. Add no `_WIN32`/`_MSC_VER` paths or MSVC flags.
 - Doxygen on every class and function in a header: `@file`/`@brief` on the
   header, a `@code` example per class, `@param`/`@return`/`@pre` on methods.
 - Fallible calls return the core's `Status` or `Result<T>`, propagated with

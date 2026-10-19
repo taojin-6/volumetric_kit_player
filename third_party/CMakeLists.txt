@@ -3,8 +3,8 @@
 
 # Third-party dependencies, fetched pinned (FetchContent): volumetric_kit_core,
 # volumetric_kit_recon, volumetric_kit_gfx, and googletest when the tests are
-# built. recon and gfx take Vulkan and GLM from the system. Work on a sibling's
-# checkout at once with
+# built. recon and gfx take Vulkan and GLM from the system, or on iOS as the
+# core sets them up. Work on a sibling's checkout at once with
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_<NAME>=<checkout>.
 
 include(FetchContent)
@@ -15,6 +15,9 @@ include(FetchContent)
 # #36's merge), and the floor below is that version, so an older
 # FETCHCONTENT_SOURCE_DIR override is refused. The player installs nothing, so
 # the core's install rules are off too.
+# TODO(P5): pin core at C2's merge (0.12.0: vkc_ios, MoltenVK_ROOT) and raise
+# the floor to 0.12.0. Until then an iOS build needs that core through
+# -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE.
 set(VKC_WITH_VULKAN ON)
 set(VKC_INSTALL OFF)
 if(VP_BUILD_TESTS)
@@ -42,13 +45,12 @@ FetchContent_MakeAvailable(volumetric_kit_recon)
 # --- volumetric_kit_gfx ------------------------------------------------------
 # The swapchain on a shared device, the mesh pipeline, the orbit camera and the
 # controls panel (ImGui). Its tests, examples, install and -Werror stay off in a
-# subproject. Its GLFW tier is on, for the desktop app alone: the library links
-# no window system (the top-level CMakeLists.txt checks). gfx's own core pin
-# yields to the one above. The pin is gfx main at #146's merge (77f421e):
-# windowing::SurfaceSource and glfw::Library, beside #143's orbit drag gestures,
-# #144's sRGB ImGui fix and #145's ImGuiTouch. TODO: an iOS build turns this
-# tier and the app off; a preset cannot, as this set wins over the cache.
-set(VG_WITH_GLFW ON)
+# subproject. Its GLFW tier is built with the desktop app alone, so not on iOS:
+# the library links no window system (the top-level CMakeLists.txt checks).
+# gfx's own core pin yields to the one above. The pin is gfx main at #146's
+# merge (77f421e): windowing::SurfaceSource and glfw::Library, beside #143's
+# orbit drag gestures, #144's sRGB ImGui fix and #145's ImGuiTouch.
+set(VG_WITH_GLFW ${VP_DESKTOP_APP})
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git

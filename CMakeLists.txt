@@ -23,9 +23,22 @@ option(VP_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
 include(vp_warnings)
 include(vp_link_closure)
 
+# The desktop app, a GLFW window, everywhere but iOS, which builds a never-run
+# app that links the library instead (DECISIONS.md). gfx's GLFW tier is the
+# desktop app's alone (third_party/).
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  set(VP_DESKTOP_APP OFF)
+else()
+  set(VP_DESKTOP_APP ON)
+endif()
+
 add_subdirectory(third_party)
 add_subdirectory(src)
-add_subdirectory(apps/volumetric_kit_player)
+if(VP_DESKTOP_APP)
+  add_subdirectory(apps/volumetric_kit_player)
+else()
+  add_subdirectory(tests/ios_link_check)
+endif()
 
 if(VP_BUILD_TESTS)
   enable_testing()
