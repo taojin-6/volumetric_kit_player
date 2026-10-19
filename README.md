@@ -43,8 +43,8 @@ ctest --test-dir "$root/build" --output-on-failure
 "$root/build/apps/volumetric_kit_player/volumetric_kit_player" <stream.vrst>
 ```
 
-A Debug build runs under the Khronos validation layer. On macOS,
-Homebrew's layer loads only with its library on the search path:
+A Debug build runs under the Khronos validation layer. On macOS, put
+Homebrew's layer on the search path, as the tests do (AGENTS.md):
 
 ```bash
 cmake -S "$root" -B "$root/build-debug" -DCMAKE_BUILD_TYPE=Debug
@@ -67,8 +67,7 @@ The keys are its shortcuts:
 | Esc | closes the window |
 
 `--frames N` exits after N presents of a stream frame and prints the frame
-drawn: CI runs it so, under Xvfb on its Linux GPU hosts. The rest of the
-window (macOS, Wayland, the input, the look) is checked by hand.
+drawn, for CI's smoke run (DECISIONS.md).
 
 ## Development
 

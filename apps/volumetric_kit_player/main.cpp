@@ -4,7 +4,7 @@
 // volumetric_kit_player [--frames N] <stream.vrst>: plays a stream in a GLFW
 // window. PlayerView does the work; this shell makes the window, hands it the
 // mouse and keys, and pumps frames (DECISIONS.md). A stream it cannot play is
-// refused before GLFW starts.
+// refused before GLFW starts, and with VP_NO_WINDOW set it stops there.
 
 #include <GLFW/glfw3.h>
 
@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -114,6 +115,9 @@ void on_scroll(GLFWwindow* window, double /*dx*/, double dy) {
 vkc::Status run(const Args& args) {
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
              vkp::StreamPlayer::open(args.path));  // refusals before GLFW
+  if (std::getenv("VP_NO_WINDOW") != nullptr) {    // cli_test's backstop
+    return vkc::Status::unsupported("VP_NO_WINDOW is set, so no window");
+  }
   VKC_ASSIGN(const std::unique_ptr<vg::glfw::Library> library,
              vg::glfw::Library::init());
   Input input;  // outlives the window

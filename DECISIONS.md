@@ -12,16 +12,21 @@ is implemented.
   refused before `glfwInit`; then makes gfx's GLFW window and surface source,
   the view, and gfx's `ImGuiGlfw` on the view's context. Each tick polls,
   feeds the camera, and calls `frame`; a tick that draws nothing waits on
-  events for up to 50 ms rather than spinning. Only the app links gfx's GLFW
-  tier, and the configure fails if GLFW enters the library's link closure.
-  Why: iOS links no GLFW, and every shell makes the same calls.
+  events for up to 50 ms rather than spinning. Why: every shell makes the
+  same calls.
+- **`VP_NO_WINDOW` stops the app just before `glfwInit`,** and `cli_test`
+  sets it. Why: a refusal that moved past that point then fails the test on
+  every OS, rather than open a window (AGENTS.md).
+- **The configure fails if GLFW enters the library's link closure,** checked
+  once every directory has linked. Why: the library links no window system
+  (below); only the app links gfx's GLFW tier.
 - **Keys are shortcuts for the panel:** Space, Right and L call the controls
   its buttons call; Esc closes. Why: one set of controls, which the panel
   shows on every platform.
 - **The wheel accumulator is a knowing copy** of calib's and gfx's examples'
   (a TODO in `main.cpp`). Why: it shares the window's user pointer with the
-  keys, and a gfx home would take that pointer, which is the GLFW input glue
-  calib's TODO co-designs.
+  keys, and moving it to gfx means gfx owns that pointer, part of the GLFW
+  input glue that calib's `calib_rig.cpp` TODO plans to move into gfx.
 - **`--frames N` counts presents of a stream frame,** then prints the frame
   drawn, for CI's smoke run. Why: the worker builds its kernels first, so the
   window presents before the first mesh arrives, and a count of every present
@@ -110,11 +115,12 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   brew upgrade; and the siblings' split into reusable workflows.
 - **The window runs in CI only on the Linux legs, under Xvfb, in a workflow
   step:** the app plays the tests' stream for 60 presents under the
-  validation layer, and a `VUID-` or a missing "presented" line fails the
-  leg. Why: it is the only automated check of the real window, surface and
-  present path, and NVIDIA's ICD has no headless surface. A step, never a
-  ctest, so no agent opens a window (AGENTS.md); the Mac legs build the app
-  only, as their runners are daemons with no window server.
+  validation layer, and a missing "presented" line, a layer the loader did
+  not insert, or a `VUID-` fails the leg. Why: it is the only automated check
+  of the real window, surface and present path, and NVIDIA's ICD has no
+  headless surface; without the insert, a clean log would prove nothing. A
+  step, never a ctest, so no agent opens a window (AGENTS.md); the Mac legs
+  never open it, as their runners are daemons with no window server.
 
 ## 2026-10-18 — An application over pinned core, recon and gfx; the input is a path
 
@@ -124,4 +130,4 @@ How `StreamPlayer` plays a stream; its header says what each call does.
 - It builds on core, recon and gfx, each fetched pinned by commit. The core
   is declared first, so all three share one copy (the core's DECISIONS.md).
 - Like a video player, it takes the path of the stream to play, so it reads
-  no core config. Its one flag, `--frames N`, is CI's smoke run.
+  no core config.

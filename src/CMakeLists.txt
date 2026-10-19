@@ -24,5 +24,3 @@ target_link_libraries(
          volumetric_kit::gfx_ui
          Threads::Threads)
 vp_target_warnings(player)
-# gfx's GLFW tier is built for the app, so keep it out of the library.
-vp_check_not_linked(player glfw)

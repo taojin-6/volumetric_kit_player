@@ -31,3 +31,7 @@ if(VP_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
 endif()
+
+# Last, once every directory has linked what it links: gfx's GLFW tier is built
+# for the app, so keep it out of the library.
+vp_check_not_linked(player glfw)

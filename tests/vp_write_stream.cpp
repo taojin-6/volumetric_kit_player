@@ -9,10 +9,6 @@
 #include <string>
 #include <string_view>
 
-// test_stream.hpp reads frame info, which the tests have from
-// stream_player.hpp.
-#include "volumetric_kit/recon/codec/decoder.hpp"
-//
 #include "test_stream.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"

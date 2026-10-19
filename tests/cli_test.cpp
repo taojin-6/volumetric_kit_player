@@ -4,11 +4,11 @@
 // The desktop app's command line, the app run as a process: usage and a bad
 // --frames exit 2; a missing file and one that is not a .vrst exit 1 with
 // StreamPlayer::open's refusal and nothing else, before glfwInit. No case
-// hands the app a stream it can play, so none reaches GLFW (AGENTS.md). The
-// app runs with no display to connect to, so on Linux an app that called
-// glfwInit first would fail there and print GLFW's reason instead; macOS
-// gives no such tell. One that is not back within kPrompt, as a window's
-// loop would not be, is killed and fails the test.
+// hands the app a stream it can play, so none reaches GLFW (AGENTS.md). Each
+// runs with VP_NO_WINDOW set, which stops the app just before glfwInit with
+// a reason of its own: a refusal that moved past that point fails here, on
+// every OS, rather than open a window. A run not back within kPrompt, as a
+// window's loop would not be, is killed and fails the test.
 
 #include <gtest/gtest.h>
 #include <poll.h>
@@ -24,13 +24,8 @@
 #include <cstring>
 #include <fstream>
 #include <string>
-#include <string_view>
 #include <vector>
 
-// test_stream.hpp reads frame info, which the other tests have from
-// stream_player.hpp.
-#include "volumetric_kit/recon/codec/decoder.hpp"
-//
 #include "test_stream.hpp"
 
 extern char** environ;
@@ -49,7 +44,7 @@ struct Outcome {
   std::string output;  // stdout and stderr
 };
 
-// The app on `args`, without a display; killed after kPrompt.
+// The app on `args`, with VP_NO_WINDOW set; killed after kPrompt.
 Outcome run_app(const std::vector<std::string>& args) {
   Outcome run;
   int pipe_fds[2];
@@ -68,15 +63,9 @@ Outcome run_app(const std::vector<std::string>& args) {
     argv.push_back(const_cast<char*>(arg.c_str()));
   }
   argv.push_back(nullptr);
-  // No X11 display, and no Wayland one: without XDG_RUNTIME_DIR, libwayland
-  // finds no default socket either.
-  std::vector<char*> env;
+  std::vector<char*> env{const_cast<char*>("VP_NO_WINDOW=1")};
   for (char** var = environ; *var != nullptr; ++var) {
-    const std::string_view name(*var, std::strcspn(*var, "="));
-    if (name != "DISPLAY" && name != "WAYLAND_DISPLAY" &&
-        name != "XDG_RUNTIME_DIR") {
-      env.push_back(*var);
-    }
+    env.push_back(*var);
   }
   env.push_back(nullptr);
   pid_t pid = 0;
@@ -95,23 +84,36 @@ Outcome run_app(const std::vector<std::string>& args) {
     const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
         deadline - SteadyClock::now());
     pollfd out{pipe_fds[0], POLLIN, 0};
-    if (left.count() <= 0 ||
-        poll(&out, 1, static_cast<int>(left.count())) <= 0) {
-      kill(pid, SIGKILL);
-      ADD_FAILURE() << "the app was not back within " << kPrompt.count()
-                    << " s";
-      break;
-    }
+    const int ready =
+        left.count() > 0 ? poll(&out, 1, static_cast<int>(left.count())) : 0;
     char buffer[4096];
-    const ssize_t got = read(pipe_fds[0], buffer, sizeof buffer);
-    if (got <= 0) {
+    const ssize_t got =
+        ready > 0 ? read(pipe_fds[0], buffer, sizeof buffer) : ready;
+    const int error = errno;
+    if (got > 0) {
+      run.output.append(buffer, static_cast<std::size_t>(got));
+    } else if (got < 0 && error == EINTR) {
+      // A signal interrupted poll or read: try again.
+    } else if (got == 0 && ready > 0) {
+      break;  // the end of its output
+    } else {
+      kill(pid, SIGKILL);
+      if (ready == 0) {
+        ADD_FAILURE() << "the app was not back within " << kPrompt.count()
+                      << " s";
+      } else {
+        ADD_FAILURE() << "poll or read: " << std::strerror(error);
+      }
       break;
     }
-    run.output.append(buffer, static_cast<std::size_t>(got));
   }
   close(pipe_fds[0]);
   int status = 0;
-  if (waitpid(pid, &status, 0) == pid && WIFEXITED(status)) {
+  pid_t waited = 0;
+  do {
+    waited = waitpid(pid, &status, 0);
+  } while (waited < 0 && errno == EINTR);
+  if (waited == pid && WIFEXITED(status)) {
     run.exit_code = WEXITSTATUS(status);
   }
   return run;

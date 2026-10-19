@@ -51,9 +51,10 @@ drawing it in a window. [README.md](README.md) says what is implemented;
 
 - Every change carries unit tests for what it changes.
 - **Tests and agents never open a window.** Nothing they run may reach
-  `glfwInit`: a test may run the app only on input it refuses first, and
-  agents skip gfx's `GlfwNativeWindowTest`. Only CI's Xvfb step on the
-  Linux legs runs the window; the owner checks it by hand.
+  `glfwInit`: a test may run the app only on input it refuses first, with
+  `VP_NO_WINDOW` set, and agents skip gfx's `GlfwNativeWindowTest`. Only
+  CI's Xvfb step on the Linux legs runs the window; the owner checks it by
+  hand.
 - Logic is tested headless: host-only where it can be, otherwise on a device
   through the core's fixtures, which skip without one locally and fail in CI.
 - Run GPU tests under the validation layer: `VKC_TEST_VALIDATION=1`, and on

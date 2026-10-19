@@ -160,24 +160,27 @@ jobs:
             ctest --test-dir build --output-on-failure \
               --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
-      # The app's real window, surface and present path, which no test
-      # reaches (DECISIONS.md): it plays the tests' stream under Xvfb on the
-      # GPU for 60 presents of a stream frame, with the loader forcing the
-      # validation layer on, as a Release build does not ask for it; the
-      # layer prints its own messages. A workflow step, never a ctest, so no
-      # agent and no Mac runner opens a window; the Mac legs build the app
-      # only.
+      # The window's smoke run (DECISIONS.md): the app plays the tests' stream
+      # under Xvfb for 60 presents of a stream frame. The loader forces the
+      # validation layer on, which a Release build does not ask for, and logs
+      # the insert; with no messenger, the layer prints its own messages.
       - name: Smoke run of the window (Linux, Xvfb)
         if: runner.os == 'Linux'
         run: |
           set -eo pipefail
           build/tests/vp_write_stream build/smoke.vrst
-          VK_LOADER_LAYERS_ENABLE='*validation' timeout 300 \
-            xvfb-run -a build/apps/volumetric_kit_player/volumetric_kit_player \
+          VK_LOADER_LAYERS_ENABLE='*validation' VK_LOADER_DEBUG=layer \
+            timeout 300 xvfb-run -a \
+              build/apps/volumetric_kit_player/volumetric_kit_player \
               --frames 60 build/smoke.vrst 2>&1 | tee build/smoke.log
           if ! grep -qE '^volumetric_kit_player: presented 60 frame\(s\), drew stream frame [0-9]+$' \
               build/smoke.log; then
             echo "::error::the window did not present 60 frames of the stream"
+            exit 1
+          fi
+          if ! grep -qF 'Insert instance layer "VK_LAYER_KHRONOS_validation"' \
+              build/smoke.log; then
+            echo "::error::the validation layer did not load"
             exit 1
           fi
           if grep -q 'VUID-' build/smoke.log; then
