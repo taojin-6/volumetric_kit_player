@@ -50,9 +50,8 @@ using FrameExchange = recon::mesh::MeshExchange<FrameStamp>;
 ///        GPU, paced by its pts, and publishes the mesh to a
 ///        @ref FrameExchange for the caller to draw.
 ///
-/// **The worker** first builds the decoder and the extractor, so their shader
-/// builds never block the thread that started it. Then, per record of the
-/// track, it reads it, `codec::decode_growing` it into a grid
+/// **The worker** first builds the decoder and the extractor. Then, per record
+/// of the track, it reads it, `codec::decode_growing` it into a grid
 /// `codec::make_decode_grid` built from the first frame, waits until it is due
 /// (@ref Playback) and until the consumer has taken the last mesh, then
 /// extracts it with Marching Cubes and publishes it. The mesh lives in the
@@ -122,9 +121,7 @@ class StreamPlayer {
   /// @return The geometry track's records: the frames it plays.
   std::uint64_t frame_count() const noexcept;
 
-  /// @brief Start the worker on @p device. Before its first record the worker
-  ///        builds the decoder and the extractor; a failure there stops it,
-  ///        and @ref status reports it.
+  /// @brief Start the worker on @p device; it builds first (above).
   /// @param device     The compute device; it must outlive this.
   /// @param allocator  Its allocator; it must outlive this.
   /// @param config     The extractor's: the consumer's usage, queue families

@@ -1,22 +1,19 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// StreamPlayer on a device, over the tests' stream (test_stream.hpp): six
-// frames of a sphere moving a block a frame, at 25 fps with a pause before the
-// fourth, an I-frame every third. Paused and stepped, so each frame goes when
-// the test says: frames
-// arrive in order with their index and pts, each mesh non-empty on the
-// device; with loop on a step past the end wraps, with loop off the last
-// frame holds until play restarts; a corrupt P-frame, a damaged record header
-// or a record this version cannot read resyncs at the next key, and a stream
-// with no key left stops the worker with the reason; quit is prompt, playing,
-// paused or waiting for a consumer that takes nothing; a fatal error stops
-// the worker, a failed build on it included; start is refused once started
-// or stopped. Playing, no frame
-// arrives before its pts says. On the host: open refuses what it cannot
-// play. The device tests skip with no device. A stop that no control can
-// wake, such as one lost in the exchange's wait, fails only on ctest's
-// timeout.
+// StreamPlayer on a device, over the tests' stream (test_stream.hpp). Paused
+// and stepped, so each frame goes when the test says: frames arrive in order
+// with their index and pts, each mesh non-empty on the device; with loop on a
+// step past the end wraps, with loop off the last frame holds until play
+// restarts; a corrupt P-frame, a damaged record header or a record this
+// version cannot read resyncs at the next key, and a stream with no key left
+// stops the worker with the reason; quit is prompt, playing, paused or
+// waiting for a consumer that takes nothing; a fatal error stops the worker,
+// a failed build on it included; start is refused once started or stopped.
+// Playing, no frame arrives before its pts says. On the host: open refuses
+// what it cannot play. The device tests skip with no device. A stop that no
+// control can wake, such as one lost in the exchange's wait, fails only on
+// ctest's timeout.
 
 #include "volumetric_kit/player/stream_player.hpp"
 

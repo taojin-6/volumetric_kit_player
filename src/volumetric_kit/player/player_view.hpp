@@ -93,7 +93,8 @@ class PlayerView {
   /// @brief One tick: draw the controls, take the newest mesh, draw it, and
   ///        present.
   /// @pre The UI platform half bound to @ref ui_context ran its new_frame this
-  ///      tick.
+  ///      tick, unless @p extent is 0 x 0 (a touch shell skips the tick's
+  ///      new_frame then).
   /// @param extent  The drawable now, in pixels; 0 x 0 (minimized) skips.
   /// @return true once presented. false when nothing could render (0 x 0, or
   ///         the surface settling after a rebuild), so a desktop pump waits.
