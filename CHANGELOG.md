@@ -20,3 +20,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `player::PlayerView`: the window side of playback on any window system,
   over gfx: the shared device, a FIFO swapchain, and the newest mesh under an
   orbit camera and a controls panel, one `frame(extent)` per tick.
+
+### Fixed
+
+- `PlayerView::shown()` and the status line move onto a frame that meshes
+  nothing, rather than staying on the frame before (recon #256).
