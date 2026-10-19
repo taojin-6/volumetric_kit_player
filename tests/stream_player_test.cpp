@@ -3,14 +3,19 @@
 
 // StreamPlayer on a device, over a stream the test writes with recon's
 // MeshIntegrator, Encoder and StreamWriter: six frames of a sphere moving a
-// block a frame, at 25 fps, an I-frame every third. Paused and stepped, so
-// each frame goes when the test says: frames arrive in order with their
-// index and pts, each mesh non-empty on the device; with loop on a step past
-// the end wraps, with loop off the last frame holds until play restarts;
-// a corrupt P-frame resyncs at the next key, and a stream with no key left
-// holds even with loop on; quit is prompt, playing, paused or waiting for a
-// consumer that takes nothing; a fatal error stops the worker. On the host:
-// open refuses what it cannot play. The device tests skip with no device.
+// block a frame, at 25 fps with a pause before the fourth, an I-frame every
+// third. Paused and stepped, so each frame goes when the test says: frames
+// arrive in order with their index and pts, each mesh non-empty on the
+// device; with loop on a step past the end wraps, with loop off the last
+// frame holds until play restarts; a corrupt P-frame, a damaged record header
+// or a record this version cannot read resyncs at the next key, and a stream
+// with no key left stops the worker with the reason; quit is prompt, playing,
+// paused or waiting for a consumer that takes nothing; a fatal error stops
+// the worker; start is refused once started or stopped. Playing, no frame
+// arrives before its pts says. On the host: open refuses what it cannot
+// play. The device tests skip with no device. A stop that no control can
+// wake, such as one lost in the exchange's wait, fails only on ctest's
+// timeout.
 
 #include "volumetric_kit/player/stream_player.hpp"
 
@@ -19,10 +24,12 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
@@ -57,6 +64,9 @@ using SteadyClock = std::chrono::steady_clock;
 constexpr std::uint64_t kFrames = 6;
 constexpr std::uint32_t kIntraPeriod = 3;
 constexpr std::uint64_t kPeriodNs = 40'000'000;  // 25 fps
+// The pause before frame kGapAt, so a pts is not its index times the period.
+constexpr std::uint64_t kGapAt = 3;
+constexpr std::uint64_t kGapNs = 500'000'000;
 constexpr float kVoxel = 0.01f;
 constexpr float kTrunc = 0.04f;
 constexpr float kRadius = 0.12f;
@@ -67,6 +77,29 @@ constexpr std::uint32_t kFramesInFlight = 2;
 constexpr auto kArrival = 10s;
 constexpr auto kQuiet = 300ms;
 constexpr auto kPrompt = 1s;
+// A RECD chunk's header (session.hpp): its flags, its pts, and its CRC of the
+// bytes before it.
+constexpr std::size_t kRecordHeader = 56;
+constexpr std::size_t kFlagsAt = 22;
+constexpr std::size_t kPtsAt = 24;
+constexpr std::size_t kHeaderCrcAt = 52;
+
+// Frame i's pts.
+std::uint64_t pts_of(std::uint64_t i) {
+  return i * kPeriodNs + (i >= kGapAt ? kGapNs : 0);
+}
+
+// zlib's CRC-32, which a chunk's header carries (session.hpp).
+std::uint32_t crc32(const std::uint8_t* data, std::size_t size) {
+  std::uint32_t crc = 0xFFFFFFFFu;
+  for (std::size_t i = 0; i < size; ++i) {
+    crc ^= data[i];
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+    }
+  }
+  return ~crc;
+}
 
 // A directory of the test's own, removed with what it holds.
 class Scratch {
@@ -127,7 +160,7 @@ HostMesh sphere(const recon::Vec3f& centre) {
 }
 
 // The stream: kFrames frames of the sphere moving a block (8 voxels) a frame
-// along x, kPeriodNs apart, an I-frame every kIntraPeriod, each record a key
+// along x, at pts_of, an I-frame every kIntraPeriod, each record a key
 // exactly when its frame is an I-frame.
 core::Status write_stream(core::Device& device, core::Allocator& allocator,
                           const std::string& path) {
@@ -182,11 +215,29 @@ core::Status write_stream(core::Device& device, core::Allocator& allocator,
                recon::codec::read_frame_info(frame.data(), frame.size()));
     stream::RecordInfo record;
     record.key = info.type == recon::codec::FrameType::kIntra;
-    record.pts_ns = i * kPeriodNs;
+    record.pts_ns = pts_of(i);
     record.seq = i;
     VKC_TRY(writer->append(record, frame.data(), frame.size()));
   }
   return writer->finish();
+}
+
+// How long `player.stop()` takes. One that is not back within kPrompt fails
+// the test; a control then wakes the worker, so the test still ends.
+SteadyClock::duration stop_time(StreamPlayer& player) {
+  const SteadyClock::time_point start = SteadyClock::now();
+  std::promise<void> done;
+  std::future<void> stopped = done.get_future();
+  std::thread stopper([&] {
+    player.stop();
+    done.set_value();
+  });
+  if (stopped.wait_for(kPrompt) != std::future_status::ready) {
+    ADD_FAILURE() << "stop did not return within " << kPrompt.count() << " s";
+    player.play();
+  }
+  stopper.join();
+  return SteadyClock::now() - start;
 }
 
 class StreamPlayerTest : public core::test::VulkanDeviceTest {
@@ -204,29 +255,44 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     ASSERT_TRUE(written.ok()) << written.message();
   }
 
-  // The stream opened and started on the test's device, paused unless
-  // `playing`, extracted for a renderer of kFramesInFlight frames into
+  // Every test's player stops here too, so one that fails early is still
+  // stopped within kPrompt.
+  void TearDown() override {
+    if (player_ != nullptr) {
+      stop_time(*player_);
+    }
+    VulkanDeviceTest::TearDown();
+  }
+
+  // The extractor's, for a renderer of kFramesInFlight frames into
   // `slot_count` ring slots.
-  std::unique_ptr<StreamPlayer> start(
-      bool playing, std::uint32_t slot_count = kFramesInFlight + 1) {
+  static recon::mesh::MarchingCubesConfig extractor_config(
+      std::uint32_t slot_count = kFramesInFlight + 1) {
+    recon::mesh::MarchingCubesConfig config;
+    config.extra_vertex_usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    config.extra_index_usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    config.slot_count = slot_count;
+    return config;
+  }
+
+  // The stream opened and started on the test's device, paused unless
+  // `playing`, into `slot_count` ring slots; the fixture owns it.
+  StreamPlayer* start(bool playing,
+                      std::uint32_t slot_count = kFramesInFlight + 1) {
     core::Result<std::unique_ptr<StreamPlayer>> opened =
         StreamPlayer::open(path_);
     EXPECT_TRUE(opened.ok()) << opened.status().message();
     if (!opened.ok()) {
       return nullptr;
     }
-    std::unique_ptr<StreamPlayer> player = std::move(opened).value();
+    player_ = std::move(opened).value();
     if (!playing) {
-      player->pause();
+      player_->pause();
     }
-    recon::mesh::MarchingCubesConfig config;
-    config.extra_vertex_usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    config.extra_index_usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-    config.slot_count = slot_count;
-    const core::Status started =
-        player->start(device(), allocator(), config, exchange_);
+    const core::Status started = player_->start(
+        device(), allocator(), extractor_config(slot_count), exchange_);
     EXPECT_TRUE(started.ok()) << started.message();
-    return started.ok() ? std::move(player) : nullptr;
+    return started.ok() ? player_.get() : nullptr;
   }
 
   // The next mesh the worker publishes, taken as a renderer's frame takes
@@ -297,61 +363,101 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     }
   }
 
-  // Flips a byte in `record`'s payload on disk, which then fails its CRC.
-  void corrupt(const stream::Record& record) {
-    constexpr std::uint64_t kRecordHeader = 56;  // session.hpp's RECD
-    const auto at = static_cast<std::streamoff>(record.offset + kRecordHeader +
-                                                record.size / 2);
-    std::fstream file(path_, std::ios::in | std::ios::out | std::ios::binary);
-    file.seekg(at);
-    const int byte = file.get();
-    file.seekp(at);
-    file.put(static_cast<char>(byte ^ 0x5A));
-    file.close();
-    ASSERT_TRUE(file.good());
-    core::Result<std::unique_ptr<stream::StreamReader>> reader =
-        stream::StreamReader::open(path_);
-    ASSERT_TRUE(reader.ok()) << reader.status().message();
-    std::vector<std::uint8_t> payload;
-    EXPECT_EQ((*reader)->read(record, &payload).domain(),
-              Code::InvalidArgument);
+  // The file's `size` bytes at `at`.
+  std::vector<std::uint8_t> read_at(std::uint64_t at, std::size_t size) {
+    std::vector<std::uint8_t> bytes(size);
+    std::ifstream file(path_, std::ios::binary);
+    file.seekg(static_cast<std::streamoff>(at));
+    file.read(reinterpret_cast<char*>(bytes.data()),
+              static_cast<std::streamsize>(size));
+    EXPECT_TRUE(file.good());
+    return bytes;
   }
 
-  // Steps once and checks the frame that comes is frame `index`.
-  void step_to(StreamPlayer& player, std::uint64_t index) {
+  // Overwrites the file's bytes at `at` with `bytes`.
+  void write_at(std::uint64_t at, const std::vector<std::uint8_t>& bytes) {
+    std::fstream file(path_, std::ios::in | std::ios::out | std::ios::binary);
+    file.seekp(static_cast<std::streamoff>(at));
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+    file.close();
+    ASSERT_TRUE(file.good());
+  }
+
+  // Flips the byte at `at` in the file.
+  void flip(std::uint64_t at) {
+    std::vector<std::uint8_t> byte = read_at(at, 1);
+    byte[0] ^= 0x5A;
+    write_at(at, byte);
+  }
+
+  // What reading `record` again from a fresh reader returns: the header's
+  // failure, or its payload's.
+  core::Status reread(const stream::Record& record) {
+    core::Result<std::unique_ptr<stream::StreamReader>> reader =
+        stream::StreamReader::open(path_);
+    if (!reader.ok()) {
+      return reader.status();
+    }
+    stream::Position pos{record.offset};
+    stream::Record found;
+    const core::Result<bool> more = (*reader)->next(&pos, &found);
+    if (!more.ok()) {
+      return more.status();
+    }
+    std::vector<std::uint8_t> payload;
+    return (*reader)->read(record, &payload);
+  }
+
+  // Flips a byte in `record`'s payload, which then fails its CRC.
+  void corrupt_payload(const stream::Record& record) {
+    ASSERT_NO_FATAL_FAILURE(
+        flip(record.offset + kRecordHeader + record.size / 2));
+    EXPECT_EQ(reread(record).domain(), Code::InvalidArgument);
+  }
+
+  // Flips a byte of `record`'s pts, so its header fails its CRC.
+  void corrupt_header(const stream::Record& record) {
+    ASSERT_NO_FATAL_FAILURE(flip(record.offset + kPtsAt));
+    EXPECT_EQ(reread(record).domain(), Code::InvalidArgument);
+  }
+
+  // Sets a flag version 0 does not define in `record`'s header, with its CRC
+  // rewritten, so the header reads as one this version cannot.
+  void set_unknown_flag(const stream::Record& record) {
+    std::vector<std::uint8_t> header = read_at(record.offset, kRecordHeader);
+    header[kFlagsAt + 1] |= 0x80;  // little-endian u16: bit 15
+    const std::uint32_t crc = crc32(header.data(), kHeaderCrcAt);
+    for (std::size_t i = 0; i < 4; ++i) {
+      header[kHeaderCrcAt + i] = static_cast<std::uint8_t>(crc >> (8 * i));
+    }
+    ASSERT_NO_FATAL_FAILURE(write_at(record.offset, header));
+    EXPECT_EQ(reread(record).domain(), Code::Unsupported);
+  }
+
+  // Steps once and checks the frame that comes is the stream's frame
+  // `frame`, stamped `index`.
+  void step_to(StreamPlayer& player, std::uint64_t frame, std::uint64_t index) {
     player.step();
-    const std::optional<FrameStamp> frame = next_frame();
-    ASSERT_TRUE(frame.has_value()) << "no frame " << index;
-    EXPECT_EQ(frame->index, index);
-    EXPECT_EQ(frame->pts_ns, index * kPeriodNs);
+    const std::optional<FrameStamp> got = next_frame();
+    ASSERT_TRUE(got.has_value()) << "no frame " << frame;
+    EXPECT_EQ(got->index, index);
+    EXPECT_EQ(got->pts_ns, pts_of(frame));
+  }
+  void step_to(StreamPlayer& player, std::uint64_t frame) {
+    step_to(player, frame, frame);
   }
 
   Scratch scratch_;
   const std::string path_ = scratch_.file("sphere.vrst");
   FrameExchange exchange_;
   std::uint32_t slot_ = 0;
+  // Destroyed first: its worker uses the exchange.
+  std::unique_ptr<StreamPlayer> player_;
 };
 
-// How long `player.stop()` takes. One that is not back within kPrompt fails
-// the test; a control then wakes the worker, so the test still ends.
-SteadyClock::duration stop_time(StreamPlayer& player) {
-  const SteadyClock::time_point start = SteadyClock::now();
-  std::promise<void> done;
-  std::future<void> stopped = done.get_future();
-  std::thread stopper([&] {
-    player.stop();
-    done.set_value();
-  });
-  if (stopped.wait_for(kPrompt) != std::future_status::ready) {
-    ADD_FAILURE() << "stop did not return within " << kPrompt.count() << " s";
-    player.play();
-  }
-  stopper.join();
-  return SteadyClock::now() - start;
-}
-
 TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
-  std::unique_ptr<StreamPlayer> player = start(/*playing=*/false);
+  StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   EXPECT_EQ(player->frame_count(), kFrames);
   EXPECT_FALSE(next_frame(kQuiet).has_value()) << "paused, nothing goes";
@@ -360,15 +466,35 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
     const std::optional<FrameStamp> frame = next_frame();
     ASSERT_TRUE(frame.has_value()) << "no frame " << i;
     EXPECT_EQ(frame->index, i);
-    EXPECT_EQ(frame->pts_ns, i * kPeriodNs);
+    EXPECT_EQ(frame->pts_ns, pts_of(i));
     EXPECT_GT(frame->decode_mesh_ms, 0.0);
   }
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
+TEST_F(StreamPlayerTest, PlayingNoFrameArrivesBeforeItsPts) {
+  // Lower bounds only, which a slow machine cannot break: the first frame is
+  // due at once, and a late frame only makes those after it later.
+  const SteadyClock::time_point t0 = SteadyClock::now();
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    const std::optional<FrameStamp> frame = next_frame();
+    const auto arrived_ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            SteadyClock::now() - t0)
+            .count());
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_EQ(frame->index, i);
+    EXPECT_GE(arrived_ns, pts_of(i) - pts_of(0)) << "frame " << i;
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
 TEST_F(StreamPlayerTest, WithLoopOnAStepPastTheEndWraps) {
-  std::unique_ptr<StreamPlayer> player = start(/*playing=*/false);
+  StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   EXPECT_TRUE(player->loop());
   for (std::uint64_t i = 0; i < kFrames; ++i) {
@@ -381,7 +507,7 @@ TEST_F(StreamPlayerTest, WithLoopOnAStepPastTheEndWraps) {
 }
 
 TEST_F(StreamPlayerTest, WithLoopOffTheLastFrameHoldsUntilPlay) {
-  std::unique_ptr<StreamPlayer> player = start(/*playing=*/false);
+  StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   player->set_loop(false);
   EXPECT_FALSE(player->loop());
@@ -400,8 +526,48 @@ TEST_F(StreamPlayerTest, WithLoopOffTheLastFrameHoldsUntilPlay) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
+TEST_F(StreamPlayerTest, WithLoopOffPlayAfterSteppingToTheEndRestarts) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  player->set_loop(false);
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    ASSERT_NO_FATAL_FAILURE(step_to(*player, i));
+  }
+  std::this_thread::sleep_for(kQuiet);  // the worker reaches the end
+  player->play();
+  const std::optional<FrameStamp> first = next_frame();
+  ASSERT_TRUE(first.has_value()) << "the first play brought no frame";
+  EXPECT_EQ(first->index, 0u);
+  EXPECT_TRUE(player->playing());
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, WithLoopOffPlayJustAfterSteppingToTheEndRestarts) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  player->set_loop(false);
+  for (std::uint64_t i = 0; i + 2 < kFrames; ++i) {
+    ASSERT_NO_FATAL_FAILURE(step_to(*player, i));
+  }
+  // Both last frames stepped onto, the worker holds the last until the
+  // consumer takes the one before, so the play comes before it is at the end.
+  player->step();
+  player->step();
+  std::this_thread::sleep_for(kQuiet);
+  player->play();
+  for (const std::uint64_t frame :
+       {kFrames - 2, kFrames - 1, std::uint64_t{0}}) {
+    const std::optional<FrameStamp> got = next_frame();
+    ASSERT_TRUE(got.has_value()) << "no frame " << frame;
+    EXPECT_EQ(got->index, frame);
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
 TEST_F(StreamPlayerTest, PlayingIntoTheEndWithLoopOffPausesOnTheLastFrame) {
-  std::unique_ptr<StreamPlayer> player = start(/*playing=*/true);
+  StreamPlayer* player = start(/*playing=*/true);
   ASSERT_NE(player, nullptr);
   player->set_loop(false);
   for (std::uint64_t i = 0; i < kFrames; ++i) {
@@ -425,8 +591,8 @@ TEST_F(StreamPlayerTest, ACorruptPFrameResyncsAtTheNextKey) {
   for (std::uint64_t i = 0; i < kFrames; ++i) {
     EXPECT_EQ(all[i].info.key, i % kIntraPeriod == 0) << "record " << i;
   }
-  ASSERT_NO_FATAL_FAILURE(corrupt(all[1]));
-  std::unique_ptr<StreamPlayer> player = start(/*playing=*/false);
+  ASSERT_NO_FATAL_FAILURE(corrupt_payload(all[1]));
+  StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
   // Frame 1 fails its CRC and frame 2 has lost its reference: one step
@@ -438,30 +604,64 @@ TEST_F(StreamPlayerTest, ACorruptPFrameResyncsAtTheNextKey) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-TEST_F(StreamPlayerTest, WithNothingToShowItHoldsEvenWithLoopOn) {
+TEST_F(StreamPlayerTest, ADamagedRecordHeaderResyncsAtTheNextKey) {
+  const std::vector<stream::Record> all = records();
+  ASSERT_EQ(all.size(), kFrames);
+  ASSERT_NO_FATAL_FAILURE(corrupt_header(all[1]));
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  // Frame 1 is not read, so not counted, and frame 2 has lost its reference:
+  // one step brings frame 3, the next key, stamped one low.
+  for (std::uint64_t i = 3; i < kFrames; ++i) {
+    ASSERT_NO_FATAL_FAILURE(step_to(*player, i, i - 1));
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, ARecordThisVersionCannotReadIsSkipped) {
+  const std::vector<stream::Record> all = records();
+  ASSERT_EQ(all.size(), kFrames);
+  ASSERT_NO_FATAL_FAILURE(set_unknown_flag(all[1]));
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  for (std::uint64_t i = 3; i < kFrames; ++i) {
+    ASSERT_NO_FATAL_FAILURE(step_to(*player, i, i - 1));
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, WithNoFrameToShowTheWorkerStopsWithTheReason) {
   // Every key corrupt: no frame decodes.
   const std::vector<stream::Record> all = records();
   ASSERT_EQ(all.size(), kFrames);
   for (const stream::Record& record : all) {
     if (record.info.key) {
-      ASSERT_NO_FATAL_FAILURE(corrupt(record));
+      ASSERT_NO_FATAL_FAILURE(corrupt_payload(record));
     }
   }
-  std::unique_ptr<StreamPlayer> player = start(/*playing=*/true);
+  StreamPlayer* player = start(/*playing=*/true);
   ASSERT_NE(player, nullptr);
   EXPECT_TRUE(player->loop());
   const SteadyClock::time_point deadline = SteadyClock::now() + kArrival;
-  while (player->playing() && SteadyClock::now() < deadline) {
+  while (player->status().ok() && SteadyClock::now() < deadline) {
     std::this_thread::sleep_for(1ms);
   }
-  EXPECT_FALSE(player->playing()) << "held, rather than reading on";
+  // The first refusal, frame 0's CRC, rather than the P-frames' after it.
+  const core::Status status = player->status();
+  EXPECT_EQ(status.domain(), Code::InvalidArgument) << status.message();
+  EXPECT_NE(status.message().find("no frame of the geometry track decodes"),
+            std::string::npos)
+      << status.message();
   EXPECT_FALSE(next_frame(kQuiet).has_value());
   EXPECT_LT(stop_time(*player), kPrompt);
-  EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
 TEST_F(StreamPlayerTest, QuitIsPromptWhilePlaying) {
-  std::unique_ptr<StreamPlayer> player = start(/*playing=*/true);
+  StreamPlayer* player = start(/*playing=*/true);
   ASSERT_NE(player, nullptr);
   ASSERT_TRUE(next_frame().has_value());
   ASSERT_TRUE(next_frame().has_value());
@@ -470,7 +670,7 @@ TEST_F(StreamPlayerTest, QuitIsPromptWhilePlaying) {
 }
 
 TEST_F(StreamPlayerTest, QuitIsPromptWhilePaused) {
-  std::unique_ptr<StreamPlayer> player = start(/*playing=*/false);
+  StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
   std::this_thread::sleep_for(kQuiet);  // the worker waits for a step
@@ -479,12 +679,11 @@ TEST_F(StreamPlayerTest, QuitIsPromptWhilePaused) {
 }
 
 TEST_F(StreamPlayerTest, AConsumerTakingNothingStallsTheWorkerUntilQuit) {
-  std::unique_ptr<StreamPlayer> player = start(/*playing=*/true);
+  StreamPlayer* player = start(/*playing=*/true);
   ASSERT_NE(player, nullptr);
   ASSERT_TRUE(next_frame().has_value());
   // Frame 1 is published and never taken, so the worker waits to mesh frame
-  // 2. Publishing over frame 1 instead would run out of ring slots within
-  // a few frames, which is an error.
+  // 2 rather than run out of ring slots.
   std::this_thread::sleep_for(kQuiet);
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
@@ -493,7 +692,7 @@ TEST_F(StreamPlayerTest, AConsumerTakingNothingStallsTheWorkerUntilQuit) {
 TEST_F(StreamPlayerTest, AFatalErrorStopsTheWorker) {
   // A ring with no slot to spare: with both of the consumer's frames holding
   // a mesh, the third extract is refused.
-  std::unique_ptr<StreamPlayer> player =
+  StreamPlayer* player =
       start(/*playing=*/false, /*slot_count=*/kFramesInFlight);
   ASSERT_NE(player, nullptr);
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
@@ -508,6 +707,21 @@ TEST_F(StreamPlayerTest, AFatalErrorStopsTheWorker) {
   EXPECT_NE(status.message().find("outstanding"), std::string::npos)
       << status.message();
   EXPECT_LT(stop_time(*player), kPrompt);
+}
+
+TEST_F(StreamPlayerTest, StartIsRefusedOnceStartedOrStopped) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  const core::Status again =
+      player->start(device(), allocator(), extractor_config(), exchange_);
+  EXPECT_EQ(again.domain(), Code::InvalidArgument) << again.message();
+  core::Result<std::unique_ptr<StreamPlayer>> stopped =
+      StreamPlayer::open(path_);
+  ASSERT_TRUE(stopped.ok()) << stopped.status().message();
+  (*stopped)->stop();
+  const core::Status after_stop =
+      (*stopped)->start(device(), allocator(), extractor_config(), exchange_);
+  EXPECT_EQ(after_stop.domain(), Code::InvalidArgument) << after_stop.message();
 }
 
 TEST(StreamPlayerOpen, RefusesWhatItCannotPlay) {

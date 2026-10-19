@@ -9,11 +9,13 @@
 include(FetchContent)
 
 # --- volumetric_kit_core -----------------------------------------------------
-# The device, Status/Result and the GPU test fixtures. Declared first, so
-# FetchContent keeps this pin for recon too (the core's DECISIONS.md, "Consumers
-# pin, and an application declares the core first"). The pin is the one recon's
-# own pin below names: core 0.10.0 (7a1219e, core #36's merge).
+# The device, Status/Result and the GPU test fixtures, declared first
+# (DECISIONS.md). The pin is the core recon fa4a41e pins (7a1219e, 0.10.0, core
+# #36's merge), and the floor below is that version, so an older
+# FETCHCONTENT_SOURCE_DIR override is refused. The player installs nothing, so
+# the core's install rules are off too.
 set(VKC_WITH_VULKAN ON)
+set(VKC_INSTALL OFF)
 if(VP_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
 endif()

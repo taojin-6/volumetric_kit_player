@@ -11,9 +11,7 @@ How `StreamPlayer` plays a stream; its header says what each call does.
 - **One worker thread does a frame's GPU work** (read, decode, mesh,
   publish), and the drawing thread only takes meshes from recon's
   `MeshExchange`. Why: drawing never waits on a decode, and recon's decoder
-  and grid, which are not thread-safe, stay on one thread. The controls sit
-  under a mutex with a condition variable, so any change wakes the worker,
-  paused or playing.
+  and grid, which are not thread-safe, stay on one thread.
 - **It meshes a frame only once the consumer has taken the last mesh,**
   rather than publishing over it. Why: each untaken mesh would hold a ring
   slot the consumer's `frames_in_flight + 1` do not cover. A consumer that
@@ -22,10 +20,14 @@ How `StreamPlayer` plays a stream; its header says what each call does.
 - **Resync rests on the decoder.** A damaged record is skipped, and the
   decoder refuses each P-frame whose reference was skipped (`NotFound`: it
   checks the reference's hash), so playback resumes at the next key record
-  with no key tracking in the player. Any other failure stops the worker.
+  with no key tracking in the player. A record this version cannot read
+  (`Unsupported`) is skipped alike, as a newer writer's may be.
+- **A pass that shows no frame stops the worker with its first refusal,**
+  which caused the rest. Why: a refusal that lasts, such as a newer codec's
+  or a frame the device cannot hold, would otherwise look like a pause with
+  nothing to report, and a loop would reread the file in a busy loop.
 - **With loop off, the last frame holds and play restarts,** as in a video
-  player. A pass that showed no frame holds even with loop on, so a stream of
-  damaged records is not reread in a busy loop.
+  player.
 
 ## 2026-10-18 — CI: build and test on the family's GPU runners, lint and the gate hosted
 
@@ -47,10 +49,11 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   Branch protection on `main` is set to require that one check (context
   `required`) once it has first reported.
 - **Left out until a need shows:** Debug on Linux, as the GPU hosts are
-  shared with gfx and recon; a second Ubuntu; sanitizers, the first to add,
-  for the decode worker's lifetimes; a dependency cache, which would save
-  about 30 s a job on the Mac and could go stale after a brew upgrade; and
-  the siblings' split into reusable workflows.
+  shared with gfx and recon; a second Ubuntu; a dependency cache, which would
+  save about 30 s a job on the Mac and could go stale after a brew upgrade;
+  and the siblings' split into reusable workflows. A ThreadSanitizer leg is
+  the first to add, now that `StreamPlayer` has its worker (the `TODO:` in
+  ci.yml).
 - **The window is build-only in CI:** the Mac's runners are daemons with no
   window server, and no test opens a window (AGENTS.md).
 

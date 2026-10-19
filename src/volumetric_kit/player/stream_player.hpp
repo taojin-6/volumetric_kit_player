@@ -32,7 +32,11 @@ namespace volumetric_kit::player {
 
 /// @brief What the worker publishes with each frame's mesh.
 struct FrameStamp {
-  /// The frame's place among its track's records, from 0.
+  /// The frame's place among the track's records read in this pass, from 0:
+  /// a record whose header is damaged is not counted, so it shifts the
+  /// frames after it one lower.
+  // TODO: count from the record's seq, less the track's first, so a damaged
+  // header shifts nothing.
   std::uint64_t index = 0;
   std::uint64_t pts_ns = 0;     ///< Its pts, on its track's clock.
   double decode_mesh_ms = 0.0;  ///< The wall time decoding and meshing took.
@@ -51,28 +55,37 @@ using FrameExchange = recon::mesh::MeshExchange<FrameStamp>;
 /// from the first frame, waits until it is due (@ref Playback) and until the
 /// consumer has taken the last mesh, then extracts it with Marching Cubes
 /// and publishes it. The mesh lives in the extractor's ring slot, so the next
-/// frame decodes while it is drawn. A damaged record is skipped, and the
-/// decoder refuses each P-frame whose reference was skipped, so playback
-/// resumes at the next key record. At the track's end it plays the track
-/// again with loop on; with loop off it holds the last frame, paused, until
-/// @ref play restarts it.
+/// frame decodes while it is drawn. A damaged record, or one this version
+/// cannot read, is skipped, and playback resumes at the next key record. At
+/// the track's end it plays the track again with loop on; with loop off it
+/// holds the last frame, paused, until @ref play restarts it.
+///
+/// **Errors.** Any other failure, or a pass of the track that shows no frame
+/// (its first refusal in the message), stops the worker, and @ref status
+/// reports it.
 ///
 /// **Threads.** The controls (@ref play, @ref pause, @ref step,
 /// @ref set_loop) and their reads lock the mutex the worker waits under, so
-/// they are safe from any thread and each change wakes the worker; @ref stop
-/// and the destructor run on one thread at a time. Only the worker touches
-/// the decoder, the grid and the extractor; the caller touches only the
-/// consumer side of the exchange. A fatal error stops the worker, and
-/// @ref status reports it.
+/// they are safe from any thread and each change wakes the worker; @ref start,
+/// @ref stop and the destructor run on one thread at a time. Only the worker
+/// touches the decoder, the grid and the extractor; the caller touches only
+/// the consumer side of the exchange.
 ///
-/// **Teardown**, so nothing the GPU may still read is freed early:
-/// @ref stop, then wait until the consumer's queue is idle, then destroy
-/// this, which destroys the extractor, the grid and the decoder; then the
-/// device.
+/// **Teardown**, on every path out, so nothing the GPU may still read is
+/// freed early: @ref stop, wait until the consumer's queue is idle, and
+/// destroy this (the extractor, the grid and the decoder), all before the
+/// exchange and the device go. A caller that opens the player before it makes
+/// the device declares the player first, so it tears down in a scope guard,
+/// as below.
 ///
 /// @code
 /// VKC_ASSIGN(std::unique_ptr<StreamPlayer> player, StreamPlayer::open(path));
-/// FrameExchange exchange(exchange_config);
+/// // ... make the device, its allocator and the exchange ...
+/// const ScopeGuard teardown([&] {  // the app's guard: runs on every return
+///   player->stop();
+///   app.wait_idle();
+///   player.reset();
+/// });
 /// VKC_TRY(player->start(device, allocator, mc_config, exchange));
 /// while (player->status().ok() && !closed) {
 ///   exchange.begin_frame(slot, [&](const auto&, FrameStamp& stamp) {
@@ -81,9 +94,7 @@ using FrameExchange = recon::mesh::MeshExchange<FrameStamp>;
 ///   });
 ///   // ... draw exchange.live() ...
 /// }
-/// player->stop();
-/// app.wait_idle();
-/// player.reset();
+/// return player->status();
 /// @endcode
 class StreamPlayer {
  public:
@@ -116,8 +127,9 @@ class StreamPlayer {
   /// @param config     The extractor's: the consumer's usage, queue families
   ///                   and a `slot_count` one more than its frames in flight.
   /// @param exchange   Where the meshes go; it must outlive the worker.
-  /// @return OK; `Status::Code::InvalidArgument` once started; or what
-  ///         creating the decoder or the extractor, or the thread, returns.
+  /// @return OK; `Status::Code::InvalidArgument` once started or stopped; or
+  ///         what creating the decoder or the extractor, or the thread,
+  ///         returns.
   core::Status start(core::Device& device, core::Allocator& allocator,
                      const recon::mesh::MarchingCubesConfig& config,
                      FrameExchange& exchange);
@@ -148,17 +160,16 @@ class StreamPlayer {
   // The worker: plays the track until quit or a fatal error, into status_.
   void run();
   core::Status play_track();
-  // Read and decode a record: true when the grid holds it, false for one
-  // skipped (damaged, or a P-frame without its reference).
-  core::Result<bool> decode(const recon::stream::Record& record,
-                            std::vector<std::uint8_t>* payload);
+  // Build grid_ for the stream of `payload`, the first frame read.
+  core::Status make_grid(const std::vector<std::uint8_t>& payload);
   // Wait until the frame at pts_ns is due, and count it shown: false on quit.
   bool wait_due(std::uint64_t pts_ns);
   // Once the consumer took the last mesh, mesh the grid and publish it with
   // @p stamp, adding the extract's time to its decode's: false on quit.
   core::Result<bool> publish(const FrameStamp& stamp);
-  // At the track's end: true to play it again, false on quit.
-  bool wait_at_end(bool shown);
+  // At the end of a pass that showed a frame: true to play the track again,
+  // false on quit.
+  bool wait_at_end();
   // Apply a change to the controls under the lock, then wake the worker.
   template <typename Change>
   void control(Change&& change);
@@ -184,6 +195,7 @@ class StreamPlayer {
   bool loop_ = true;
   std::atomic<bool> quit_{false};
   std::uint64_t last_pts_ns_ = 0;  // the last frame shown
+  bool last_by_step_ = false;      // it went by a step
   core::Status status_;
 };
 

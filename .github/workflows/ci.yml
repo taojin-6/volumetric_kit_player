@@ -32,6 +32,10 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
+      # TODO: a ThreadSanitizer leg for StreamPlayer's worker (DECISIONS.md,
+      # CI): -fsanitize=thread in CMAKE_{C,CXX,OBJC,OBJCXX}_FLAGS and the
+      # linker flags, as the core's and recon's sanitizer options cover only
+      # their own targets.
       matrix:
         include:
           - os: macos-26

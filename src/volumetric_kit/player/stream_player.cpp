@@ -35,6 +35,17 @@ double ms_since(Clock::time_point start) {
       .count();
 }
 
+// The error that ends a pass of the track showing no frame, with the first
+// refusal in it.
+core::Status nothing_shown(core::Status first_skip) {
+  constexpr const char* kWhat =
+      "StreamPlayer: no frame of the geometry track decodes";
+  if (first_skip.ok()) {
+    return core::Status::not_found(kWhat);
+  }
+  return std::move(first_skip).with_context(kWhat);
+}
+
 }  // namespace
 
 core::Result<std::unique_ptr<StreamPlayer>> StreamPlayer::open(
@@ -76,9 +87,9 @@ core::Status StreamPlayer::start(core::Device& device,
                                  core::Allocator& allocator,
                                  const recon::mesh::MarchingCubesConfig& config,
                                  FrameExchange& exchange) {
-  if (decoder_.has_value()) {
+  if (decoder_.has_value() || quit_) {
     return core::Status::invalid_argument(
-        "StreamPlayer::start: already started");
+        "StreamPlayer::start: already started or stopped");
   }
   VKC_ASSIGN(codec::Decoder decoder, codec::Decoder::create(device, allocator));
   VKC_ASSIGN(recon::mesh::MarchingCubes extractor,
@@ -91,6 +102,8 @@ core::Status StreamPlayer::start(core::Device& device,
   try {
     worker_ = std::thread([this] { run(); });
   } catch (...) {
+    extractor_.reset();
+    decoder_.reset();
     return core::exception_status("StreamPlayer::start",
                                   core::Status::Code::IoError);
   }
@@ -160,28 +173,43 @@ core::Status StreamPlayer::play_track() {
   std::vector<std::uint8_t> payload;
   for (;;) {
     stream::Position pos = reader_->begin();
-    std::uint64_t index = 0;  // the next record's place in the track
+    std::uint64_t index = 0;  // the next record's place in this pass
     bool shown = false;       // a frame was shown in this pass
+    core::Status first_skip;  // the first record or frame it skipped
     for (;;) {
       if (quit_) {
         return {};
       }
       stream::Record record;
       const core::Result<bool> more = reader_->next(&pos, &record);
-      if (!more.ok() && !skippable(more.status())) {
-        return more.status();
-      }
       if (more.ok() && !more.value()) {
         break;  // the end
       }
-      // A damaged chunk is skipped: `pos` is past it.
-      if (!more.ok() || record.info.track != track_) {
+      if (more.ok() && record.info.track != track_) {
         continue;
       }
-      const std::uint64_t frame = index++;
+      // A damaged chunk header leaves `pos` past the damage.
+      core::Status status = more.status();
+      const std::uint64_t frame = index;
+      if (status.ok()) {
+        ++index;
+        status = reader_->read(record, &payload);
+      }
+      if (status.ok() && !grid_.has_value()) {
+        status = make_grid(payload);
+      }
       const Clock::time_point start = Clock::now();
-      VKC_ASSIGN(const bool decoded, decode(record, &payload));
-      if (!decoded) {
+      if (status.ok()) {
+        status = codec::decode_growing(*decoder_, payload.data(),
+                                       payload.size(), *grid_);
+      }
+      if (!status.ok()) {
+        if (!skippable(status)) {
+          return status;
+        }
+        if (first_skip.ok()) {
+          first_skip = std::move(status);
+        }
         continue;
       }
       const double decode_ms = ms_since(start);
@@ -195,35 +223,21 @@ core::Status StreamPlayer::play_track() {
       }
       shown = true;
     }
-    if (!wait_at_end(shown)) {
+    if (!shown) {
+      return nothing_shown(std::move(first_skip));
+    }
+    if (!wait_at_end()) {
       return {};
     }
   }
 }
 
-core::Result<bool> StreamPlayer::decode(const stream::Record& record,
-                                        std::vector<std::uint8_t>* payload) {
-  core::Status status = reader_->read(record, payload);
-  if (status.ok() && !grid_.has_value()) {
-    core::Result<recon::volume::VoxelBlockGrid> grid = codec::make_decode_grid(
-        *device_, *allocator_, payload->data(), payload->size());
-    if (grid.ok()) {
-      grid_.emplace(std::move(grid).value());
-    } else {
-      status = grid.status();
-    }
-  }
-  if (status.ok()) {
-    status = codec::decode_growing(*decoder_, payload->data(), payload->size(),
-                                   *grid_);
-  }
-  if (status.ok()) {
-    return true;
-  }
-  if (skippable(status)) {
-    return false;
-  }
-  return status;
+core::Status StreamPlayer::make_grid(const std::vector<std::uint8_t>& payload) {
+  VKC_ASSIGN(recon::volume::VoxelBlockGrid grid,
+             codec::make_decode_grid(*device_, *allocator_, payload.data(),
+                                     payload.size()));
+  grid_.emplace(std::move(grid));
+  return {};
 }
 
 bool StreamPlayer::wait_due(std::uint64_t pts_ns) {
@@ -243,14 +257,13 @@ bool StreamPlayer::wait_due(std::uint64_t pts_ns) {
       changed_.wait(lock);
     }
   }
+  last_by_step_ = !clock_.playing();
   clock_.shown(pts_ns, Clock::now());
   last_pts_ns_ = pts_ns;
   return true;
 }
 
 core::Result<bool> StreamPlayer::publish(const FrameStamp& stamp) {
-  // Publishing over a mesh not yet taken would hold one more ring slot than
-  // the consumer releases.
   while (!exchange_->release_and_may_publish(*extractor_)) {
     exchange_->wait_collected(kCollectWait, quit_);
     if (quit_) {
@@ -265,9 +278,14 @@ core::Result<bool> StreamPlayer::publish(const FrameStamp& stamp) {
   return true;
 }
 
-bool StreamPlayer::wait_at_end(bool shown) {
+bool StreamPlayer::wait_at_end() {
   std::unique_lock<std::mutex> lock(mutex_);
-  bool held = false;
+  // With loop off the last frame holds: played into, it pauses there; stepped
+  // onto, or paused on, it is held already, so a play, even one since that
+  // step, restarts.
+  if (!loop_ && clock_.playing() && !last_by_step_) {
+    clock_.pause();
+  }
   for (;;) {
     // Until a frame may go: playing, or a step.
     changed_.wait(lock, [this] {
@@ -276,17 +294,10 @@ bool StreamPlayer::wait_at_end(bool shown) {
     if (quit_) {
       return false;
     }
-    // A pass that showed nothing holds even with loop on, so a track of
-    // damaged records is not read over and over.
-    if ((loop_ && shown) || (held && clock_.playing())) {
+    if (loop_ || clock_.playing()) {
       return true;
     }
-    held = true;
-    if (clock_.playing()) {
-      clock_.pause();
-    } else {
-      clock_.shown(last_pts_ns_, Clock::now());  // a step: the held frame
-    }
+    clock_.shown(last_pts_ns_, Clock::now());  // a step: the held frame
   }
 }
 
