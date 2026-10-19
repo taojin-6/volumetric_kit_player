@@ -15,8 +15,11 @@ include(FetchContent)
 # #36's merge), and the floor below is that version, so an older
 # FETCHCONTENT_SOURCE_DIR override is refused. The player installs nothing, so
 # the core's install rules are off too.
-# TODO(P5): pin core at C2's merge (0.12.0: vkc_ios, MoltenVK_ROOT) and raise
-# the floor to 0.12.0. Until then an iOS build needs that core through
+#
+# TODO: pin core at C2's merge (0.12.0: vkc_ios, MoltenVK_ROOT), raise the floor
+# to 0.12.0, and say above that the pin is ahead of recon's and gfx's (theirs
+# yield to it); check README.md's link to the core's Platforms. Until then an
+# iOS build needs that core through
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE.
 set(VKC_WITH_VULKAN ON)
 set(VKC_INSTALL OFF)

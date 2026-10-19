@@ -9,8 +9,7 @@
       "cacheVariables": {
         "CMAKE_SYSTEM_NAME": "iOS",
         "CMAKE_OSX_ARCHITECTURES": "arm64",
-        "CMAKE_OSX_DEPLOYMENT_TARGET": "16.0",
-        "VP_BUILD_TESTS": "OFF"
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "16.0"
       }
     }
   ]

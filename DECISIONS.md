@@ -9,14 +9,17 @@ is implemented.
 `CMakePresets.json`'s `ios` preset; README.md says how to build it.
 
 - **CMake's own iOS support, and nothing iOS-specific in the player** but
-  turning off the desktop app and gfx's GLFW tier. The core links MoltenVK's
-  iOS release statically and answers glm (the core's DECISIONS.md). Why: what
-  every iOS consumer needs has one home.
+  turning off the desktop app, gfx's GLFW tier and the tests. The core links
+  MoltenVK's iOS release statically and answers glm (the core's
+  DECISIONS.md). Why: what every iOS consumer needs has one home.
 - **A never-run app, `vp_ios_link_check`, links the library** until the iOS
-  app takes its place. CI builds it unsigned on the Debug Mac leg and fails
-  unless it is an iOS binary (`LC_BUILD_VERSION` platform 2). Why: only an
-  app's link shows what an iOS link misses, such as MoltenVK's frameworks or
-  a macOS glm; a library build does not.
+  app takes its place, without dead stripping, so every symbol that the
+  objects it loads use must resolve. CI builds it unsigned on the Debug Mac
+  leg and fails unless it is an iOS binary (`LC_BUILD_VERSION` platform 2).
+  Why: only an app's link shows what an iOS link misses, such as MoltenVK's
+  frameworks or a macOS glm; a library build does not. Xcode dead-strips by
+  default, and the linker ignores an unresolved symbol in code it strips, so
+  a gap in `PlayerView::frame` would link.
 - **No validation on the device:** iOS has no loader, so no layer. The macOS
   legs stand in: they run every device test under validation on Homebrew's
   MoltenVK, kept at the iOS release's version.

@@ -16,13 +16,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# An application is always the top-level project, so both default ON.
-option(VP_BUILD_TESTS "Build tests" ON)
-option(VP_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
-
-include(vp_warnings)
-include(vp_link_closure)
-
 # The desktop app, a GLFW window, everywhere but iOS, which builds a never-run
 # app that links the library instead (DECISIONS.md). gfx's GLFW tier is the
 # desktop app's alone (third_party/).
@@ -31,6 +24,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 else()
   set(VP_DESKTOP_APP ON)
 endif()
+
+# An application is always the top-level project, so both default ON, but the
+# tests on iOS: they run on the host, and cli_test runs the desktop app.
+option(VP_BUILD_TESTS "Build tests" ${VP_DESKTOP_APP})
+option(VP_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
+
+include(vp_warnings)
+include(vp_link_closure)
 
 add_subdirectory(third_party)
 add_subdirectory(src)
