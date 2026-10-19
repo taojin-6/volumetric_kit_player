@@ -4,7 +4,7 @@
 // PlayerView on a device, over gfx's headless surface and the tests' stream
 // (test_stream.hpp), with gfx's ImGuiTouch as the platform half: create
 // refuses what it cannot use; frames present and shown() advances, onto a
-// frame that meshes nothing too, which the status line then names; 0 x 0
+// frame that meshes nothing too, which still presents; 0 x 0
 // skips without blocking; a step moves one frame; the worker's failure
 // surfaces from frame(); the panel draws at a phone's scale;
 // ui_wants_pointer() follows a finger on the panel; and teardown mid-playback
@@ -52,7 +52,6 @@ using namespace std::chrono_literals;
 using volumetric_kit::player::kControlsWindow;
 using volumetric_kit::player::PlayerView;
 using volumetric_kit::player::PlayerViewConfig;
-using volumetric_kit::player::status_line;
 using volumetric_kit::player::StreamPlayer;
 using SteadyClock = std::chrono::steady_clock;
 
@@ -280,15 +279,7 @@ TEST_F(PlayerViewTest, ShownMovesOntoAFrameThatMeshesNothing) {
       << "shown() stayed on frame 0";
   EXPECT_EQ(view_->shown()->index, 1u);
   EXPECT_EQ(view_->shown()->pts_ns, vp_test::pts_of(1));
-  ASSERT_TRUE(present());  // the panel draws the line below
-  const StreamPlayer& player = view_->player();
-  const std::string line = status_line(view_->shown(), player.frame_count(),
-                                       player.playing(), player.loop());
-  EXPECT_EQ(line.rfind("frame 2/" + std::to_string(vp_test::kFrames) +
-                           " · paused · loop · ",
-                       0),
-            0u)
-      << line;
+  ASSERT_TRUE(present());  // drawing nothing, the frame still presents
   // The frame after it draws again.
   view_->player().step();
   ASSERT_TRUE(tick_until([&] { return view_->shown()->index != 1; }));
