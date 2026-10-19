@@ -37,8 +37,8 @@ How `StreamPlayer` plays a stream; its header says what each call does.
 
 - **Build and test on self-hosted runners with a GPU,** as gfx and recon do:
   the family's Mac (label `mac`; Debug and Release, on MoltenVK) and its Linux
-  GPU hosts (label `vk-linux-gpu`; Release, in an `ubuntu:24.04` container
-  with `--gpus all`, on the NVIDIA driver). Why: every tier past the clock
+  GPU hosts (label `vk-linux-gpu`; Release, in `ubuntu:24.04` and
+  `ubuntu:26.04` containers with `--gpus all`, on the NVIDIA driver). Why: every tier past the clock
   needs a Vulkan device, and these are the family's GPUs; a hosted runner has
   only a software one. The core's
   [runner tooling](https://github.com/taojin-6/volumetric_kit_core/blob/main/tools/runners/README.md)
@@ -51,7 +51,7 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   Branch protection on `main` is set to require that one check (context
   `required`) once it has first reported.
 - **Left out until a need shows:** Debug on Linux, as the GPU hosts are
-  shared with gfx and recon; a second Ubuntu; sanitizers, the first to add,
+  shared with gfx and recon; sanitizers, the first to add,
   for the decode worker's lifetimes; a dependency cache, which would save
   about 30 s a job on the Mac and could go stale after a brew upgrade; and
   the siblings' split into reusable workflows.

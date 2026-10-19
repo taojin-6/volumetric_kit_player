@@ -19,7 +19,7 @@ jobs:
   build:
     name: ${{ matrix.os }} (${{ matrix.build_type }})
     runs-on: [self-hosted, '${{ matrix.runner }}']
-    # The Linux leg runs in an OS-matched container with the GPU passed
+    # The Linux legs run in OS-matched containers with the GPU passed
     # through, as gfx's and recon's do: NVIDIA_DRIVER_CAPABILITIES=all makes
     # the toolkit mount the Vulkan ICD. A runner's .env does not reach a job
     # container, so the container sets the build and test levels: 4 is a
@@ -48,6 +48,10 @@ jobs:
             runner: vk-linux-gpu
             build_type: Release
             container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
+          - os: ubuntu-26.04
+            runner: vk-linux-gpu
+            build_type: Release
+            container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
     steps:
       # The bare image runs us as root and lacks git (checkout needs it) and a
       # toolchain. The NVIDIA ICD needs libXext.so.6 and libEGL.so.1 before it
@@ -94,7 +98,7 @@ jobs:
           echo "VP_LAYER_LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
           echo "VK_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
 
-      # The Linux leg exists for the GPU behind --gpus all, so it fails rather
+      # The Linux legs exist for the GPU behind --gpus all, so they fail rather
       # than passing with no device.
       - name: GPU diagnostic (Linux)
         if: runner.os == 'Linux'
