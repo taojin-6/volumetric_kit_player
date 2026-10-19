@@ -87,23 +87,17 @@ core::Status StreamPlayer::start(core::Device& device,
                                  core::Allocator& allocator,
                                  const recon::mesh::MarchingCubesConfig& config,
                                  FrameExchange& exchange) {
-  if (decoder_.has_value() || quit_) {
+  if (worker_.joinable() || quit_) {
     return core::Status::invalid_argument(
         "StreamPlayer::start: already started or stopped");
   }
-  VKC_ASSIGN(codec::Decoder decoder, codec::Decoder::create(device, allocator));
-  VKC_ASSIGN(recon::mesh::MarchingCubes extractor,
-             recon::mesh::MarchingCubes::create(device, allocator, config));
-  decoder_.emplace(std::move(decoder));
-  extractor_.emplace(std::move(extractor));
   device_ = &device;
   allocator_ = &allocator;
+  config_ = config;
   exchange_ = &exchange;
   try {
     worker_ = std::thread([this] { run(); });
   } catch (...) {
-    extractor_.reset();
-    decoder_.reset();
     return core::exception_status("StreamPlayer::start",
                                   core::Status::Code::IoError);
   }
@@ -160,13 +154,27 @@ core::Status StreamPlayer::status() const {
 void StreamPlayer::run() {
   core::Status outcome;
   try {
-    outcome = play_track();
+    outcome = build();
+    if (outcome.ok()) {
+      outcome = play_track();
+    }
   } catch (...) {
     outcome = core::exception_status("StreamPlayer worker",
                                      core::Status::Code::IoError);
   }
   std::lock_guard<std::mutex> lock(mutex_);
   status_ = std::move(outcome);
+}
+
+core::Status StreamPlayer::build() {
+  VKC_ASSIGN(codec::Decoder decoder,
+             codec::Decoder::create(*device_, *allocator_));
+  VKC_ASSIGN(
+      recon::mesh::MarchingCubes extractor,
+      recon::mesh::MarchingCubes::create(*device_, *allocator_, config_));
+  decoder_.emplace(std::move(decoder));
+  extractor_.emplace(std::move(extractor));
+  return {};
 }
 
 core::Status StreamPlayer::play_track() {

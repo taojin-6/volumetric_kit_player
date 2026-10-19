@@ -4,6 +4,27 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-19 — One view for every window system, drawn by gfx
+
+How `PlayerView` shows playback; its header says what each call does.
+
+- **The seam is gfx's `windowing::SurfaceSource`.** A shell makes one for
+  its window system (GLFW's, a `CAMetalLayer`'s; the tests use the headless
+  one), hands it to `PlayerView::create`, binds gfx's ImGui platform half to
+  `ui_context()`, and calls `frame(extent)` each tick. The view builds the
+  device recon and gfx share, and gfx draws the mesh and the controls panel.
+  The library links no window system (gfx's GLFW tier stays off). Why: one
+  class under every shell, iOS links no GLFW, and the device test runs the
+  real class with no window.
+- **FIFO present.** Why: the stream's pts paces playback, not the display,
+  so a faster mode only spends power; and FIFO is the one mode every surface
+  offers.
+- **The camera takes gfx's gestures.** The shells drive `OrbitCamera`'s
+  `drag_orbit`, `drag_pan` and `zoom`, in viewport heights, unless
+  `ui_wants_pointer()`; the player keeps the viewport: the first view,
+  `kFovY` and the clip planes. Why: mouse and touch need one mapping, which
+  calib's camera writes out too; in gfx it has one home.
+
 ## 2026-10-18 — Decode and mesh on one worker thread, paced by pts
 
 How `StreamPlayer` plays a stream; its header says what each call does.
@@ -12,6 +33,10 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   publish), and the drawing thread only takes meshes from recon's
   `MeshExchange`. Why: drawing never waits on a decode, and recon's decoder
   and grid, which are not thread-safe, stay on one thread.
+- **The worker builds its own kernels** (the decoder and the extractor)
+  before its first record, and a failed build reaches `status()`. Why: their
+  shader builds took seconds on the iOS scanner's first launch, and blocking
+  main that long risks the watchdog's kill; the window side stays on main.
 - **It meshes a frame only once the consumer has taken the last mesh,**
   rather than publishing over it. Why: each untaken mesh would hold a ring
   slot the consumer's `frames_in_flight + 1` do not cover. A consumer that

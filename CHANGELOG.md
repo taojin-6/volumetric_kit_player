@@ -14,5 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `player::Playback`, the clock that paces a stream's frames by their
   timestamps, with play, pause and step.
 - `player::StreamPlayer`: plays a `.vrst` stream's geometry on a worker
-  thread, paced by its pts.
+  thread, paced by its pts. The worker builds its decoder and extractor, so
+  `start` returns at once and a failed build reaches `status()`.
 - CI: a Mac leg that builds Debug under ThreadSanitizer and runs the tests.
+- `player::PlayerView`: the window side of playback on any window system,
+  over gfx: the shared device, a FIFO swapchain, and the newest mesh under an
+  orbit camera and a controls panel, one `frame(extent)` per tick.

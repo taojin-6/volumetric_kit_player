@@ -7,9 +7,12 @@ drawn by [volumetric_kit_gfx](https://github.com/taojin-6/volumetric_kit_gfx),
 paced by the stream's timestamps.
 
 > **Status:** the playback clock (`src/volumetric_kit/player/playback.hpp`),
-> which paces frames by their timestamps with play, pause and step, and the
+> which paces frames by their timestamps with play, pause and step; the
 > stream player (`src/volumetric_kit/player/stream_player.hpp`), which decodes
-> and meshes each frame on the GPU on a worker thread. The window comes next.
+> and meshes each frame on the GPU on a worker thread; and the view
+> (`src/volumetric_kit/player/player_view.hpp`), which draws each mesh under
+> an orbit camera and a controls panel on any window system. The desktop
+> window comes next.
 
 [AGENTS.md](AGENTS.md) is the working guide for agents, and `CLAUDE.md`
 imports it. [DECISIONS.md](DECISIONS.md) records the choices made.
@@ -17,9 +20,10 @@ imports it. [DECISIONS.md](DECISIONS.md) records the choices made.
 ## Prerequisites
 
 A C++17 compiler (GCC or Clang, on Linux or macOS), CMake ≥ 3.21, and what
-volumetric_kit_recon builds with: a Vulkan SDK (MoltenVK on macOS), `glslc`
-or `glslangValidator`, and GLM. The first configure fetches core, recon and
-googletest, so it needs network access.
+volumetric_kit_recon and volumetric_kit_gfx build with: a Vulkan SDK
+(MoltenVK on macOS), `glslc` or `glslangValidator`, and GLM. The first
+configure fetches core, recon, gfx and googletest, so it needs network
+access.
 
 ## Build and test
 

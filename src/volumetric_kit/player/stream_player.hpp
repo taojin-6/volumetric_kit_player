@@ -50,19 +50,20 @@ using FrameExchange = recon::mesh::MeshExchange<FrameStamp>;
 ///        GPU, paced by its pts, and publishes the mesh to a
 ///        @ref FrameExchange for the caller to draw.
 ///
-/// **The worker**, per record of the track: reads it,
-/// `codec::decode_growing` it into a grid `codec::make_decode_grid` built
-/// from the first frame, waits until it is due (@ref Playback) and until the
-/// consumer has taken the last mesh, then extracts it with Marching Cubes
-/// and publishes it. The mesh lives in the extractor's ring slot, so the next
-/// frame decodes while it is drawn. A damaged record, or one this version
-/// cannot read, is skipped, and playback resumes at the next key record. At
-/// the track's end it plays the track again with loop on; with loop off it
-/// holds the last frame, paused, until @ref play restarts it.
+/// **The worker** first builds the decoder and the extractor. Then, per record
+/// of the track, it reads it, `codec::decode_growing` it into a grid
+/// `codec::make_decode_grid` built from the first frame, waits until it is due
+/// (@ref Playback) and until the consumer has taken the last mesh, then
+/// extracts it with Marching Cubes and publishes it. The mesh lives in the
+/// extractor's ring slot, so the next frame decodes while it is drawn. A
+/// damaged record, or one this version cannot read, is skipped, and playback
+/// resumes at the next key record. At the track's end it plays the track again
+/// with loop on; with loop off it holds the last frame, paused, until
+/// @ref play restarts it.
 ///
-/// **Errors.** Any other failure, or a pass of the track that shows no frame
-/// (its first refusal in the message), stops the worker, and @ref status
-/// reports it.
+/// **Errors.** A failed build, any other failure, or a pass of the track that
+/// shows no frame (its first refusal in the message), stops the worker, and
+/// @ref status reports it.
 ///
 /// **Threads.** The controls (@ref play, @ref pause, @ref step,
 /// @ref set_loop) and their reads lock the mutex the worker waits under, so
@@ -120,16 +121,14 @@ class StreamPlayer {
   /// @return The geometry track's records: the frames it plays.
   std::uint64_t frame_count() const noexcept;
 
-  /// @brief Build the decoder and the extractor on @p device, and start the
-  ///        worker.
+  /// @brief Start the worker on @p device; it builds first (above).
   /// @param device     The compute device; it must outlive this.
   /// @param allocator  Its allocator; it must outlive this.
   /// @param config     The extractor's: the consumer's usage, queue families
   ///                   and a `slot_count` one more than its frames in flight.
   /// @param exchange   Where the meshes go; it must outlive the worker.
   /// @return OK; `Status::Code::InvalidArgument` once started or stopped; or
-  ///         what creating the decoder or the extractor, or the thread,
-  ///         returns.
+  ///         the thread's failure.
   core::Status start(core::Device& device, core::Allocator& allocator,
                      const recon::mesh::MarchingCubesConfig& config,
                      FrameExchange& exchange);
@@ -157,8 +156,11 @@ class StreamPlayer {
   StreamPlayer(std::unique_ptr<recon::stream::StreamReader> reader,
                std::uint16_t track);
 
-  // The worker: plays the track until quit or a fatal error, into status_.
+  // The worker: builds, then plays the track until quit or a fatal error,
+  // into status_.
   void run();
+  // Build decoder_ and extractor_ on the worker.
+  core::Status build();
   core::Status play_track();
   // Build grid_ for the stream of `payload`, the first frame read.
   core::Status make_grid(const std::vector<std::uint8_t>& payload);
@@ -177,9 +179,11 @@ class StreamPlayer {
   std::unique_ptr<recon::stream::StreamReader> reader_;
   std::uint16_t track_ = 0;
 
-  // The worker's, made by start; destroyed extractor first, after the join.
+  // The worker's: start sets what it builds on, and the worker builds the
+  // rest; destroyed extractor first, after the join.
   core::Device* device_ = nullptr;
   core::Allocator* allocator_ = nullptr;
+  recon::mesh::MarchingCubesConfig config_;
   FrameExchange* exchange_ = nullptr;
   std::optional<recon::codec::Decoder> decoder_;
   std::optional<recon::volume::VoxelBlockGrid> grid_;

@@ -1,0 +1,381 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+// PlayerView on a device, over gfx's headless surface and the tests' stream
+// (test_stream.hpp), with gfx's ImGuiTouch as the platform half: create
+// refuses what it cannot use; frames present and shown() advances; 0 x 0
+// skips without blocking; a step moves one frame; the worker's failure
+// surfaces from frame(); the panel draws at a phone's scale;
+// ui_wants_pointer() follows a finger on the panel; and teardown mid-playback
+// is clean. The view makes its own shared device, validated as the test
+// policy asks, so the layer's errors fail the test. The tests skip where the
+// loader offers no headless surface (NVIDIA's ICD). On Apple a skip fails
+// (CMakeLists.txt), and MoltenVK plans two queue families, so the mesh's
+// buffers are CONCURRENT and read across. One family, EXCLUSIVE and read in
+// place, is tested on the host only (mesh_wiring_test.cpp) until a leg runs
+// the view on one.
+
+#include "volumetric_kit/player/player_view.hpp"
+
+#include <gtest/gtest.h>
+
+#include <chrono>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+#include <glm/vec2.hpp>
+
+#include "imgui.h"
+#include "imgui_internal.h"  // FindWindowByName, to find the panel
+#include "test_stream.hpp"
+#include "volumetric_kit/core/testing/vulkan_fixture.hpp"
+#include "volumetric_kit/core/vulkan/shared_device.hpp"
+#include "volumetric_kit/gfx/app/shared_device_config.hpp"
+#include "volumetric_kit/gfx/app/windowed_app.hpp"
+#include "volumetric_kit/gfx/ui/imgui_touch.hpp"
+#include "volumetric_kit/gfx/windowing/surface_source.hpp"
+#include "volumetric_kit/player/controls.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
+
+namespace {
+
+namespace core = volumetric_kit::core;
+namespace gfx = volumetric_kit::gfx;
+namespace recon = volumetric_kit::recon;
+using namespace std::chrono_literals;
+using volumetric_kit::player::kControlsWindow;
+using volumetric_kit::player::PlayerView;
+using volumetric_kit::player::PlayerViewConfig;
+using volumetric_kit::player::StreamPlayer;
+using SteadyClock = std::chrono::steady_clock;
+
+constexpr VkExtent2D kExtent{320, 240};
+// How long a frame the test let go may take to arrive (the worker builds its
+// kernels first); how long one it did not is waited for; and the longest a
+// call that must not block takes.
+constexpr auto kArrival = 10s;
+constexpr auto kQuiet = 300ms;
+constexpr auto kPrompt = 1s;
+
+class PlayerViewTest : public core::test::VulkanDeviceTest {
+ protected:
+  // The fixture's device writes the stream; the view makes its own.
+  core::DeviceRequirements requirements() const override {
+    return recon::device_requirements();
+  }
+
+  void SetUp() override {
+    VulkanDeviceTest::SetUp();
+    if (base_setup_incomplete()) {
+      return;
+    }
+    core::Result<gfx::windowing::SurfaceSource> headless =
+        gfx::windowing::headless_surface();
+    if (!headless.ok()) {
+      GTEST_SKIP() << headless.status().message();
+    }
+    surface_ = std::move(headless).value();
+    const core::Status written =
+        vp_test::write_stream(device(), allocator(), path_);
+    ASSERT_TRUE(written.ok()) << written.message();
+  }
+
+  // The view goes while the fixture still counts the layer's errors.
+  void TearDown() override {
+    touch_.reset();
+    view_.reset();
+    VulkanDeviceTest::TearDown();
+  }
+
+  // The view's config: at `ui_scale_`, validated as the test policy asks.
+  PlayerViewConfig config() const {
+    PlayerViewConfig config;
+    config.ui_scale = ui_scale_;
+    config.validation = active_validation() != core::test::Validation::Off;
+    return config;
+  }
+
+  // A player over the tests' stream, or null with a failure recorded.
+  std::unique_ptr<StreamPlayer> open() {
+    core::Result<std::unique_ptr<StreamPlayer>> opened =
+        StreamPlayer::open(path_);
+    EXPECT_TRUE(opened.ok()) << opened.status().message();
+    return opened.ok() ? std::move(opened).value() : nullptr;
+  }
+
+  // The view over the stream at `path`, paused first unless `playing`, with
+  // the touch half bound to its controls; false with a failure recorded.
+  bool make_view(bool playing = true) { return make_view(path_, playing); }
+  bool make_view(const std::string& path, bool playing = true) {
+    core::Result<std::unique_ptr<StreamPlayer>> opened =
+        StreamPlayer::open(path);
+    EXPECT_TRUE(opened.ok()) << opened.status().message();
+    if (!opened.ok()) {
+      return false;
+    }
+    if (!playing) {
+      opened.value()->pause();
+    }
+    core::Result<std::unique_ptr<PlayerView>> view = PlayerView::create(
+        surface_, kExtent, std::move(opened).value(), config());
+    EXPECT_TRUE(view.ok()) << view.status().message();
+    if (!view.ok()) {
+      return false;
+    }
+    view_ = std::move(view).value();
+    core::Result<std::unique_ptr<gfx::ui::ImGuiTouch>> touch =
+        gfx::ui::ImGuiTouch::create(view_->ui_context());
+    EXPECT_TRUE(touch.ok()) << touch.status().message();
+    touch_ = touch.ok() ? std::move(touch).value() : nullptr;
+    return touch_ != nullptr;
+  }
+
+  // One tick, as a shell makes it: the touch half's frame, then the view's.
+  core::Result<bool> tick() {
+    seconds_ += 1.0 / 60.0;
+    gfx::ui::DisplayFrame display;
+    display.pixels = kExtent;
+    display.seconds = seconds_;
+    touch_->new_frame(display);
+    return view_->frame(kExtent);
+  }
+
+  // Ticks until `done` holds or `wait` passes, each tick OK; whether `done`
+  // held.
+  template <typename Done>
+  bool tick_until(Done&& done, SteadyClock::duration wait = kArrival) {
+    const SteadyClock::time_point deadline = SteadyClock::now() + wait;
+    while (!done()) {
+      if (SteadyClock::now() >= deadline) {
+        return false;
+      }
+      const core::Result<bool> ticked = tick();
+      EXPECT_TRUE(ticked.ok()) << ticked.status().message();
+      if (!ticked.ok()) {
+        return false;
+      }
+      std::this_thread::sleep_for(1ms);
+    }
+    return true;
+  }
+
+  // Ticks for `wait`, each tick OK.
+  void tick_for(SteadyClock::duration wait) {
+    tick_until([] { return false; }, wait);
+  }
+
+  // Ticks until one presents, each tick OK; whether one did.
+  bool present() {
+    const SteadyClock::time_point deadline = SteadyClock::now() + kArrival;
+    while (SteadyClock::now() < deadline) {
+      const core::Result<bool> ticked = tick();
+      EXPECT_TRUE(ticked.ok()) << ticked.status().message();
+      if (!ticked.ok() || ticked.value()) {
+        return ticked.ok();
+      }
+    }
+    return false;
+  }
+
+  // The middle of the controls' panel, in points, as the last frame laid it
+  // out.
+  glm::vec2 panel_middle() const {
+    ImGui::SetCurrentContext(view_->ui_context());
+    const ImGuiWindow* panel = ImGui::FindWindowByName(kControlsWindow);
+    EXPECT_NE(panel, nullptr);
+    if (panel == nullptr) {
+      return {0.0f, 0.0f};
+    }
+    return {panel->Pos.x + 0.5f * panel->Size.x,
+            panel->Pos.y + 0.5f * panel->Size.y};
+  }
+
+  vp_test::Scratch scratch_;
+  const std::string path_ = scratch_.file("sphere.vrst");
+  gfx::windowing::SurfaceSource surface_;
+  std::unique_ptr<PlayerView> view_;
+  std::unique_ptr<gfx::ui::ImGuiTouch> touch_;  // destroyed before the view
+  double seconds_ = 0.0;
+  float ui_scale_ = 1.0f;  // set before make_view
+};
+
+TEST_F(PlayerViewTest, CreateRefusesWhatItCannotUse) {
+  const core::Status no_player =
+      PlayerView::create(surface_, kExtent, nullptr, config()).status();
+  EXPECT_EQ(no_player.domain(), core::Status::Code::InvalidArgument);
+  EXPECT_NE(no_player.message().find("needs a player"), std::string::npos)
+      << no_player.message();
+
+  const core::Status no_pixels =
+      PlayerView::create(surface_, {kExtent.width, 0}, open(), config())
+          .status();
+  EXPECT_EQ(no_pixels.domain(), core::Status::Code::InvalidArgument);
+  EXPECT_NE(no_pixels.message().find("at least 1 x 1"), std::string::npos)
+      << no_pixels.message();
+
+  PlayerViewConfig unscaled = config();
+  unscaled.ui_scale = 0.0f;
+  const core::Status no_scale =
+      PlayerView::create(surface_, kExtent, open(), unscaled).status();
+  EXPECT_EQ(no_scale.domain(), core::Status::Code::InvalidArgument);
+  EXPECT_NE(no_scale.message().find("scale"), std::string::npos)
+      << no_scale.message();
+
+  // start refuses a stopped player, and the view goes with no worker.
+  std::unique_ptr<StreamPlayer> stopped = open();
+  ASSERT_NE(stopped, nullptr);
+  stopped->stop();
+  const core::Status not_started =
+      PlayerView::create(surface_, kExtent, std::move(stopped), config())
+          .status();
+  EXPECT_EQ(not_started.domain(), core::Status::Code::InvalidArgument);
+  EXPECT_NE(not_started.message().find("already started or stopped"),
+            std::string::npos)
+      << not_started.message();
+}
+
+TEST_F(PlayerViewTest, FramesPresentAndShownAdvances) {
+  ASSERT_TRUE(make_view());
+  std::uint64_t presented = 0;
+  std::vector<std::uint64_t> shown;
+  const bool advanced = tick_until([&] {
+    if (view_->shown() &&
+        (shown.empty() || shown.back() != view_->shown()->index)) {
+      shown.push_back(view_->shown()->index);
+    }
+    return shown.size() >= 3;
+  });
+  ASSERT_TRUE(advanced) << shown.size() << " frame(s) shown";
+  // In order, from the first; the loop wraps only after kFrames.
+  EXPECT_EQ(shown, (std::vector<std::uint64_t>{0, 1, 2}));
+  for (int i = 0; i < 3; ++i) {
+    const core::Result<bool> ticked = tick();
+    ASSERT_TRUE(ticked.ok()) << ticked.status().message();
+    presented += ticked.value() ? 1 : 0;
+  }
+  EXPECT_EQ(presented, 3u) << "a headless surface never settles";
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
+
+TEST_F(PlayerViewTest, AZeroExtentSkipsWithoutBlocking) {
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  const SteadyClock::time_point start = SteadyClock::now();
+  const core::Result<bool> skipped = view_->frame({0, 0});
+  EXPECT_LT(SteadyClock::now() - start, kPrompt);
+  ASSERT_TRUE(skipped.ok()) << skipped.status().message();
+  EXPECT_FALSE(skipped.value());
+  // Restored, it presents again.
+  const core::Result<bool> restored = tick();
+  ASSERT_TRUE(restored.ok()) << restored.status().message();
+  EXPECT_TRUE(restored.value());
+}
+
+TEST_F(PlayerViewTest, AStepMovesOneFrame) {
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  tick_for(kQuiet);
+  EXPECT_FALSE(view_->shown().has_value()) << "paused, nothing goes";
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  EXPECT_EQ(view_->shown()->index, 0u);
+  tick_for(kQuiet);
+  EXPECT_EQ(view_->shown()->index, 0u) << "one step, one frame";
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown()->index != 0; }));
+  EXPECT_EQ(view_->shown()->index, 1u);
+  EXPECT_FALSE(view_->player().playing());
+}
+
+TEST_F(PlayerViewTest, TheWorkersFailureSurfacesFromFrame) {
+  const std::string undecodable = scratch_.file("undecodable.vrst");
+  const core::Status written =
+      vp_test::write_undecodable_stream(undecodable, 3);
+  ASSERT_TRUE(written.ok()) << written.message();
+  ASSERT_TRUE(make_view(undecodable));
+  core::Status failed;
+  const SteadyClock::time_point deadline = SteadyClock::now() + kArrival;
+  while (failed.ok() && SteadyClock::now() < deadline) {
+    failed = tick().status();
+    std::this_thread::sleep_for(1ms);
+  }
+  ASSERT_FALSE(failed.ok()) << "frame() kept presenting";
+  EXPECT_EQ(failed.message(), view_->player().status().message());
+  EXPECT_NE(failed.message().find("no frame of the geometry track decodes"),
+            std::string::npos)
+      << failed.message();
+  EXPECT_FALSE(view_->shown().has_value());
+}
+
+TEST_F(PlayerViewTest, UiWantsPointerFollowsAFingerOnThePanel) {
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  // An auto-sized panel takes its size on its second frame.
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(present());
+  }
+  EXPECT_FALSE(view_->ui_wants_pointer());
+  touch_->touch_began(1, panel_middle());
+  EXPECT_FALSE(view_->ui_wants_pointer()) << "not before the next frame";
+  ASSERT_TRUE(present());
+  EXPECT_TRUE(view_->ui_wants_pointer());
+  touch_->touch_ended(1);
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(present());
+  }
+  EXPECT_FALSE(view_->ui_wants_pointer());
+  touch_->touch_began(2, {4.0f, 4.0f});  // the top-left corner: the scene
+  ASSERT_TRUE(present());
+  EXPECT_FALSE(view_->ui_wants_pointer());
+  touch_->touch_ended(2);
+}
+
+// Twice the scale takes ImGui's vector font rather than its pixel one, which
+// must also hold the status line's dot.
+TEST_F(PlayerViewTest, ThePanelDrawsAtAPhonesScale) {
+  ui_scale_ = 2.0f;
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  EXPECT_TRUE(present());
+  ImGui::SetCurrentContext(view_->ui_context());
+  const ImVector<ImFont*>& fonts = ImGui::GetIO().Fonts->Fonts;
+  ASSERT_FALSE(fonts.empty()) << "the first frame adds the font";
+  EXPECT_TRUE(fonts[0]->IsGlyphInFont(0x00B7));
+}
+
+TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  tick_for(kQuiet);  // the worker decodes ahead while frames are in flight
+  const SteadyClock::time_point start = SteadyClock::now();
+  touch_.reset();
+  view_.reset();
+  EXPECT_LT(SteadyClock::now() - start, kPrompt);
+  // The layer loaded where it was asked for; an error it reported fails the
+  // test.
+  for (const std::string& warning : warnings()) {
+    EXPECT_EQ(warning.find("continuing without it"), std::string::npos)
+        << warning;
+  }
+}
+
+#ifdef __APPLE__
+// The device create() makes, on each of MoltenVK's family layouts
+// (CMakeLists.txt): two families, so the tests above cross them.
+TEST_F(PlayerViewTest, MoltenVkPlansTwoFamilies) {
+  gfx::app::WindowDeviceConfig device_config;
+  device_config.instance.enable_validation = config().validation;
+  device_config.graphics = gfx::app::WindowedAppConfig{}.device;
+  core::Result<std::unique_ptr<core::SharedDevice>> shared =
+      gfx::app::make_shared_device(surface_, recon::device_requirements(),
+                                   device_config);
+  ASSERT_TRUE(shared.ok()) << shared.status().message();
+  EXPECT_EQ(shared.value()->plan(), core::QueuePlan::TwoFamilies)
+      << core::to_string(shared.value()->plan());
+}
+#endif
+
+}  // namespace
