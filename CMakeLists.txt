@@ -21,11 +21,17 @@ option(VP_BUILD_TESTS "Build tests" ON)
 option(VP_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
 
 include(vp_warnings)
+include(vp_link_closure)
 
 add_subdirectory(third_party)
 add_subdirectory(src)
+add_subdirectory(apps/volumetric_kit_player)
 
 if(VP_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
 endif()
+
+# Last, once every directory has linked what it links: gfx's GLFW tier is built
+# for the app, so keep it out of the library.
+vp_check_not_linked(player glfw)
