@@ -42,14 +42,14 @@ FetchContent_MakeAvailable(volumetric_kit_recon)
 # The swapchain on a shared device, the mesh pipeline, the orbit camera and the
 # controls panel (ImGui). Its tests, examples, install and -Werror stay off in a
 # subproject, and so does its GLFW tier: the library links no window system
-# (DECISIONS.md). gfx's own core pin yields to the one above.
-#
-# TODO(P3): bump to the merge of gfx #143-#146 before pushing
+# (DECISIONS.md). gfx's own core pin yields to the one above. The pin is gfx
+# main at #146's merge (77f421e): windowing::SurfaceSource, beside #143's orbit
+# drag gestures, #144's sRGB ImGui fix and #145's ImGuiTouch.
 set(VG_WITH_GLFW OFF)
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  GIT_TAG 76d0655ab04672c9971e0681adf8d937aa52eca0)
+  GIT_TAG 77f421e58d83f90dfc9401ed7492e88dbfe875c4)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
 if(VP_BUILD_TESTS)
