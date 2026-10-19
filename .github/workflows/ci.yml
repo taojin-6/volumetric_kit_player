@@ -116,7 +116,7 @@ jobs:
         run: |
           sanitize=""
           if [ "${{ matrix.tsan }}" = true ]; then
-            for flags in C_FLAGS CXX_FLAGS OBJC_FLAGS OBJCXX_FLAGS \
+            for flags in C_FLAGS CXX_FLAGS OBJCXX_FLAGS \
                 EXE_LINKER_FLAGS SHARED_LINKER_FLAGS MODULE_LINKER_FLAGS; do
               sanitize="${sanitize} -DCMAKE_${flags}=-fsanitize=thread"
             done

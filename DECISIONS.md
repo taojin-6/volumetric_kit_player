@@ -51,10 +51,11 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   Branch protection on `main` is set to require that one check (context
   `required`) once it has first reported.
 - **ThreadSanitizer on a third Mac leg, in Debug:** `-fsanitize=thread` in
-  `CMAKE_{C,CXX,OBJC,OBJCXX}_FLAGS` and the linker flags, as the core's and
-  recon's sanitizer options cover only their own targets. A report fails its
-  test. MoltenVK and the validation layer are not instrumented; no report
-  points into them, so there is no suppressions file.
+  `CMAKE_{C,CXX,OBJCXX}_FLAGS` and the linker flags, so googletest is
+  instrumented too, which the core's `VKC_SANITIZE` (carried to every target
+  that links the core) does not reach. A report fails its test. MoltenVK and
+  the validation layer are not instrumented; no report points into them, so
+  there is no suppressions file.
 - **Left out until a need shows:** Debug on Linux, as the GPU hosts are
   shared with gfx and recon; AddressSanitizer and UBSan; a dependency cache,
   which would save about 30 s a job on the Mac and could go stale after a
