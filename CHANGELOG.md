@@ -14,4 +14,5 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `player::Playback`, the clock that paces a stream's frames by their
   timestamps, with play, pause and step.
 - `player::StreamPlayer`: plays a `.vrst` stream's geometry on a worker
-  thread, paced by its pts.
+  thread, paced by its pts. The worker builds its decoder and extractor, so
+  `start` returns at once and a failed build reaches `status()`.

@@ -12,6 +12,10 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   publish), and the drawing thread only takes meshes from recon's
   `MeshExchange`. Why: drawing never waits on a decode, and recon's decoder
   and grid, which are not thread-safe, stay on one thread.
+- **The worker builds its own kernels** (the decoder and the extractor)
+  before its first record, and a failed build reaches `status()`. Why: their
+  shader builds took seconds on the iOS scanner's first launch, and blocking
+  main that long risks the watchdog's kill; the window side stays on main.
 - **It meshes a frame only once the consumer has taken the last mesh,**
   rather than publishing over it. Why: each untaken mesh would hold a ring
   slot the consumer's `frames_in_flight + 1` do not cover. A consumer that

@@ -11,7 +11,8 @@
 // or a record this version cannot read resyncs at the next key, and a stream
 // with no key left stops the worker with the reason; quit is prompt, playing,
 // paused or waiting for a consumer that takes nothing; a fatal error stops
-// the worker; start is refused once started or stopped. Playing, no frame
+// the worker, a failed build on it included; start is refused once started
+// or stopped. Playing, no frame
 // arrives before its pts says. On the host: open refuses what it cannot
 // play. The device tests skip with no device. A stop that no control can
 // wake, such as one lost in the exchange's wait, fails only on ctest's
@@ -569,6 +570,27 @@ TEST_F(StreamPlayerTest, AFatalErrorStopsTheWorker) {
   EXPECT_FALSE(status.ok());
   EXPECT_NE(status.message().find("outstanding"), std::string::npos)
       << status.message();
+  EXPECT_LT(stop_time(*player), kPrompt);
+}
+
+TEST_F(StreamPlayerTest, AFailedBuildOnTheWorkerReachesStatus) {
+  // MarchingCubes::create refuses a ring with no slot. The worker builds the
+  // extractor, so start returns OK first.
+  StreamPlayer* player = start(/*playing=*/true, /*slot_count=*/0);
+  ASSERT_NE(player, nullptr);
+  const SteadyClock::time_point deadline = SteadyClock::now() + kArrival;
+  while (player->status().ok() && SteadyClock::now() < deadline) {
+    std::this_thread::sleep_for(1ms);
+  }
+  const core::Status status = player->status();
+  EXPECT_EQ(status.domain(), Code::InvalidArgument) << status.message();
+  EXPECT_NE(status.message().find("slot_count"), std::string::npos)
+      << status.message();
+  EXPECT_FALSE(next_frame(kQuiet).has_value());
+  // Its worker ended, but it was started.
+  const core::Status again =
+      player->start(device(), allocator(), extractor_config(), exchange_);
+  EXPECT_EQ(again.domain(), Code::InvalidArgument) << again.message();
   EXPECT_LT(stop_time(*player), kPrompt);
 }
 
