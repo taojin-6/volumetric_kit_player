@@ -5,10 +5,13 @@
 
 /// @file mesh_wiring.hpp
 /// @brief What the renderer needs of recon's meshes: the extractor's and the
-///        exchange's configs for one shared device. Player-internal.
+///        exchange's configs for one shared device, and whether the exchange
+///        still hands over meshes it can draw. Player-internal.
 
 #include <cstdint>
+#include <string>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh_exchange.hpp"
 
@@ -43,5 +46,27 @@ struct MeshWiring {
 MeshWiring mesh_wiring(std::uint32_t graphics_family,
                        std::uint32_t compute_family,
                        std::uint32_t frames_in_flight);
+
+/// @brief Whether the renderer can go on drawing @p exchange's meshes.
+///
+/// It reads the exchange's latch, not one frame's outcome: once a mesh is
+/// refused the exchange takes none again, so every later frame fails too.
+///
+/// @code
+/// exchange.begin_frame(slot, commit);
+/// const core::Status drawn = drawable(exchange);
+/// // ... end the frame, then VKC_TRY(drawn) ...
+/// @endcode
+/// @param exchange  The renderer's exchange.
+/// @return OK; or `core::Status::Code::Unsupported` naming why a mesh was
+///         refused.
+template <typename Payload>
+core::Status drawable(const recon::mesh::MeshExchange<Payload>& exchange) {
+  if (exchange.refused() == nullptr) {
+    return core::Status();
+  }
+  return core::Status::unsupported(
+      std::string("PlayerView: a mesh cannot be drawn: ") + exchange.refused());
+}
 
 }  // namespace volumetric_kit::player

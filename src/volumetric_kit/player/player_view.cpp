@@ -3,7 +3,6 @@
 
 #include "volumetric_kit/player/player_view.hpp"
 
-#include <string>
 #include <utility>
 
 #include "imgui.h"
@@ -109,17 +108,12 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   overlay_.new_frame();
   draw_controls(*player_, shown_);
   // 3. The newest mesh; the slot's last frame has completed.
-  core::Status refused;
-  const recon::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
+  exchange_.begin_frame(
       frame.slot, [this](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
         shown_ = stamp;
         return true;
       });
-  if (outcome == recon::mesh::ExchangeOutcome::kRefused) {
-    refused = core::Status::unsupported(
-        std::string("PlayerView: a mesh cannot be drawn: ") +
-        exchange_.refused());
-  }
+  const core::Status drawn = drawable(exchange_);
   // 4. The mesh, then the controls over it. recon's extract waited on its
   // fence before it published, and this frame's submit makes its writes
   // visible to the draw.
@@ -153,7 +147,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   frame.target->end(frame.cmd);
   // 5. Every path from begin_frame ends the frame.
   const core::Status ended = app_.end_frame(frame);
-  VKC_TRY(refused);
+  VKC_TRY(drawn);
   if (!ended.ok()) {
     if (gfx::windowing::swapchain_stale(ended)) {
       return false;
