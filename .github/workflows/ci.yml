@@ -57,8 +57,9 @@ jobs:
       # The bare image runs us as root and lacks git (checkout needs it) and a
       # toolchain. The NVIDIA ICD needs libXext.so.6 and libEGL.so.1 before it
       # hands the loader an instance; without them every GPU test would skip
-      # (gfx's _build.yml). libglfw3-dev is GLFW for gfx's window glue, which
-      # links the distro's GLFW and so needs no X11 headers.
+      # (gfx's _build.yml). libglfw3-dev is GLFW for the app's window, through
+      # gfx's GLFW tier, which links the distro's GLFW and so needs no X11
+      # headers; xvfb is the X server the smoke run draws to.
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -66,7 +67,7 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates git \
             cmake build-essential libglm-dev libvulkan-dev \
             vulkan-validationlayers spirv-tools glslang-tools vulkan-tools \
-            libglfw3-dev libxext6 libegl1
+            libglfw3-dev libxext6 libegl1 xvfb
 
       # A self-hosted workspace is readable by other repositories' jobs on the
       # host, so the token is not left in .git/config.
@@ -158,6 +159,34 @@ jobs:
           DYLD_FALLBACK_LIBRARY_PATH="${VP_LAYER_LIBRARY_PATH:-}" \
             ctest --test-dir build --output-on-failure \
               --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
+
+      # The window's smoke run (DECISIONS.md): the app plays the tests' stream
+      # under Xvfb for 60 presents of a stream frame. The loader forces the
+      # validation layer on, which a Release build does not ask for, and logs
+      # the insert; with no messenger, the layer prints its own messages.
+      - name: Smoke run of the window (Linux, Xvfb)
+        if: runner.os == 'Linux'
+        run: |
+          set -eo pipefail
+          build/tests/vp_write_stream build/smoke.vrst
+          VK_LOADER_LAYERS_ENABLE='*validation' VK_LOADER_DEBUG=layer \
+            timeout 300 xvfb-run -a \
+              build/apps/volumetric_kit_player/volumetric_kit_player \
+              --frames 60 build/smoke.vrst 2>&1 | tee build/smoke.log
+          if ! grep -qE '^volumetric_kit_player: presented 60 frame\(s\), drew stream frame [0-9]+$' \
+              build/smoke.log; then
+            echo "::error::the window did not present 60 frames of the stream"
+            exit 1
+          fi
+          if ! grep -qF 'Insert instance layer "VK_LAYER_KHRONOS_validation"' \
+              build/smoke.log; then
+            echo "::error::the validation layer did not load"
+            exit 1
+          fi
+          if grep -q 'VUID-' build/smoke.log; then
+            echo "::error::Vulkan validation errors from the window"
+            exit 1
+          fi
 
   lint:
     runs-on: ubuntu-latest

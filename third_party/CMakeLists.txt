@@ -42,11 +42,13 @@ FetchContent_MakeAvailable(volumetric_kit_recon)
 # --- volumetric_kit_gfx ------------------------------------------------------
 # The swapchain on a shared device, the mesh pipeline, the orbit camera and the
 # controls panel (ImGui). Its tests, examples, install and -Werror stay off in a
-# subproject, and so does its GLFW tier: the library links no window system
-# (DECISIONS.md). gfx's own core pin yields to the one above. The pin is gfx
-# main at #146's merge (77f421e): windowing::SurfaceSource, beside #143's orbit
-# drag gestures, #144's sRGB ImGui fix and #145's ImGuiTouch.
-set(VG_WITH_GLFW OFF)
+# subproject. Its GLFW tier is on, for the desktop app alone: the library links
+# no window system (the top-level CMakeLists.txt checks). gfx's own core pin
+# yields to the one above. The pin is gfx main at #146's merge (77f421e):
+# windowing::SurfaceSource and glfw::Library, beside #143's orbit drag gestures,
+# #144's sRGB ImGui fix and #145's ImGuiTouch. TODO: an iOS build turns this
+# tier and the app off; a preset cannot, as this set wins over the cache.
+set(VG_WITH_GLFW ON)
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git

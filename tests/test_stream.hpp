@@ -25,6 +25,7 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/stream/stream_writer.hpp"
