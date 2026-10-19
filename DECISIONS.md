@@ -38,9 +38,9 @@ How `StreamPlayer` plays a stream; its header says what each call does.
 - **Build and test on self-hosted runners with a GPU,** as gfx and recon do:
   the family's Mac (label `mac`; Debug and Release, on MoltenVK) and its Linux
   GPU hosts (label `vk-linux-gpu`; Release, in `ubuntu:24.04` and
-  `ubuntu:26.04` containers with `--gpus all`, on the NVIDIA driver). Why: every tier past the clock
-  needs a Vulkan device, and these are the family's GPUs; a hosted runner has
-  only a software one. The core's
+  `ubuntu:26.04` containers with `--gpus all`, on the NVIDIA driver). Why:
+  every tier past the clock needs a Vulkan device, and these are the family's
+  GPUs; a hosted runner has only a software one. The core's
   [runner tooling](https://github.com/taojin-6/volumetric_kit_core/blob/main/tools/runners/README.md)
   registers the runners. A job on the Mac installs nothing and fails naming
   any formula missing.
