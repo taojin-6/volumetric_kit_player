@@ -2,13 +2,18 @@
 // Copyright (c) 2026 Tao Jin
 
 // PlayerView on a device, over gfx's headless surface and the tests' stream
-// (test_stream.hpp), with gfx's ImGuiTouch as the platform half: frames
-// present and shown() advances; 0 x 0 skips without blocking; a step moves one
-// frame; the worker's failure surfaces from frame(); ui_wants_pointer()
-// follows a finger on the panel; and teardown mid-playback is clean. The view
-// makes its own shared device, validated as the test policy asks, so the
-// layer's errors fail the test. The tests skip where the loader offers no
-// headless surface (NVIDIA's ICD); on Apple a skip fails (CMakeLists.txt).
+// (test_stream.hpp), with gfx's ImGuiTouch as the platform half: create
+// refuses what it cannot use; frames present and shown() advances; 0 x 0
+// skips without blocking; a step moves one frame; the worker's failure
+// surfaces from frame(); the panel draws at a phone's scale;
+// ui_wants_pointer() follows a finger on the panel; and teardown mid-playback
+// is clean. The view makes its own shared device, validated as the test
+// policy asks, so the layer's errors fail the test. The tests skip where the
+// loader offers no headless surface (NVIDIA's ICD). On Apple a skip fails
+// (CMakeLists.txt), and MoltenVK plans two queue families, so the mesh's
+// buffers are CONCURRENT and read across. One family, EXCLUSIVE and read in
+// place, is tested on the host only (mesh_wiring_test.cpp) until a leg runs
+// the view on one.
 
 #include "volumetric_kit/player/player_view.hpp"
 
@@ -29,6 +34,9 @@
 #include "imgui_internal.h"  // FindWindowByName, to find the panel
 #include "test_stream.hpp"
 #include "volumetric_kit/core/testing/vulkan_fixture.hpp"
+#include "volumetric_kit/core/vulkan/shared_device.hpp"
+#include "volumetric_kit/gfx/app/shared_device_config.hpp"
+#include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/player/controls.hpp"
@@ -84,6 +92,22 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
     VulkanDeviceTest::TearDown();
   }
 
+  // The view's config: at `ui_scale_`, validated as the test policy asks.
+  PlayerViewConfig config() const {
+    PlayerViewConfig config;
+    config.ui_scale = ui_scale_;
+    config.validation = active_validation() != core::test::Validation::Off;
+    return config;
+  }
+
+  // A player over the tests' stream, or null with a failure recorded.
+  std::unique_ptr<StreamPlayer> open() {
+    core::Result<std::unique_ptr<StreamPlayer>> opened =
+        StreamPlayer::open(path_);
+    EXPECT_TRUE(opened.ok()) << opened.status().message();
+    return opened.ok() ? std::move(opened).value() : nullptr;
+  }
+
   // The view over the stream at `path`, paused first unless `playing`, with
   // the touch half bound to its controls; false with a failure recorded.
   bool make_view(bool playing = true) { return make_view(path_, playing); }
@@ -97,10 +121,8 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
     if (!playing) {
       opened.value()->pause();
     }
-    PlayerViewConfig config;
-    config.validation = active_validation() != core::test::Validation::Off;
     core::Result<std::unique_ptr<PlayerView>> view = PlayerView::create(
-        surface_, kExtent, std::move(opened).value(), config);
+        surface_, kExtent, std::move(opened).value(), config());
     EXPECT_TRUE(view.ok()) << view.status().message();
     if (!view.ok()) {
       return false;
@@ -179,7 +201,43 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
   std::unique_ptr<PlayerView> view_;
   std::unique_ptr<gfx::ui::ImGuiTouch> touch_;  // destroyed before the view
   double seconds_ = 0.0;
+  float ui_scale_ = 1.0f;  // set before make_view
 };
+
+TEST_F(PlayerViewTest, CreateRefusesWhatItCannotUse) {
+  const core::Status no_player =
+      PlayerView::create(surface_, kExtent, nullptr, config()).status();
+  EXPECT_EQ(no_player.domain(), core::Status::Code::InvalidArgument);
+  EXPECT_NE(no_player.message().find("needs a player"), std::string::npos)
+      << no_player.message();
+
+  const core::Status no_pixels =
+      PlayerView::create(surface_, {kExtent.width, 0}, open(), config())
+          .status();
+  EXPECT_EQ(no_pixels.domain(), core::Status::Code::InvalidArgument);
+  EXPECT_NE(no_pixels.message().find("at least 1 x 1"), std::string::npos)
+      << no_pixels.message();
+
+  PlayerViewConfig unscaled = config();
+  unscaled.ui_scale = 0.0f;
+  const core::Status no_scale =
+      PlayerView::create(surface_, kExtent, open(), unscaled).status();
+  EXPECT_EQ(no_scale.domain(), core::Status::Code::InvalidArgument);
+  EXPECT_NE(no_scale.message().find("scale"), std::string::npos)
+      << no_scale.message();
+
+  // start refuses a stopped player, and the view goes with no worker.
+  std::unique_ptr<StreamPlayer> stopped = open();
+  ASSERT_NE(stopped, nullptr);
+  stopped->stop();
+  const core::Status not_started =
+      PlayerView::create(surface_, kExtent, std::move(stopped), config())
+          .status();
+  EXPECT_EQ(not_started.domain(), core::Status::Code::InvalidArgument);
+  EXPECT_NE(not_started.message().find("already started or stopped"),
+            std::string::npos)
+      << not_started.message();
+}
 
 TEST_F(PlayerViewTest, FramesPresentAndShownAdvances) {
   ASSERT_TRUE(make_view());
@@ -276,6 +334,14 @@ TEST_F(PlayerViewTest, UiWantsPointerFollowsAFingerOnThePanel) {
   touch_->touch_ended(2);
 }
 
+// Twice the scale takes gfx's larger font, which must hold the status line's
+// glyphs.
+TEST_F(PlayerViewTest, ThePanelDrawsAtAPhonesScale) {
+  ui_scale_ = 2.0f;
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  EXPECT_TRUE(present());
+}
+
 TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {
   ASSERT_TRUE(make_view());
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
@@ -291,5 +357,21 @@ TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {
         << warning;
   }
 }
+
+#ifdef __APPLE__
+// The device create() makes, on each of MoltenVK's family layouts
+// (CMakeLists.txt): two families, so the tests above cross them.
+TEST_F(PlayerViewTest, MoltenVkPlansTwoFamilies) {
+  gfx::app::WindowDeviceConfig device_config;
+  device_config.instance.enable_validation = config().validation;
+  device_config.graphics = gfx::app::WindowedAppConfig{}.device;
+  core::Result<std::unique_ptr<core::SharedDevice>> shared =
+      gfx::app::make_shared_device(surface_, recon::device_requirements(),
+                                   device_config);
+  ASSERT_TRUE(shared.ok()) << shared.status().message();
+  EXPECT_EQ(shared.value()->plan(), core::QueuePlan::TwoFamilies)
+      << core::to_string(shared.value()->plan());
+}
+#endif
 
 }  // namespace
