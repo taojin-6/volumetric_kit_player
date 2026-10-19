@@ -23,3 +23,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The desktop app, `volumetric_kit_player <stream.vrst>`: a GLFW window over
   `PlayerView`, with mouse orbit, pan and zoom and keys for the panel's
   controls. CI plays a stream in it under Xvfb on the Linux GPU legs.
+
+### Fixed
+
+- `PlayerView::shown()` and the status line move onto a frame that meshes
+  nothing, rather than staying on the frame before (recon #256).

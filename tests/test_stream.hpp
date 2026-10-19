@@ -6,9 +6,9 @@
 /// @file test_stream.hpp
 /// The tests' stream, written with recon's MeshIntegrator, Encoder and
 /// StreamWriter: kFrames frames of a sphere moving a block a frame, at 25 fps
-/// with a pause before the fourth, an I-frame every third. A stream that opens
-/// but never decodes. And a scratch directory of the test's own to write them
-/// into.
+/// with a pause before the fourth, an I-frame every third; or with one frame
+/// that meshes nothing. A stream that opens but never decodes. And a scratch
+/// directory of the test's own to write them into.
 
 #include <gtest/gtest.h>
 #include <unistd.h>
@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -112,10 +113,11 @@ inline HostMesh sphere(const recon::Vec3f& centre) {
 
 // The stream: kFrames frames of the sphere moving a block (8 voxels) a frame
 // along x, at pts_of, an I-frame every kIntraPeriod, each record a key
-// exactly when its frame is an I-frame.
-inline core::Status write_stream(core::Device& device,
-                                 core::Allocator& allocator,
-                                 const std::string& path) {
+// exactly when its frame is an I-frame. Frame `empty`, if given, holds no
+// block, so it meshes nothing: an I-frame of no blocks.
+inline core::Status write_stream(
+    core::Device& device, core::Allocator& allocator, const std::string& path,
+    std::optional<std::uint64_t> empty = std::nullopt) {
   namespace stream = recon::stream;
   namespace vol = recon::volume;
   constexpr std::int32_t kBuckets = 1024;
@@ -146,23 +148,26 @@ inline core::Status write_stream(core::Device& device,
   VKC_ASSIGN(std::unique_ptr<stream::StreamWriter> writer,
              stream::StreamWriter::create(path, session));
   for (std::uint64_t i = 0; i < kFrames; ++i) {
-    const HostMesh mesh =
-        sphere(recon::Vec3f(8.0f * kVoxel * static_cast<float>(i), 0, 0));
-    const auto vertex_count = static_cast<std::uint32_t>(mesh.vertices.size());
-    const auto triangle_count =
-        static_cast<std::uint32_t>(mesh.indices.size() / 3);
     VKC_TRY(grid.clear());
-    VKC_ASSIGN(const std::uint32_t failed,
-               grid.map().allocate_from_triangles(
-                   mesh.vertices.data(), vertex_count, mesh.indices.data(),
-                   triangle_count));
-    if (failed != 0) {
-      return core::Status::out_of_memory("the sphere outgrew the grid");
+    if (i != empty) {
+      const HostMesh mesh =
+          sphere(recon::Vec3f(8.0f * kVoxel * static_cast<float>(i), 0, 0));
+      const auto vertex_count =
+          static_cast<std::uint32_t>(mesh.vertices.size());
+      const auto triangle_count =
+          static_cast<std::uint32_t>(mesh.indices.size() / 3);
+      VKC_ASSIGN(const std::uint32_t failed,
+                 grid.map().allocate_from_triangles(
+                     mesh.vertices.data(), vertex_count, mesh.indices.data(),
+                     triangle_count));
+      if (failed != 0) {
+        return core::Status::out_of_memory("the sphere outgrew the grid");
+      }
+      VKC_TRY(integrator
+                  .integrate(grid, mesh.vertices.data(), vertex_count,
+                             mesh.indices.data(), triangle_count)
+                  .status());
     }
-    VKC_TRY(integrator
-                .integrate(grid, mesh.vertices.data(), vertex_count,
-                           mesh.indices.data(), triangle_count)
-                .status());
     VKC_ASSIGN(const std::vector<std::uint8_t> frame, encoder.encode(grid));
     VKC_ASSIGN(const recon::codec::FrameInfo info,
                recon::codec::read_frame_info(frame.data(), frame.size()));
