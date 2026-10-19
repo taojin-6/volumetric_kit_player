@@ -4,6 +4,29 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-19 — The desktop window, a GLFW shell over the view
+
+`apps/volumetric_kit_player/main.cpp`; README.md says how to run it.
+
+- **A thin shell.** It opens the stream first, so a stream it cannot play is
+  refused before `glfwInit`; then makes gfx's GLFW window and surface source,
+  the view, and gfx's `ImGuiGlfw` on the view's context. Each tick polls,
+  feeds the camera, and calls `frame`; a tick that draws nothing waits on
+  events for up to 50 ms rather than spinning. Only the app links gfx's GLFW
+  tier, and the configure fails if GLFW enters the library's link closure.
+  Why: iOS links no GLFW, and every shell makes the same calls.
+- **Keys are shortcuts for the panel:** Space, Right and L call the controls
+  its buttons call; Esc closes. Why: one set of controls, which the panel
+  shows on every platform.
+- **The wheel accumulator is a knowing copy** of calib's and gfx's examples'
+  (a TODO in `main.cpp`). Why: it shares the window's user pointer with the
+  keys, and a gfx home would take that pointer, which is the GLFW input glue
+  calib's TODO co-designs.
+- **`--frames N` counts presents of a stream frame,** then prints the frame
+  drawn, for CI's smoke run. Why: the worker builds its kernels first, so the
+  window presents before the first mesh arrives, and a count of every present
+  could end before one is drawn.
+
 ## 2026-10-19 — One view for every window system, drawn by gfx
 
 How `PlayerView` shows playback; its header says what each call does.
@@ -13,7 +36,7 @@ How `PlayerView` shows playback; its header says what each call does.
   one), hands it to `PlayerView::create`, binds gfx's ImGui platform half to
   `ui_context()`, and calls `frame(extent)` each tick. The view builds the
   device recon and gfx share, and gfx draws the mesh and the controls panel.
-  The library links no window system (gfx's GLFW tier stays off). Why: one
+  The library links no window system (gfx's GLFW tier is the app's). Why: one
   class under every shell, iOS links no GLFW, and the device test runs the
   real class with no window.
 - **FIFO present.** Why: the stream's pts paces playback, not the display,
@@ -85,8 +108,13 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   shared with gfx and recon; AddressSanitizer and UBSan; a dependency cache,
   which would save about 30 s a job on the Mac and could go stale after a
   brew upgrade; and the siblings' split into reusable workflows.
-- **The window is build-only in CI:** the Mac's runners are daemons with no
-  window server, and no test opens a window (AGENTS.md).
+- **The window runs in CI only on the Linux legs, under Xvfb, in a workflow
+  step:** the app plays the tests' stream for 60 presents under the
+  validation layer, and a `VUID-` or a missing "presented" line fails the
+  leg. Why: it is the only automated check of the real window, surface and
+  present path, and NVIDIA's ICD has no headless surface. A step, never a
+  ctest, so no agent opens a window (AGENTS.md); the Mac legs build the app
+  only, as their runners are daemons with no window server.
 
 ## 2026-10-18 — An application over pinned core, recon and gfx; the input is a path
 
@@ -95,5 +123,5 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   what the app runs.
 - It builds on core, recon and gfx, each fetched pinned by commit. The core
   is declared first, so all three share one copy (the core's DECISIONS.md).
-- Like a video player, it takes the path of the stream to play and nothing
-  else, so it reads no core config.
+- Like a video player, it takes the path of the stream to play, so it reads
+  no core config. Its one flag, `--frames N`, is CI's smoke run.
