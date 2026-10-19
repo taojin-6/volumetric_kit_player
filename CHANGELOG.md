@@ -15,3 +15,4 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   timestamps, with play, pause and step.
 - `player::StreamPlayer`: plays a `.vrst` stream's geometry on a worker
   thread, paced by its pts.
+- CI: a Mac leg that builds Debug under ThreadSanitizer and runs the tests.

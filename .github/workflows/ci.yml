@@ -17,7 +17,7 @@ concurrency:
 # guard (the core's DECISIONS.md, "Only the owner triggers CI").
 jobs:
   build:
-    name: ${{ matrix.os }} (${{ matrix.build_type }})
+    name: ${{ matrix.os }} (${{ matrix.build_type }}${{ matrix.tsan && ', TSan' || '' }})
     runs-on: [self-hosted, '${{ matrix.runner }}']
     # The Linux legs run in OS-matched containers with the GPU passed
     # through, as gfx's and recon's do: NVIDIA_DRIVER_CAPABILITIES=all makes
@@ -32,10 +32,6 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
-      # TODO: a ThreadSanitizer leg for StreamPlayer's worker (DECISIONS.md,
-      # CI): -fsanitize=thread in CMAKE_{C,CXX,OBJC,OBJCXX}_FLAGS and the
-      # linker flags, as the core's and recon's sanitizer options cover only
-      # their own targets.
       matrix:
         include:
           - os: macos-26
@@ -44,6 +40,11 @@ jobs:
           - os: macos-26
             runner: mac
             build_type: Release
+          # ThreadSanitizer, for StreamPlayer's worker (DECISIONS.md, CI).
+          - os: macos-26
+            runner: mac
+            build_type: Debug
+            tsan: true
           - os: ubuntu-24.04
             runner: vk-linux-gpu
             build_type: Release
@@ -109,12 +110,22 @@ jobs:
           }
 
       - name: Configure
-        # Retry to ride out transient FetchContent clone failures.
+        # Retry to ride out transient FetchContent clone failures. The TSan leg
+        # instruments every target, the siblings' and googletest's too
+        # (DECISIONS.md, CI).
         run: |
+          sanitize=""
+          if [ "${{ matrix.tsan }}" = true ]; then
+            for flags in C_FLAGS CXX_FLAGS OBJCXX_FLAGS \
+                EXE_LINKER_FLAGS SHARED_LINKER_FLAGS MODULE_LINKER_FLAGS; do
+              sanitize="${sanitize} -DCMAKE_${flags}=-fsanitize=thread"
+            done
+          fi
           ok=0
           for attempt in 1 2 3; do
+            # ${sanitize} is unquoted, to split into its -D arguments.
             if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-                -DVP_WARNINGS_AS_ERRORS=ON; then
+                -DVP_WARNINGS_AS_ERRORS=ON ${sanitize}; then
               ok=1
               break
             fi

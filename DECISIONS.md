@@ -28,8 +28,8 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   nothing to report, and a loop would reread the file in a busy loop.
 - **With loop off, the last frame holds and play restarts,** as in a video
   player.
-- **The sanitizer leg the CI entry defers is now due,** as this is the
-  worker it waits for: a ThreadSanitizer leg, a `TODO:` in ci.yml.
+- **CI runs its tests under ThreadSanitizer** (the CI entry), as the worker
+  shares the controls and the exchange with the drawing thread.
 
 ## 2026-10-18 — CI: build and test on the family's GPU runners, lint and the gate hosted
 
@@ -50,11 +50,16 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   for an offline runner still holds the gate pending until it is cancelled.
   Branch protection on `main` is set to require that one check (context
   `required`) once it has first reported.
+- **ThreadSanitizer on a third Mac leg, in Debug:** `-fsanitize=thread` in
+  `CMAKE_{C,CXX,OBJCXX}_FLAGS` and the linker flags, so googletest is
+  instrumented too, which the core's `VKC_SANITIZE` (carried to every target
+  that links the core) does not reach. A report fails its test. MoltenVK and
+  the validation layer are not instrumented; no report points into them, so
+  there is no suppressions file.
 - **Left out until a need shows:** Debug on Linux, as the GPU hosts are
-  shared with gfx and recon; sanitizers, the first to add,
-  for the decode worker's lifetimes; a dependency cache, which would save
-  about 30 s a job on the Mac and could go stale after a brew upgrade; and
-  the siblings' split into reusable workflows.
+  shared with gfx and recon; AddressSanitizer and UBSan; a dependency cache,
+  which would save about 30 s a job on the Mac and could go stale after a
+  brew upgrade; and the siblings' split into reusable workflows.
 - **The window is build-only in CI:** the Mac's runners are daemons with no
   window server, and no test opens a window (AGENTS.md).
 
