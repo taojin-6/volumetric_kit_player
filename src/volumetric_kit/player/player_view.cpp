@@ -89,6 +89,7 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   gfx::ui::ImGuiOverlayConfig overlay_config =
       gfx::ui::overlay_config(windowed.swapchain());
   overlay_config.scale = config.ui_scale;
+  overlay_config.min_frame_height = config.ui_min_frame_height;
   VKC_ASSIGN(
       gfx::ui::ImGuiOverlay overlay,
       gfx::ui::ImGuiOverlay::create(

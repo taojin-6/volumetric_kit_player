@@ -49,6 +49,15 @@ FetchContent_MakeAvailable(volumetric_kit_recon)
 # gfx's own core pin yields to the one above. The pin is gfx main at #146's
 # merge (77f421e): windowing::SurfaceSource and glfw::Library, beside #143's
 # orbit drag gestures, #144's sRGB ImGui fix and #145's ImGuiTouch.
+# TODO(G1): PlayerViewConfig::ui_min_frame_height sets gfx's
+# ImGuiOverlayConfig::min_frame_height (volumetric_kit_gfx
+# feat/ui-touch-panels), which this pin lacks, so until that PR merges this
+# branch builds only with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_GFX on its
+# checkout. Once it merges, and before this branch merges, pin its merge commit
+# here and wherever else the gfx pin is recorded (today nowhere else, no CI
+# cache key included), restate the pin paragraph above, and in the core's
+# paragraph drop gfx's core pin 1315d80, as gfx #147 pins the core at 7757c13
+# like the player; then remove this block.
 set(VG_WITH_GLFW ${VP_DESKTOP_APP})
 FetchContent_Declare(
   volumetric_kit_gfx

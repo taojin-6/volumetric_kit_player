@@ -30,6 +30,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `StreamPlayer::park` and `unpark`: hold the worker for a suspend, so it
   starts no GPU work until it resumes from the same frame.
 
+### Changed
+
+- The iOS app's controls fit a phone: 17-pt text (`ui_scale` 1.3) and every
+  control at least 44 pt tall (`PlayerViewConfig::ui_min_frame_height`, over
+  gfx's `min_frame_height`). Play/Pause and Step are `kButtonEms` (4.5) font
+  sizes wide, rather than three frame heights.
+
 ### Fixed
 
 - `PlayerView::shown()` and the status line move onto a frame that meshes

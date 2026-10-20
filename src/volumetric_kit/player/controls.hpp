@@ -17,9 +17,10 @@ namespace volumetric_kit::player {
 
 /// The controls' ImGui window.
 inline constexpr const char* kControlsWindow = "##player_controls";
-/// The width of the Play/Pause and Step buttons, in ImGui frame heights, so
-/// each is a stable target, fingertip-sized at a phone's UI scale.
-inline constexpr float kButtonFrames = 3.0f;
+/// The width of the Play/Pause and Step buttons, in font sizes, so each is a
+/// stable target: "Pause" fits at any scale, and a phone's row stays inside
+/// 375 pt.
+inline constexpr float kButtonEms = 4.5f;
 
 /// @brief Draw Play/Pause, Step and Loop in a row, the status line below, at
 ///        the bottom centre of the main viewport's work area, so they stay

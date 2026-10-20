@@ -6,10 +6,11 @@
 // refuses what it cannot use; frames present and shown() advances, onto a
 // frame that meshes nothing too, which still presents; 0 x 0
 // skips without blocking; a step moves one frame; the worker's failure
-// surfaces from frame(); the panel draws at a phone's scale;
-// ui_wants_pointer() follows a finger on the panel; and teardown mid-playback
-// is clean. The view makes its own shared device, validated as the test
-// policy asks, so the layer's errors fail the test. The tests skip where the
+// surfaces from frame(); the panel draws at a phone's scale, and its controls
+// fit a phone and a fingertip at the iOS shell's sizes; ui_wants_pointer()
+// follows a finger on the panel; and teardown mid-playback is clean. The view
+// makes its own shared device, validated as the test policy asks, so the
+// layer's errors fail the test. The tests skip where the
 // loader offers no headless surface (NVIDIA's ICD). On Apple a skip fails
 // (CMakeLists.txt), and MoltenVK plans two queue families, so the mesh's
 // buffers are CONCURRENT and read across. One family, EXCLUSIVE and read in
@@ -31,6 +32,7 @@
 
 #include <glm/vec2.hpp>
 
+#include "controls_layout.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"  // FindWindowByName, to find the panel
 #include "test_stream.hpp"
@@ -56,6 +58,13 @@ using volumetric_kit::player::StreamPlayer;
 using SteadyClock = std::chrono::steady_clock;
 
 constexpr VkExtent2D kExtent{320, 240};
+// The narrowest phone in portrait: 375 x 667 points, at 3 pixels a point.
+constexpr float kPhoneWidth = 375.0f;
+constexpr float kPhonePixelsPerPoint = 3.0f;
+constexpr VkExtent2D kPhone{1125, 2001};
+// The iOS shell's sizes (PlayerViewController.mm).
+constexpr float kPhoneScale = 1.3f;
+constexpr float kFingertip = 44.0f;
 // How long a frame the test let go may take to arrive (the worker builds its
 // kernels first); how long one it did not is waited for; and the longest a
 // call that must not block takes.
@@ -93,10 +102,12 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
     VulkanDeviceTest::TearDown();
   }
 
-  // The view's config: at `ui_scale_`, validated as the test policy asks.
+  // The view's config: at `ui_scale_` and `ui_min_frame_height_`, validated
+  // as the test policy asks.
   PlayerViewConfig config() const {
     PlayerViewConfig config;
     config.ui_scale = ui_scale_;
+    config.ui_min_frame_height = ui_min_frame_height_;
     config.validation = active_validation() != core::test::Validation::Off;
     return config;
   }
@@ -109,8 +120,9 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
     return opened.ok() ? std::move(opened).value() : nullptr;
   }
 
-  // The view over the stream at `path`, paused first unless `playing`, with
-  // the touch half bound to its controls; false with a failure recorded.
+  // The view over the stream at `path` on an `extent_` drawable, paused first
+  // unless `playing`, with the touch half bound to its controls; false with a
+  // failure recorded.
   bool make_view(bool playing = true) { return make_view(path_, playing); }
   bool make_view(const std::string& path, bool playing = true) {
     core::Result<std::unique_ptr<StreamPlayer>> opened =
@@ -123,7 +135,7 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
       opened.value()->pause();
     }
     core::Result<std::unique_ptr<PlayerView>> view = PlayerView::create(
-        surface_, kExtent, std::move(opened).value(), config());
+        surface_, extent_, std::move(opened).value(), config());
     EXPECT_TRUE(view.ok()) << view.status().message();
     if (!view.ok()) {
       return false;
@@ -140,10 +152,11 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
   core::Result<bool> tick() {
     seconds_ += 1.0 / 60.0;
     gfx::ui::DisplayFrame display;
-    display.pixels = kExtent;
+    display.pixels = extent_;
+    display.pixels_per_point = pixels_per_point_;
     display.seconds = seconds_;
     touch_->new_frame(display);
-    return view_->frame(kExtent);
+    return view_->frame(extent_);
   }
 
   // Ticks until `done` holds or `wait` passes, each tick OK; whether `done`
@@ -196,13 +209,33 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
             panel->Pos.y + 0.5f * panel->Size.y};
   }
 
+  // The ImGui item under a finger at `at`, in points, as the frame it lands in
+  // sees it; 0 for none. The finger then goes, pressing nothing.
+  ImGuiID item_under(glm::vec2 at) {
+    touch_->touch_began(1, at);
+    EXPECT_TRUE(present());
+    ImGui::SetCurrentContext(view_->ui_context());
+    const ImGuiID item = ImGui::GetCurrentContext()->HoveredId;
+    // ImGui takes the press a frame after the position, then the release with
+    // the position cleared, off every control.
+    touch_->touch_cancelled(1);
+    for (int i = 0; i < 2; ++i) {
+      EXPECT_TRUE(present());
+    }
+    return item;
+  }
+
   vp_test::Scratch scratch_;
   const std::string path_ = scratch_.file("sphere.vrst");
   gfx::windowing::SurfaceSource surface_;
   std::unique_ptr<PlayerView> view_;
   std::unique_ptr<gfx::ui::ImGuiTouch> touch_;  // destroyed before the view
   double seconds_ = 0.0;
-  float ui_scale_ = 1.0f;  // set before make_view
+  // Set before make_view.
+  VkExtent2D extent_ = kExtent;
+  float pixels_per_point_ = 1.0f;
+  float ui_scale_ = 1.0f;
+  float ui_min_frame_height_ = 0.0f;
 };
 
 TEST_F(PlayerViewTest, CreateRefusesWhatItCannotUse) {
@@ -226,6 +259,14 @@ TEST_F(PlayerViewTest, CreateRefusesWhatItCannotUse) {
   EXPECT_EQ(no_scale.domain(), core::Status::Code::InvalidArgument);
   EXPECT_NE(no_scale.message().find("scale"), std::string::npos)
       << no_scale.message();
+
+  PlayerViewConfig sunken = config();
+  sunken.ui_min_frame_height = -1.0f;
+  const core::Status no_height =
+      PlayerView::create(surface_, kExtent, open(), sunken).status();
+  EXPECT_EQ(no_height.domain(), core::Status::Code::InvalidArgument);
+  EXPECT_NE(no_height.message().find("min_frame_height"), std::string::npos)
+      << no_height.message();
 
   // start refuses a stopped player, and the view goes with no worker.
   std::unique_ptr<StreamPlayer> stopped = open();
@@ -359,16 +400,50 @@ TEST_F(PlayerViewTest, UiWantsPointerFollowsAFingerOnThePanel) {
   touch_->touch_ended(2);
 }
 
-// Twice the scale takes ImGui's vector font rather than its pixel one, which
+// A phone's scale takes ImGui's vector font rather than its pixel one, which
 // must also hold the status line's dot.
 TEST_F(PlayerViewTest, ThePanelDrawsAtAPhonesScale) {
-  ui_scale_ = 2.0f;
+  ui_scale_ = kPhoneScale;
   ASSERT_TRUE(make_view(/*playing=*/false));
   EXPECT_TRUE(present());
   ImGui::SetCurrentContext(view_->ui_context());
   const ImVector<ImFont*>& fonts = ImGui::GetIO().Fonts->Fonts;
   ASSERT_FALSE(fonts.empty()) << "the first frame adds the font";
+  EXPECT_STREQ(fonts[0]->GetDebugName(), "ProggyForever.ttf");
   EXPECT_TRUE(fonts[0]->IsGlyphInFont(0x00B7));
+}
+
+// On the narrowest phone, at the iOS shell's sizes: a finger anywhere in the
+// 44 points below the row's top lands on each control, and the row fits
+// across the display. Before the first frame the status line says "loading",
+// so the row is the panel's widest line.
+TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
+  extent_ = kPhone;
+  pixels_per_point_ = kPhonePixelsPerPoint;
+  ui_scale_ = kPhoneScale;
+  ui_min_frame_height_ = kFingertip;
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(present());
+  }
+  ImGui::SetCurrentContext(view_->ui_context());
+  ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
+  ASSERT_NE(panel, nullptr);
+  // The width ImGui fits the panel to, before it caps it at the display's.
+  EXPECT_LE(panel->ContentSize.x + 2.0f * panel->WindowPadding.x, kPhoneWidth);
+  const ImGuiID controls[] = {panel->GetID("###play"), panel->GetID("Step"),
+                              panel->GetID("Loop")};
+  const float top = panel->Pos.y + panel->WindowPadding.y;
+  for (int i = 0; i < 3; ++i) {
+    const float x = vp_test::control_middle(*panel, i).x;
+    EXPECT_EQ(item_under({x, top + 0.5f}), controls[i]) << "control " << i;
+    EXPECT_EQ(item_under({x, top + kFingertip - 0.5f}), controls[i])
+        << "control " << i;
+  }
+  // The fingers pressed nothing.
+  EXPECT_FALSE(view_->player().playing());
+  EXPECT_TRUE(view_->player().loop());
+  EXPECT_FALSE(view_->shown().has_value());
 }
 
 TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {

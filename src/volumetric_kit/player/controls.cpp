@@ -21,7 +21,7 @@ void draw_controls(StreamPlayer& player,
       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
       ImGuiWindowFlags_NoFocusOnAppearing;
   if (ImGui::Begin(kControlsWindow, nullptr, kFlags)) {
-    const ImVec2 button(kButtonFrames * ImGui::GetFrameHeight(), 0.0f);
+    const ImVec2 button(kButtonEms * ImGui::GetFontSize(), 0.0f);
     // One ID for both labels, so a press that flips the label completes.
     if (ImGui::Button(player.playing() ? "Pause###play" : "Play###play",
                       button)) {
