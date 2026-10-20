@@ -25,6 +25,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   controls. CI plays a stream in it under Xvfb on the Linux GPU legs.
 - An iOS build, `cmake --preset ios`: the library and a never-run app that
   links it, which CI builds unsigned on the Debug Mac leg.
+- `StreamPlayer::park` and `unpark`: hold the worker for a suspend, so it
+  starts no GPU work until it resumes from the same frame.
 
 ### Fixed
 

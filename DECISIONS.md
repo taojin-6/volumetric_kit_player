@@ -4,6 +4,21 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-20 — Park the worker for a suspend
+
+`StreamPlayer::park` and `unpark`; the header says what each call does.
+
+- **`park` holds the worker before each step** (its kernel build, a record's
+  read and decode, an extract) and waits for the one under way; while
+  parked no frame comes due, so a control applied meanwhile takes effect at
+  `unpark`, and the worker carries on from the same frame. Why: a GPU submit
+  from the background loses the device on iOS (MoltenVK marks it lost for
+  good) or ends the app, so a suspended app must start none. `pause` cannot
+  stand in, as the worker decodes a frame before it waits for its due time,
+  nor can `stop`, as `start` refuses after it.
+- **A park that times out keeps its hold,** so at most the one step under way
+  submits after it, and the caller learns that it may have.
+
 ## 2026-10-19 — An iOS build, on the core's MoltenVK set-up
 
 `CMakePresets.json`'s `ios` preset; README.md says how to build it.

@@ -48,6 +48,41 @@ core::Status nothing_shown(core::Status first_skip) {
 
 }  // namespace
 
+// Constructed at a step's start: waits while parked, then marks the worker
+// busy until end() or the destructor. False on quit.
+class StreamPlayer::Step {
+ public:
+  explicit Step(StreamPlayer& player) : player_(player) {
+    std::unique_lock<std::mutex> lock(player_.mutex_);
+    player_.changed_.wait(lock,
+                          [this] { return player_.quit_ || !player_.parked_; });
+    begun_ = !player_.quit_;
+    player_.busy_ = begun_;
+  }
+  ~Step() { end(); }
+  Step(const Step&) = delete;
+  Step& operator=(const Step&) = delete;
+
+  explicit operator bool() const { return begun_; }
+
+  // Idle again, before a wait that is no step; wakes a park.
+  void end() {
+    if (!begun_) {
+      return;
+    }
+    begun_ = false;
+    {
+      std::lock_guard<std::mutex> lock(player_.mutex_);
+      player_.busy_ = false;
+    }
+    player_.changed_.notify_all();
+  }
+
+ private:
+  StreamPlayer& player_;
+  bool begun_ = false;
+};
+
 core::Result<std::unique_ptr<StreamPlayer>> StreamPlayer::open(
     const std::string& path) {
   try {
@@ -139,6 +174,16 @@ bool StreamPlayer::loop() const {
   return loop_;
 }
 
+bool StreamPlayer::park(std::chrono::milliseconds timeout) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  parked_ = true;
+  return changed_.wait_for(lock, timeout, [this] { return !busy_; });
+}
+
+void StreamPlayer::unpark() {
+  control([this] { parked_ = false; });
+}
+
 void StreamPlayer::stop() {
   control([this] { quit_ = true; });
   if (worker_.joinable()) {
@@ -167,6 +212,10 @@ void StreamPlayer::run() {
 }
 
 core::Status StreamPlayer::build() {
+  const Step step(*this);
+  if (!step) {
+    return {};  // quit: play_track returns at its first step
+  }
   VKC_ASSIGN(codec::Decoder decoder,
              codec::Decoder::create(*device_, *allocator_));
   VKC_ASSIGN(
@@ -185,7 +234,8 @@ core::Status StreamPlayer::play_track() {
     bool shown = false;       // a frame was shown in this pass
     core::Status first_skip;  // the first record or frame it skipped
     for (;;) {
-      if (quit_) {
+      Step step(*this);  // the record's read and decode
+      if (!step) {
         return {};
       }
       stream::Record record;
@@ -221,6 +271,7 @@ core::Status StreamPlayer::play_track() {
         continue;
       }
       const double decode_ms = ms_since(start);
+      step.end();
       if (!wait_due(record.info.pts_ns)) {
         return {};
       }
@@ -255,7 +306,9 @@ bool StreamPlayer::wait_due(std::uint64_t pts_ns) {
       return false;
     }
     const Clock::time_point now = Clock::now();
-    const std::optional<Clock::time_point> due = clock_.due(pts_ns, now);
+    // Parked, nothing is due: a control takes effect at unpark.
+    const std::optional<Clock::time_point> due =
+        parked_ ? std::nullopt : clock_.due(pts_ns, now);
     if (due && *due <= now) {
       break;
     }
@@ -277,6 +330,10 @@ core::Result<bool> StreamPlayer::publish(const FrameStamp& stamp) {
     if (quit_) {
       return false;
     }
+  }
+  const Step step(*this);  // the extract
+  if (!step) {
+    return false;
   }
   const Clock::time_point start = Clock::now();
   VKC_ASSIGN(const recon::mesh::DeviceMesh mesh,
