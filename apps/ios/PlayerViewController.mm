@@ -35,19 +35,28 @@ namespace {
 // How long a resign-active waits for the worker's step under way.
 constexpr std::chrono::seconds kParkWait{1};
 
-// The first .vrst, by name, in Documents; nil when there is none.
+// The first .vrst, by name, in Documents; nil when there is none, and then
+// a note is left there, as the Files app may hide an empty app folder
+// (DECISIONS.md).
 NSString* FirstStream() {
+  NSFileManager* files = NSFileManager.defaultManager;
   NSString* documents = NSSearchPathForDirectoriesInDomains(
                             NSDocumentDirectory, NSUserDomainMask, YES)
                             .firstObject;
-  NSArray<NSString*>* names =
-      [[NSFileManager.defaultManager contentsOfDirectoryAtPath:documents
-                                                         error:nil]
-          sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
+  NSArray<NSString*>* names = [files contentsOfDirectoryAtPath:documents
+                                                         error:nil];
+  names = [names sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
   for (NSString* name in names) {
     if ([name.pathExtension caseInsensitiveCompare:@"vrst"] == NSOrderedSame) {
       return [documents stringByAppendingPathComponent:name];
     }
+  }
+  NSString* note =
+      [documents stringByAppendingPathComponent:@"Copy .vrst streams here.txt"];
+  NSData* text = [@"The player plays the first .vrst here, by name.\n"
+      dataUsingEncoding:NSUTF8StringEncoding];
+  if (![files fileExistsAtPath:note]) {
+    [files createFileAtPath:note contents:text attributes:nil];
   }
   return nil;
 }
@@ -196,8 +205,11 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   if (_view || _failed) {
     return;
   }
-  if (self.view.window.windowScene.activationState !=
-      UISceneActivationStateForegroundActive) {
+  // With no window, or a window with no scene, the state would read as
+  // ForegroundActive, which is 0.
+  UIWindowScene* scene = self.view.window.windowScene;
+  if (scene == nil ||
+      scene.activationState != UISceneActivationStateForegroundActive) {
     return;
   }
   const VkExtent2D pixels = _metal.pixels;
@@ -260,9 +272,10 @@ glm::vec2 At(UITouch* touch, UIView* view) {
 - (void)fail:(const vkc::Status&)status {
   [self dropView];
   _failed = YES;
-  _failure.text = @(status.message().c_str());
+  NSString* message = @(status.message().c_str());  // UTF-8, unlike %s
+  _failure.text = message;
   _failure.hidden = NO;
-  NSLog(@"volumetric_kit_player: %s", status.message().c_str());
+  NSLog(@"volumetric_kit_player: %@", message);
 }
 
 - (void)dropView {

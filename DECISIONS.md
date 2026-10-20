@@ -30,20 +30,22 @@ is implemented.
 - **The stream is the first `.vrst`, by name, in the app's Documents
   folder,** which `UIFileSharingEnabled` and
   `LSSupportsOpeningDocumentsInPlace` show in Finder and the Files app; each
-  activation looks again. Why: the smallest way onto a device with no
-  picker; a document picker and open-in wait for a need.
+  activation looks again, and with none it leaves a note file there, as the
+  Files app may hide an empty app folder. Why: the smallest way onto a
+  device with no picker; a document picker and open-in wait for a need.
 - **The `increased-memory-limit` entitlement:** past the jetsam limit iOS
   kills the app with no `Status`, while a stream too big for the device's
   Vulkan budget is refused with one. **The device family is a build
   setting,** `TARGETED_DEVICE_FAMILY` 1,2, as Xcode rewrites the plist's key,
-  and an iPad letterboxes an iPhone-only app's layer.
+  and an iPad letterboxes an iPhone-only app's layer; CI checks the bundle's
+  key.
 - **No validation on the device,** so the shell never sets
   `PlayerViewConfig::validation`: iOS has no loader, so no layer. The macOS
   legs stand in: they run every device test under validation on Homebrew's
   MoltenVK, kept at the iOS release's version.
-- **Signed only when given a team** (`VP_DEVELOPMENT_TEAM`); without one it
-  builds unsigned, as CI does. The owner runs it on a device by hand (H2), as
-  MoltenVK's iOS release has no simulator slice.
+- **Signed only when given a team** (`VP_DEVELOPMENT_TEAM`), and unsigned
+  without one. The owner runs it on a device by hand (H2), as MoltenVK's iOS
+  release has no simulator slice.
 
 ## 2026-10-20 — Park the worker for a suspend
 

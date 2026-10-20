@@ -163,7 +163,8 @@ jobs:
       # The iOS app (DECISIONS.md), built unsigned (no team) from the sources
       # the configure above fetched, on MoltenVK's iOS release, which the
       # runner's .env names. It must be an iOS binary that loads only the
-      # system's libraries: MoltenVK and the siblings link statically.
+      # system's libraries (MoltenVK and the siblings link statically), for
+      # iPhone and iPad.
       - name: iOS app build (macOS)
         if: runner.os == 'macOS' && matrix.build_type == 'Debug' && !matrix.tsan
         run: |
@@ -190,6 +191,12 @@ jobs:
             grep -vE '^(/System/Library/|/usr/lib/)' || true)
           if [ -n "$others" ]; then
             echo "::error::$app loads libraries the system does not have:" $others
+            exit 1
+          fi
+          family=$(plutil -extract UIDeviceFamily json -o - \
+            "$(dirname "$app")/Info.plist" 2>/dev/null || true)
+          if [ "$family" != '[1,2]' ]; then
+            echo "::error::$app's UIDeviceFamily is ${family:-missing}, not [1,2] (iPhone and iPad)"
             exit 1
           fi
 
