@@ -69,6 +69,18 @@ The keys are its shortcuts:
 `--frames N` exits after N presents of a stream frame and prints the frame
 drawn, for CI's smoke run (DECISIONS.md).
 
+## Build for iOS
+
+The library, and an app that links it but is never run, for iPhone and iPad
+(arm64), unsigned. It needs Xcode and MoltenVK's iOS release, named by
+`MoltenVK_ROOT` as the core's
+[README](https://github.com/taojin-6/volumetric_kit_core#prerequisites) says:
+
+```bash
+cmake -S "$root" --preset ios
+cmake --build "$root/build-ios" --config Debug --target vp_ios_link_check -- CODE_SIGNING_ALLOWED=NO
+```
+
 ## Development
 
 ```bash

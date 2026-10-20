@@ -23,6 +23,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The desktop app, `volumetric_kit_player <stream.vrst>`: a GLFW window over
   `PlayerView`, with mouse orbit, pan and zoom and keys for the panel's
   controls. CI plays a stream in it under Xvfb on the Linux GPU legs.
+- An iOS build, `cmake --preset ios`: the library and a never-run app that
+  links it, which CI builds unsigned on the Debug Mac leg.
 
 ### Fixed
 

@@ -4,6 +4,26 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-19 — An iOS build, on the core's MoltenVK set-up
+
+`CMakePresets.json`'s `ios` preset; README.md says how to build it.
+
+- **CMake's own iOS support, and nothing iOS-specific in the player** but
+  turning off the desktop app, gfx's GLFW tier and the tests. The core links
+  MoltenVK's iOS release statically and answers glm (the core's
+  DECISIONS.md). Why: what every iOS consumer needs has one home.
+- **A never-run app, `vp_ios_link_check`, links the library** until the iOS
+  app takes its place, without dead stripping, so every symbol that the
+  objects it loads use must resolve. CI builds it unsigned on the Debug Mac
+  leg and fails unless it is an iOS binary (`LC_BUILD_VERSION` platform 2).
+  Why: only an app's link shows what an iOS link misses, such as MoltenVK's
+  frameworks or a macOS glm; a library build does not. Xcode dead-strips by
+  default, and the linker ignores an unresolved symbol in code it strips, so
+  a gap in `PlayerView::frame` would link.
+- **No validation on the device:** iOS has no loader, so no layer. The macOS
+  legs stand in: they run every device test under validation on Homebrew's
+  MoltenVK, kept at the iOS release's version.
+
 ## 2026-10-19 — The desktop window, a GLFW shell over the view
 
 `apps/volumetric_kit_player/main.cpp`; README.md says how to run it.

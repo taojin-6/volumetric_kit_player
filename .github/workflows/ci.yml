@@ -160,6 +160,33 @@ jobs:
             ctest --test-dir build --output-on-failure \
               --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
+      # The iOS build (DECISIONS.md): the never-run app that links the
+      # library, built unsigned from the sources the configure above fetched,
+      # on MoltenVK's iOS release, which the runner's .env names.
+      - name: iOS link check (macOS)
+        if: runner.os == 'macOS' && matrix.build_type == 'Debug' && !matrix.tsan
+        run: |
+          [ -n "${MoltenVK_ROOT:-}" ] || {
+            echo "::error::MoltenVK_ROOT is not set: run the core's setup-runners.sh with it (its tools/runners/README.md)"
+            exit 1
+          }
+          flags=()
+          for src in build/_deps/*-src; do
+            dep=$(basename "$src" -src | tr '[:lower:]' '[:upper:]')
+            flags+=("-DFETCHCONTENT_SOURCE_DIR_${dep}=$PWD/$src")
+          done
+          rm -rf build-ios
+          cmake --preset ios "${flags[@]}"
+          cmake --build build-ios --config Debug --target vp_ios_link_check \
+            -- CODE_SIGNING_ALLOWED=NO
+          app=build-ios/tests/ios_link_check/Debug-iphoneos/vp_ios_link_check.app/vp_ios_link_check
+          platform=$(otool -l "$app" |
+            awk '/LC_BUILD_VERSION/{f=1} f&&$1=="platform"{print $2; f=0}')
+          if [ "$platform" != 2 ]; then
+            echo "::error::$app is not an iOS binary (LC_BUILD_VERSION platform ${platform:-none}, not 2)"
+            exit 1
+          fi
+
       # The window's smoke run (DECISIONS.md): the app plays the tests' stream
       # under Xvfb for 60 presents of a stream frame. The loader forces the
       # validation layer on, which a Release build does not ask for, and logs
