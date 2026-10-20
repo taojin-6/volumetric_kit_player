@@ -74,7 +74,7 @@ drawn, for CI's smoke run (DECISIONS.md).
 The library, and an app that links it but is never run, for iPhone and iPad
 (arm64), unsigned. It needs Xcode and MoltenVK's iOS release, named by
 `MoltenVK_ROOT` as the core's
-[README](https://github.com/taojin-6/volumetric_kit_core#platforms) says:
+[README](https://github.com/taojin-6/volumetric_kit_core#prerequisites) says:
 
 ```bash
 cmake -S "$root" --preset ios

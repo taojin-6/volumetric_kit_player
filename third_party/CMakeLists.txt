@@ -11,16 +11,12 @@ include(FetchContent)
 
 # --- volumetric_kit_core -----------------------------------------------------
 # The device, Status/Result and the GPU test fixtures, declared first
-# (DECISIONS.md). The pin is the core recon 8c8dec2 pins (7a1219e, 0.10.0, core
-# #36's merge), and the floor below is that version, so an older
-# FETCHCONTENT_SOURCE_DIR override is refused. The player installs nothing, so
-# the core's install rules are off too.
-#
-# TODO: pin core at C2's merge (0.12.0: vkc_ios, MoltenVK_ROOT), raise the floor
-# to 0.12.0, and say above that the pin is ahead of recon's and gfx's (theirs
-# yield to it); check README.md's link to the core's Platforms. Until then an
-# iOS build needs that core through
-# -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE.
+# (DECISIONS.md). The pin is core main at #42's merge (7757c13, 0.12.0): its iOS
+# module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT) and
+# answers glm. It is ahead of recon's and gfx's core pins (7a1219e, 1315d80),
+# which yield to it because the player declares the core first. The floor below
+# is that version, so an older FETCHCONTENT_SOURCE_DIR override is refused. The
+# player installs nothing, so the core's install rules are off too.
 set(VKC_WITH_VULKAN ON)
 set(VKC_INSTALL OFF)
 if(VP_BUILD_TESTS)
@@ -29,9 +25,9 @@ endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 7a1219e5ecaf385778acfc60f4c55eb70053cfb5)
+  GIT_TAG 7757c131d7283cacd1fb478c7b0118f7844954d6)
 FetchContent_MakeAvailable(volumetric_kit_core)
-vkc_require_core(0.10.0 VULKAN)
+vkc_require_core(0.12.0 VULKAN)
 
 # --- volumetric_kit_recon ----------------------------------------------------
 # The stream reader, the codec's decode grid, Marching Cubes and the mesh
