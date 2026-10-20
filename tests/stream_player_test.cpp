@@ -11,7 +11,14 @@
 // stops the worker with the reason; quit is prompt, playing, paused or
 // waiting for a consumer that takes nothing; a fatal error stops the worker,
 // a failed build on it included; start is refused once started or stopped.
-// Playing, no frame arrives before its pts says. On the host: open refuses
+// Playing, no frame arrives before its pts says. A park holds the worker:
+// nothing is published while parked, an extract waiting for the consumer
+// included; a control applied meanwhile (a step, a play and a pause) takes
+// effect at unpark; playing() does not change; unpark carries on from the
+// same frame; a park returns as soon as the step under way ends; one that
+// times out mid-decode still lets nothing start after it; one before start
+// holds the build; one before start or after stop returns at once; and a stop
+// while parked is prompt, at a step's start too. On the host: open refuses
 // what it cannot play. The device tests skip with no device. A stop that no
 // control can wake, such as one lost in the exchange's wait, fails only on
 // ctest's timeout.
@@ -27,6 +34,7 @@
 #include <future>
 #include <initializer_list>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -61,7 +69,7 @@ using SteadyClock = std::chrono::steady_clock;
 // The default exchange's.
 constexpr std::uint32_t kFramesInFlight = 2;
 // How long a frame the test let go may take to arrive; how long one it did
-// not is waited for; and the longest a prompt stop takes.
+// not is waited for; and the longest a prompt stop or park takes.
 constexpr auto kArrival = 10s;
 constexpr auto kQuiet = 300ms;
 constexpr auto kPrompt = 1s;
@@ -85,7 +93,8 @@ std::uint32_t crc32(const std::uint8_t* data, std::size_t size) {
 }
 
 // How long `player.stop()` takes. One that is not back within kPrompt fails
-// the test; a control then wakes the worker, so the test still ends.
+// the test; controls then wake the worker, parked or not, so the test still
+// ends.
 SteadyClock::duration stop_time(StreamPlayer& player) {
   const SteadyClock::time_point start = SteadyClock::now();
   std::promise<void> done;
@@ -96,10 +105,28 @@ SteadyClock::duration stop_time(StreamPlayer& player) {
   });
   if (stopped.wait_for(kPrompt) != std::future_status::ready) {
     ADD_FAILURE() << "stop did not return within " << kPrompt.count() << " s";
+    player.unpark();
     player.play();
   }
   stopper.join();
   return SteadyClock::now() - start;
+}
+
+// Parks once the worker is inside a step that cannot end: the caller holds
+// the device's submit mutex, and every step submits (the build, a decode, an
+// extract). A park that finds the worker between steps holds it there, so
+// this unparks and lets it go on until a park finds it busy. Whether one did
+// within kArrival; the hold then stays in force.
+bool park_mid_step(StreamPlayer& player) {
+  const SteadyClock::time_point deadline = SteadyClock::now() + kArrival;
+  while (player.park(0ms)) {
+    player.unpark();
+    if (SteadyClock::now() > deadline) {
+      return false;
+    }
+    std::this_thread::sleep_for(1ms);
+  }
+  return true;
 }
 
 class StreamPlayerTest : public core::test::VulkanDeviceTest {
@@ -637,6 +664,180 @@ TEST_F(StreamPlayerTest, StartIsRefusedOnceStartedOrStopped) {
   const core::Status after_stop =
       (*stopped)->start(device(), allocator(), extractor_config(), exchange_);
   EXPECT_EQ(after_stop.domain(), Code::InvalidArgument) << after_stop.message();
+}
+
+TEST_F(StreamPlayerTest, AStepDuringAParkGoesAtUnpark) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 1));
+  // Mid-playback: the worker decodes frame 2 once frame 1 goes.
+  EXPECT_TRUE(player->park(kArrival));
+  player->step();
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "published while parked";
+  EXPECT_FALSE(player->playing());
+  player->unpark();
+  const std::optional<FrameStamp> next = next_frame();
+  ASSERT_TRUE(next.has_value()) << "the step did not go at unpark";
+  EXPECT_EQ(next->index, 2u);
+  EXPECT_FALSE(player->playing());
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, APauseDuringAParkHoldsAfterUnpark) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  EXPECT_TRUE(player->park(kArrival));
+  // Played, then paused, while parked: frame 1 does not go.
+  player->play();
+  EXPECT_TRUE(player->playing());
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "published while parked";
+  player->pause();
+  player->unpark();
+  EXPECT_FALSE(player->playing());
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "the pause did not hold";
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 1));
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, PlayingDoesNotChangeAcrossAPark) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  const std::optional<FrameStamp> first = next_frame();
+  ASSERT_TRUE(first.has_value());
+  EXPECT_TRUE(player->park(kArrival));
+  EXPECT_TRUE(player->playing());
+  // A frame published before the park returned may wait to be taken; no
+  // other comes.
+  std::uint64_t last = first->index;
+  if (const std::optional<FrameStamp> pending = next_frame(kQuiet)) {
+    last = pending->index;
+  }
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "published while parked";
+  EXPECT_TRUE(player->playing());
+  player->unpark();
+  EXPECT_TRUE(player->playing());
+  for (std::uint64_t i = last + 1; i < last + 3; ++i) {
+    const std::optional<FrameStamp> frame = next_frame();
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_EQ(frame->index, i);
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, AParkHoldsAnExtractWaitingForTheConsumer) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  // Frame 1 goes and is left untaken, so frame 2, stepped too, waits for the
+  // consumer before its extract; the sleep only lets the worker get there.
+  player->step();
+  player->step();
+  std::this_thread::sleep_for(kQuiet);
+  EXPECT_TRUE(player->park(kArrival));
+  // Taking frame 1, published before the park, frees the worker's wait; it
+  // does not extract while parked.
+  std::uint64_t last = 0;
+  if (const std::optional<FrameStamp> pending = next_frame(kQuiet)) {
+    last = pending->index;
+  }
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "extracted while parked";
+  player->unpark();
+  const std::optional<FrameStamp> next = next_frame();
+  ASSERT_TRUE(next.has_value()) << "nothing after unpark";
+  EXPECT_EQ(next->index, last + 1);
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, AParkReturnsOnceTheStepUnderWayEnds) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  // Held here, the device's submit mutex keeps frame 1's step from ending.
+  std::unique_lock<std::mutex> queue(*device().submit_mutex());
+  player->step();
+  ASSERT_TRUE(park_mid_step(*player)) << "frame 1's step never began";
+  queue.unlock();
+  const SteadyClock::time_point parking = SteadyClock::now();
+  EXPECT_TRUE(player->park(kArrival));
+  EXPECT_LT(SteadyClock::now() - parking, kPrompt)
+      << "the step's end did not wake the park";
+  player->unpark();
+  const std::optional<FrameStamp> next = next_frame();
+  ASSERT_TRUE(next.has_value()) << "nothing after unpark";
+  EXPECT_EQ(next->index, 1u);
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, AParkThatTimesOutMidDecodeLetsNothingStartAfter) {
+  // Held here, the device's submit mutex keeps the worker in its step.
+  std::unique_lock<std::mutex> queue(*device().submit_mutex());
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  // The kernel build cannot end, so a park times out; once it ends, the hold
+  // keeps frame 0's read and decode from starting.
+  ASSERT_TRUE(park_mid_step(*player)) << "the build never began";
+  queue.unlock();
+  ASSERT_TRUE(player->park(kArrival));
+  // Frame 0's decode, let go under the held mutex, times a park out in turn.
+  queue.lock();
+  player->unpark();
+  ASSERT_TRUE(park_mid_step(*player)) << "the decode never began";
+  EXPECT_FALSE(player->park(kQuiet));
+  queue.unlock();
+  // Playing, frame 0 would go once decoded, but the hold stays.
+  EXPECT_FALSE(next_frame(kQuiet).has_value())
+      << "published after a timed-out park";
+  EXPECT_TRUE(player->park(kArrival));
+  EXPECT_TRUE(player->playing());
+  player->unpark();
+  const std::optional<FrameStamp> frame = next_frame();
+  ASSERT_TRUE(frame.has_value()) << "nothing after unpark";
+  EXPECT_EQ(frame->index, 0u);
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, AStopWhileParkedAtAStepsStartIsPrompt) {
+  // Held here, the device's submit mutex keeps the worker in its build.
+  std::unique_lock<std::mutex> queue(*device().submit_mutex());
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(park_mid_step(*player)) << "the build never began";
+  queue.unlock();
+  // Once the build ends, the hold keeps the worker at the start of frame 0's
+  // read, with no wait for a due time between.
+  ASSERT_TRUE(player->park(kArrival));
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, AParkBeforeStartOrAfterStopReturnsAtOnce) {
+  core::Result<std::unique_ptr<StreamPlayer>> opened =
+      StreamPlayer::open(path_);
+  ASSERT_TRUE(opened.ok()) << opened.status().message();
+  player_ = std::move(opened).value();
+  EXPECT_TRUE(player_->park(0ms)) << "before start";
+  // The hold holds from the build on: playing, nothing goes, and the worker
+  // is never busy.
+  const core::Status started =
+      player_->start(device(), allocator(), extractor_config(), exchange_);
+  ASSERT_TRUE(started.ok()) << started.message();
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "published while parked";
+  EXPECT_TRUE(player_->park(0ms)) << "the worker built while parked";
+  player_->unpark();
+  ASSERT_TRUE(next_frame().has_value()) << "nothing after unpark";
+  EXPECT_TRUE(player_->park(kArrival));
+  // A stop while parked is prompt too.
+  EXPECT_LT(stop_time(*player_), kPrompt);
+  EXPECT_TRUE(player_->park(0ms)) << "after stop";
+  EXPECT_TRUE(player_->status().ok()) << player_->status().message();
 }
 
 TEST(StreamPlayerOpen, RefusesWhatItCannotPlay) {

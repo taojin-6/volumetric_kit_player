@@ -34,8 +34,9 @@ struct PlayerViewConfig {
   /// about 2 on a phone.
   float ui_scale = 1.0f;
   /// The Khronos validation layer on the shared instance, where it loads (a
-  /// logged warning where it does not). Every shell sets it in Debug; the
-  /// tests take it from VKC_TEST_VALIDATION.
+  /// logged warning where it does not). The desktop shell sets it in Debug,
+  /// and iOS has no layer (DECISIONS.md); the tests take it from
+  /// VKC_TEST_VALIDATION.
   bool validation = false;
 };
 

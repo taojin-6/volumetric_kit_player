@@ -11,8 +11,9 @@ paced by the stream's timestamps.
 > stream player (`src/volumetric_kit/player/stream_player.hpp`), which decodes
 > and meshes each frame on the GPU on a worker thread; the view
 > (`src/volumetric_kit/player/player_view.hpp`), which draws each mesh under
-> an orbit camera and a controls panel on any window system; and the desktop
-> app (`apps/volumetric_kit_player/`), a GLFW window over the view.
+> an orbit camera and a controls panel on any window system; the desktop
+> app (`apps/volumetric_kit_player/`), a GLFW window over the view; and the
+> iOS app (`apps/ios/`), a UIKit shell over the view.
 
 [AGENTS.md](AGENTS.md) is the working guide for agents, and `CLAUDE.md`
 imports it. [DECISIONS.md](DECISIONS.md) records the choices made.
@@ -69,17 +70,46 @@ The keys are its shortcuts:
 `--frames N` exits after N presents of a stream frame and prints the frame
 drawn, for CI's smoke run (DECISIONS.md).
 
-## Build for iOS
+## iOS
 
-The library, and an app that links it but is never run, for iPhone and iPad
-(arm64), unsigned. It needs Xcode and MoltenVK's iOS release, named by
-`MoltenVK_ROOT` as the core's
-[README](https://github.com/taojin-6/volumetric_kit_core#prerequisites) says:
+The iOS app plays the first `.vrst`, by name, in its Documents folder, for
+iPhone and iPad (arm64, iOS 16 or newer). It needs Xcode and MoltenVK's iOS
+release, named by `MoltenVK_ROOT` as the core's
+[README](https://github.com/taojin-6/volumetric_kit_core#prerequisites) says.
+Unsigned, as CI builds it:
 
 ```bash
 cmake -S "$root" --preset ios
-cmake --build "$root/build-ios" --config Debug --target vp_ios_link_check -- CODE_SIGNING_ALLOWED=NO
+cmake --build "$root/build-ios" --config Debug --target volumetric_kit_player
 ```
+
+For a device, sign it with your Apple team's ID and a bundle ID of your own
+if the default, `io.taojin.volumetrickit.player`, is taken; then install it.
+The team ID is in Xcode › Settings › Accounts, and is the `OU` the first line
+prints; the code in parentheses in a certificate's name is not it.
+
+```bash
+security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
+cmake -S "$root" --preset ios -DVP_DEVELOPMENT_TEAM=<team id> [-DVP_BUNDLE_ID=<id>]
+cmake --build "$root/build-ios" --config Debug --target volumetric_kit_player -- -allowProvisioningUpdates
+xcrun devicectl device install app --device <device id> \
+  "$root/build-ios/apps/ios/Debug-iphoneos/volumetric_kit_player.app"
+```
+
+The app's entitlement `com.apple.developer.kernel.increased-memory-limit`
+needs that capability on its App ID; `codesign -d --entitlements - <app>`
+shows whether the signed app has it.
+
+To give it a stream, launch it once, then copy a `.vrst` into its folder: in
+the Files app under On My iPhone (or iPad) › Player, or in Finder under the
+device's Files tab. Each time the app comes back to the foreground it looks
+again, and until it finds one it says so. It plays with loop on. A tap works
+the panel, one finger orbits the camera, two pan it, and a pinch zooms.
+
+It logs the view's bring-up time, each park's wait and any failure, which
+Console.app shows. The owner checks the app on a device by hand
+(DECISIONS.md); nothing runs it in CI. Devices it has run on: none yet. Each
+one that check passes on is added here, and no others are claimed.
 
 ## Development
 

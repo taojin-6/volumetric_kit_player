@@ -29,10 +29,9 @@ drawing it in a window. [README.md](README.md) says what is implemented;
   library `volumetric_kit::player`. Headers sit beside their sources, as the
   app exports nothing.
 - `apps/volumetric_kit_player/`: the desktop app, the one target that links
-  GLFW.
+  GLFW; `apps/ios/`: the iOS app, in Objective-C++.
 - `tests/<name>_test.cpp`, each added with `vp_add_test` in
-  `tests/CMakeLists.txt`; `tests/ios_link_check/`, the iOS build's app,
-  linked and never run.
+  `tests/CMakeLists.txt`.
 - Namespace `volumetric_kit::player`; `VP_*` for the player's macros and
   CMake options. The siblings' names stay theirs.
 
@@ -55,7 +54,8 @@ drawing it in a window. [README.md](README.md) says what is implemented;
   `glfwInit`: a test may run the app only on input it refuses first, with
   `VP_NO_WINDOW` set, and agents skip gfx's `GlfwNativeWindowTest`. Only
   CI's Xvfb step on the Linux legs runs the window; the owner checks it by
-  hand.
+  hand. Agents and CI build the iOS app but never run it; the owner runs it
+  on a device.
 - Logic is tested headless: host-only where it can be, otherwise on a device
   through the core's fixtures, which skip without one locally and fail in CI.
 - Run GPU tests under the validation layer: `VKC_TEST_VALIDATION=1`, and on

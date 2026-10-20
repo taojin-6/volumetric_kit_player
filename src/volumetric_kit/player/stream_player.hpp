@@ -9,6 +9,7 @@
 ///        mesh to the thread that draws it.
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -66,11 +67,11 @@ using FrameExchange = recon::mesh::MeshExchange<FrameStamp>;
 /// @ref status reports it.
 ///
 /// **Threads.** The controls (@ref play, @ref pause, @ref step,
-/// @ref set_loop) and their reads lock the mutex the worker waits under, so
-/// they are safe from any thread and each change wakes the worker; @ref start,
-/// @ref stop and the destructor run on one thread at a time. Only the worker
-/// touches the decoder, the grid and the extractor; the caller touches only
-/// the consumer side of the exchange.
+/// @ref set_loop), their reads, @ref park and @ref unpark lock the mutex the
+/// worker waits under, so they are safe from any thread and each change wakes
+/// the worker; @ref start, @ref stop and the destructor run on one thread at a
+/// time. Only the worker touches the decoder, the grid and the extractor; the
+/// caller touches only the consumer side of the exchange.
 ///
 /// **Teardown**, on every path out, so nothing the GPU may still read is
 /// freed early: @ref stop, wait until the consumer's queue is idle, and
@@ -147,6 +148,21 @@ class StreamPlayer {
   /// @return Whether it loops.
   bool loop() const;
 
+  /// @brief Hold the worker for a suspend (iOS resign-active, Android
+  ///        onPause). From this call on, the worker starts no new step (its
+  ///        kernel build, a read, a decode or an extract), even after a
+  ///        timed-out return; the call waits for the step under way.
+  ///        @ref playing does not change; a control applied meanwhile takes
+  ///        effect at @ref unpark. Call it after the consumer stops drawing.
+  /// @param timeout  The longest wait for the step under way.
+  /// @return true once the worker is idle, or when stopped or never started;
+  ///         false if @p timeout passed first: the step under way may still
+  ///         submit, and the hold stays in force.
+  [[nodiscard]] bool park(std::chrono::milliseconds timeout);
+  /// @brief End a @ref park. The worker carries on from the same frame,
+  ///        playing or paused as before. A no-op when not parked.
+  void unpark();
+
   /// @brief Stop the worker, playing or paused, and join it. Idempotent.
   void stop();
   /// @return OK, or the fatal error that stopped the worker.
@@ -155,6 +171,10 @@ class StreamPlayer {
  private:
   StreamPlayer(std::unique_ptr<recon::stream::StreamReader> reader,
                std::uint16_t track);
+
+  // A step of the worker's, as park counts them: its kernel build, a record's
+  // read and decode, or an extract.
+  class Step;
 
   // The worker: builds, then plays the track until quit or a fatal error,
   // into status_.
@@ -190,13 +210,15 @@ class StreamPlayer {
   std::optional<recon::mesh::MarchingCubes> extractor_;
   std::thread worker_;
 
-  // The controls and the worker's outcome, under mutex_; changed_ wakes the
-  // worker on each change. quit_ is written under it too, and also read
-  // without it by the exchange's wait.
+  // The controls, the park and the worker's outcome, under mutex_; changed_
+  // wakes the worker on each change, and a park at each step's end. quit_ is
+  // written under it too, and also read without it by the exchange's wait.
   mutable std::mutex mutex_;
   std::condition_variable changed_;
   Playback clock_;
   bool loop_ = true;
+  bool parked_ = false;  // no step starts
+  bool busy_ = false;    // a step is under way
   std::atomic<bool> quit_{false};
   std::uint64_t last_pts_ns_ = 0;  // the last frame shown
   bool last_by_step_ = false;      // it went by a step
