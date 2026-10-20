@@ -6,3 +6,12 @@ ColumnLimit: 80
 IncludeBlocks: Preserve
 DerivePointerAlignment: false
 PointerAlignment: Left
+---
+# The same for Objective-C++ (apps/ios/), which clang-format refuses without a
+# section of its own, as gfx's does.
+Language: ObjC
+BasedOnStyle: Google
+ColumnLimit: 80
+IncludeBlocks: Preserve
+DerivePointerAlignment: false
+PointerAlignment: Left

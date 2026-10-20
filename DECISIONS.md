@@ -4,6 +4,47 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-20 — The iOS app, a UIKit shell over the view
+
+`apps/ios/`; README.md says how to build it and give it a stream.
+
+- **A thin Objective-C++ shell, all on main,** making the desktop shell's
+  calls: gfx's `metal_surface` over a `CAMetalLayer` view at the screen's
+  native scale, `PlayerView::create`, gfx's `ImGuiTouch` on its context, and
+  a display link that calls `frame` with the drawable in pixels. Every touch
+  phase reaches `ImGuiTouch`, a cancelled one as `touch_cancelled` so it
+  presses nothing. One-finger pan orbits, two-finger pan pans and pinch
+  zooms, over the view's height; the pan and the pinch compose, and none
+  begins before the view exists or while `ui_wants_pointer()`. The shell
+  never writes the layer's `drawableSize`, which MoltenVK owns (gfx's
+  `metal_surface`). Why: one view under every shell (below).
+- **The lifecycle:** the view is built only while the scene is in the
+  foreground and active, as bring-up submits GPU work. Resign-active stops
+  the display link, then parks the worker for up to a second; become-active
+  unparks it and restarts the link. A park that timed out, or a `frame()`
+  error, drops the view and builds a new one, from frame 0: the first at the
+  next activation, the second at once, once per activation; after that a
+  label says why until the next activation. Why: a park that timed out may
+  have let the step under way submit from the background (below), and a
+  rebuild is the only recovery from a lost device.
+- **The stream is the first `.vrst`, by name, in the app's Documents
+  folder,** which `UIFileSharingEnabled` and
+  `LSSupportsOpeningDocumentsInPlace` show in Finder and the Files app; each
+  activation looks again. Why: the smallest way onto a device with no
+  picker; a document picker and open-in wait for a need.
+- **The `increased-memory-limit` entitlement:** past the jetsam limit iOS
+  kills the app with no `Status`, while a stream too big for the device's
+  Vulkan budget is refused with one. **The device family is a build
+  setting,** `TARGETED_DEVICE_FAMILY` 1,2, as Xcode rewrites the plist's key,
+  and an iPad letterboxes an iPhone-only app's layer.
+- **No validation on the device,** so the shell never sets
+  `PlayerViewConfig::validation`: iOS has no loader, so no layer. The macOS
+  legs stand in: they run every device test under validation on Homebrew's
+  MoltenVK, kept at the iOS release's version.
+- **Signed only when given a team** (`VP_DEVELOPMENT_TEAM`); without one it
+  builds unsigned, as CI does. The owner runs it on a device by hand (H2), as
+  MoltenVK's iOS release has no simulator slice.
+
 ## 2026-10-20 — Park the worker for a suspend
 
 `StreamPlayer::park` and `unpark`; the header says what each call does.
@@ -27,17 +68,12 @@ is implemented.
   turning off the desktop app, gfx's GLFW tier and the tests. The core links
   MoltenVK's iOS release statically and answers glm (the core's
   DECISIONS.md). Why: what every iOS consumer needs has one home.
-- **A never-run app, `vp_ios_link_check`, links the library** until the iOS
-  app takes its place, without dead stripping, so every symbol that the
-  objects it loads use must resolve. CI builds it unsigned on the Debug Mac
-  leg and fails unless it is an iOS binary (`LC_BUILD_VERSION` platform 2).
-  Why: only an app's link shows what an iOS link misses, such as MoltenVK's
-  frameworks or a macOS glm; a library build does not. Xcode dead-strips by
-  default, and the linker ignores an unresolved symbol in code it strips, so
-  a gap in `PlayerView::frame` would link.
-- **No validation on the device:** iOS has no loader, so no layer. The macOS
-  legs stand in: they run every device test under validation on Homebrew's
-  MoltenVK, kept at the iOS release's version.
+- **CI builds the iOS app** unsigned on the Debug Mac leg, and fails unless
+  it is an iOS binary (`LC_BUILD_VERSION` platform 2) that loads only the
+  system's libraries. Why: only an app's link shows what an iOS link misses,
+  such as MoltenVK's frameworks or a macOS glm, and a library build does not;
+  a dylib outside the system would not be on the device. Xcode's default dead
+  stripping stays: the app's link resolves what the app can reach.
 
 ## 2026-10-19 — The desktop window, a GLFW shell over the view
 

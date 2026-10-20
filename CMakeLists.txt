@@ -16,9 +16,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# The desktop app, a GLFW window, everywhere but iOS, which builds a never-run
-# app that links the library instead (DECISIONS.md). gfx's GLFW tier is the
-# desktop app's alone (third_party/).
+# The desktop app, a GLFW window, everywhere but iOS, which builds the iOS app
+# instead (DECISIONS.md). gfx's GLFW tier is the desktop app's alone
+# (third_party/).
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   set(VP_DESKTOP_APP OFF)
 else()
@@ -38,7 +38,7 @@ add_subdirectory(src)
 if(VP_DESKTOP_APP)
   add_subdirectory(apps/volumetric_kit_player)
 else()
-  add_subdirectory(tests/ios_link_check)
+  add_subdirectory(apps/ios)
 endif()
 
 if(VP_BUILD_TESTS)
