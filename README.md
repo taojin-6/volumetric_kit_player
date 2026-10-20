@@ -83,12 +83,13 @@ cmake -S "$root" --preset ios
 cmake --build "$root/build-ios" --config Debug --target volumetric_kit_player
 ```
 
-For a device, sign it with your Apple team's ID, which
-`security find-identity -v -p codesigning` shows in parentheses, and a bundle
-ID of your own if the default, `io.taojin.volumetrickit.player`, is taken;
-then install it:
+For a device, sign it with your Apple team's ID and a bundle ID of your own
+if the default, `io.taojin.volumetrickit.player`, is taken; then install it.
+The team ID is in Xcode › Settings › Accounts, and is the `OU` the first line
+prints; the code in parentheses in a certificate's name is not it.
 
 ```bash
+security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
 cmake -S "$root" --preset ios -DVP_DEVELOPMENT_TEAM=<team id> [-DVP_BUNDLE_ID=<id>]
 cmake --build "$root/build-ios" --config Debug --target volumetric_kit_player -- -allowProvisioningUpdates
 xcrun devicectl device install app --device <device id> \
@@ -96,19 +97,19 @@ xcrun devicectl device install app --device <device id> \
 ```
 
 The app's entitlement `com.apple.developer.kernel.increased-memory-limit`
-needs that capability on its App ID, which automatic signing adds.
+needs that capability on its App ID; `codesign -d --entitlements - <app>`
+shows whether the signed app has it.
 
-To give it a stream, copy a `.vrst` into the app's folder: in the Files app
-under On My iPhone (or iPad) › Player, or in Finder under the device's Files
-tab. Each time the app comes back to the foreground it looks again, and
-until it finds one it says so. It plays with loop on; the panel at the
-bottom plays, pauses, steps and loops. One finger orbits the camera, two pan
-it, and a pinch zooms.
+To give it a stream, launch it once, then copy a `.vrst` into its folder: in
+the Files app under On My iPhone (or iPad) › Player, or in Finder under the
+device's Files tab. Each time the app comes back to the foreground it looks
+again, and until it finds one it says so. It plays with loop on. A tap works
+the panel, one finger orbits the camera, two pan it, and a pinch zooms.
 
 It logs the view's bring-up time, each park's wait and any failure, which
 Console.app shows. The owner checks the app on a device by hand
-(DECISIONS.md); nothing runs it in CI. The GPUs it is known to run on are those that check confirms, listed
-here once it has; no others are claimed.
+(DECISIONS.md); nothing runs it in CI. Devices it has run on: none yet. Each
+one that check passes on is added here, and no others are claimed.
 
 ## Development
 
