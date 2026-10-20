@@ -204,6 +204,7 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   if (pixels.width == 0 || pixels.height == 0) {
     return;
   }
+  const CFTimeInterval start = CACurrentMediaTime();
   vkc::Result<std::unique_ptr<vkp::PlayerView>> made =
       MakeView((CAMetalLayer*)_metal.layer, pixels);
   if (!made.ok()) {
@@ -219,6 +220,8 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   _view = std::move(made).value();
   _touch = std::move(touch).value();
   _failure.hidden = YES;
+  NSLog(@"volumetric_kit_player: view up in %.0f ms",
+        (CACurrentMediaTime() - start) * 1e3);
   [self startLink];
 }
 
@@ -259,6 +262,7 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   _failed = YES;
   _failure.text = @(status.message().c_str());
   _failure.hidden = NO;
+  NSLog(@"volumetric_kit_player: %s", status.message().c_str());
 }
 
 - (void)dropView {
@@ -362,9 +366,17 @@ glm::vec2 At(UITouch* touch, UIView* view) {
 
 - (void)sceneWillResignActive {
   [self stopLink];
+  if (!_view) {
+    return;
+  }
   // Waits on main for the step under way. On a timeout the hold stays, so
   // nothing new starts, and the next activation builds a new view.
-  if (_view && !_view->player().park(kParkWait)) {
+  const CFTimeInterval start = CACurrentMediaTime();
+  const bool idle = _view->player().park(kParkWait);
+  NSLog(@"volumetric_kit_player: parked %s in %.1f ms",
+        idle ? "idle" : "with a step under way",
+        (CACurrentMediaTime() - start) * 1e3);
+  if (!idle) {
     _rebuild = YES;
   }
 }

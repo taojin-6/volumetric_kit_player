@@ -105,8 +105,9 @@ until it finds one it says so. It plays with loop on; the panel at the
 bottom plays, pauses, steps and loops. One finger orbits the camera, two pan
 it, and a pinch zooms.
 
-The owner checks the app on a device by hand (DECISIONS.md); nothing runs it
-in CI. The GPUs it is known to run on are those that check confirms, listed
+It logs the view's bring-up time, each park's wait and any failure, which
+Console.app shows. The owner checks the app on a device by hand
+(DECISIONS.md); nothing runs it in CI. The GPUs it is known to run on are those that check confirms, listed
 here once it has; no others are claimed.
 
 ## Development
