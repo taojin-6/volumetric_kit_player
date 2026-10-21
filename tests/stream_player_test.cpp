@@ -35,12 +35,13 @@
 // again, and a park then leaves no reason; a park closes the connection
 // within kClosed, 50 times at seeded points as records flow, and once with
 // none coming; an unpark joins at the newest key; bytes that are no stream
-// and a name that does not resolve show why, with status() OK; and a stop is
-// prompt while a refused connect waits to retry, connected and idle, and
-// parked. On the host: open refuses what it cannot play, and connect an
-// empty host or port 0. The device tests skip with no device. A
-// stop that no control can wake, such as one lost in the exchange's wait,
-// fails only on ctest's timeout.
+// and a name that does not resolve show why, with status() OK; a park ends
+// the wait to retry, so the unpark connects at once; and a stop is prompt
+// while a refused connect waits to retry, connected and idle, and parked.
+// On the host: open refuses what it cannot play, and connect an empty host
+// or port 0. The device tests skip with no device. A stop that no control
+// can wake, such as one lost in the exchange's wait, fails only on ctest's
+// timeout.
 
 #include "volumetric_kit/player/stream_player.hpp"
 
@@ -1132,6 +1133,13 @@ class RawPeer {
   std::thread thread_;                           // last: it uses the above
 };
 
+// A RawPeer's feed of bytes that are no stream, an HTTP reply, so each
+// connection ends with a reason.
+Bytes no_stream(std::uint64_t piece) {
+  const std::string http = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+  return piece == 0 ? Bytes(http.begin(), http.end()) : Bytes();
+}
+
 // Publishes the tests' stream to a server on a thread of its own, looped and
 // restamped, one record each `period`, until destroyed.
 class Publisher {
@@ -1609,12 +1617,7 @@ TEST_F(LivePlayerTest, AnUnparkJoinsAtTheNewestKey) {
 }
 
 TEST_F(LivePlayerTest, APeerSendingNoStreamShowsWhyWhileStatusStaysOk) {
-  const RawPeer peer(
-      [](std::uint64_t piece) {
-        const std::string http = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
-        return piece == 0 ? Bytes(http.begin(), http.end()) : Bytes();
-      },
-      10ms);
+  const RawPeer peer(no_stream, 10ms);
   StreamPlayer* player = start_live(peer.port());
   ASSERT_NE(player, nullptr);
   ASSERT_TRUE(eventually([&] {
@@ -1626,6 +1629,27 @@ TEST_F(LivePlayerTest, APeerSendingNoStreamShowsWhyWhileStatusStaysOk) {
   EXPECT_FALSE(next_frame(kQuiet).has_value());
   // It connects again, about a second on.
   EXPECT_TRUE(eventually([&] { return peer.accepted() >= 2; }));
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A park while a failed connection waits to retry ends the wait: none is
+// made while parked, and the unpark connects again at once, not when the
+// second is up.
+TEST_F(LivePlayerTest, AParkEndsTheWaitToRetry) {
+  const RawPeer peer(no_stream, 10ms);
+  StreamPlayer* player = start_live(peer.port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(
+      eventually([&] { return !player->live_status().last_error.empty(); }));
+  ASSERT_TRUE(player->park(kArrival));
+  std::this_thread::sleep_for(kQuiet);  // the worker sees the park
+  EXPECT_EQ(peer.accepted(), 1u) << "connected while parked";
+  player->unpark();
+  const SteadyClock::time_point unparked = SteadyClock::now();
+  ASSERT_TRUE(eventually([&] { return peer.accepted() >= 2; }));
+  const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+      SteadyClock::now() - unparked);
+  EXPECT_LT(waited, kQuiet) << waited.count() << " ms";
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 

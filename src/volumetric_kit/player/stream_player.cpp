@@ -282,6 +282,7 @@ bool StreamPlayer::loop() const {
 bool StreamPlayer::park(std::chrono::milliseconds timeout) {
   std::unique_lock<std::mutex> lock(mutex_);
   parked_ = true;
+  changed_.notify_all();  // ends a wait to retry
   return changed_.wait_for(lock, timeout, [this] { return !busy_; });
 }
 
