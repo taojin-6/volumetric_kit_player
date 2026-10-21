@@ -7,8 +7,9 @@ This is the working guide for Codex, Claude Code and other agents.
 
 `volumetric_kit_player` is an application: it plays a recorded `.vrst`
 stream like a video player, or a sender's live stream over TCP, decoding and
-meshing each frame on the GPU and drawing it in a window. [README.md](README.md) says what is implemented;
-[DECISIONS.md](DECISIONS.md) records why.
+meshing each frame on the GPU and drawing it in a window.
+[README.md](README.md) says what is implemented; [DECISIONS.md](DECISIONS.md)
+records why.
 
 - It is assembled from its siblings, each fetched pinned by commit:
   [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core)

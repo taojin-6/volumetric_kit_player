@@ -9,7 +9,6 @@
 
 #include <GLFW/glfw3.h>
 
-#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -18,7 +17,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 
 #include <glm/vec2.hpp>
@@ -29,6 +27,7 @@
 #include "volumetric_kit/gfx/glfw/imgui_glfw.hpp"
 #include "volumetric_kit/gfx/glfw/window.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
+#include "volumetric_kit/player/command_line.hpp"
 #include "volumetric_kit/player/player_view.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
@@ -58,14 +57,10 @@ std::optional<Args> parse(int argc, char** argv) {
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg = argv[i];
     if (arg == "--frames" && i + 1 < argc && !args.frames) {
-      const std::string_view n = argv[++i];
-      std::uint64_t frames = 0;
-      const auto [end, error] =
-          std::from_chars(n.data(), n.data() + n.size(), frames);
-      if (error != std::errc() || end != n.data() + n.size() || frames == 0) {
+      args.frames = vkp::parse_count(argv[++i]);
+      if (!args.frames) {
         return std::nullopt;
       }
-      args.frames = frames;
     } else if (arg == "--connect" && i + 1 < argc && !args.live) {
       vkc::Result<vkp::LiveAddress> address =
           vkp::parse_live_address(argv[++i]);

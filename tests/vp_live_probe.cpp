@@ -6,10 +6,8 @@
 // and prints the status line, the stats lines and the stage table once a
 // second. It exits 0 once N stream frames are drawn (without --frames, it runs
 // until killed), 1 on a GPU failure, and never on a network error, which the
-// status line shows. For agents on a Mac: NVIDIA's ICD has no headless
-// surface (CMakeLists.txt). A tool, not a test.
+// status line shows. For agents on a Mac (DECISIONS.md). A tool, not a test.
 
-#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -17,7 +15,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -26,6 +23,7 @@
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
+#include "volumetric_kit/player/command_line.hpp"
 #include "volumetric_kit/player/controls.hpp"
 #include "volumetric_kit/player/player_view.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
@@ -56,14 +54,10 @@ std::optional<Args> parse(int argc, char** argv) {
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg = argv[i];
     if (arg == "--frames" && i + 1 < argc && !args.frames) {
-      const std::string_view n = argv[++i];
-      std::uint64_t frames = 0;
-      const auto [end, error] =
-          std::from_chars(n.data(), n.data() + n.size(), frames);
-      if (error != std::errc() || end != n.data() + n.size() || frames == 0) {
+      args.frames = vkp::parse_count(argv[++i]);
+      if (!args.frames) {
         return std::nullopt;
       }
-      args.frames = frames;
     } else if (!arg.empty() && arg[0] != '-' && !addressed) {
       core::Result<vkp::LiveAddress> address = vkp::parse_live_address(arg);
       if (!address.ok()) {

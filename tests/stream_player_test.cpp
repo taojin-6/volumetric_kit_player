@@ -26,15 +26,19 @@
 // and restamped for a steady flow), or a raw peer: frames arrive with their
 // seq as their index and decode and mesh rows alone; a join after a P-frame
 // shows that GOP from its key; every record published while a mesh waits for
-// the consumer is decoded, and the newest is shown with the records since; a
-// consumer that takes nothing for 1.5 s leaves status() OK, and its next take
-// is followed by the newest frame; a server that goes away is a retry with
-// its reason, and a new one on its port gives frames again; a park closes
-// the connection within kClosed, 50 times at seeded points; an unpark joins
-// at the newest key; bytes that are no stream show why, with status() OK;
-// and a stop is prompt while a refused connect waits to retry, connected and
-// idle, and parked. On the host: open refuses what it cannot play, and
-// connect an empty host or port 0. The device tests skip with no device. A
+// the consumer is decoded, and the newest is shown with the records since;
+// records slower than their decode are meshed once nothing newer has come,
+// and records faster still show a newer frame every 100 ms or so; a consumer
+// that takes nothing for 1.5 s leaves status() OK, and its next take is
+// followed by the newest frame; a server that goes away is a retry with its
+// bare reason, a new one on its port, at another voxel size, gives frames
+// again, and a park then leaves no reason; a park closes the connection
+// within kClosed, 50 times at seeded points as records flow, and once with
+// none coming; an unpark joins at the newest key; bytes that are no stream
+// and a name that does not resolve show why, with status() OK; and a stop is
+// prompt while a refused connect waits to retry, connected and idle, and
+// parked. On the host: open refuses what it cannot play, and connect an
+// empty host or port 0. The device tests skip with no device. A
 // stop that no control can wake, such as one lost in the exchange's wait,
 // fails only on ctest's timeout.
 
@@ -278,11 +282,13 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     return read.indexCount;
   }
 
-  // The stream's records, in file order.
-  std::vector<stream::Record> records() {
+  // The records of the stream at `path`, the test's by default, in file
+  // order.
+  std::vector<stream::Record> records() { return records(path_); }
+  static std::vector<stream::Record> records(const std::string& path) {
     std::vector<stream::Record> all;
     core::Result<std::unique_ptr<stream::StreamReader>> reader =
-        stream::StreamReader::open(path_);
+        stream::StreamReader::open(path);
     EXPECT_TRUE(reader.ok()) << reader.status().message();
     if (!reader.ok()) {
       return all;
@@ -1173,18 +1179,23 @@ class LivePlayerTest : public StreamPlayerTest {
     if (base_setup_incomplete() || HasFatalFailure()) {
       return;
     }
+    ASSERT_NO_FATAL_FAILURE(read_recording(path_, &recording_));
+  }
+
+  // The stream at `path`, read back into `*recording`.
+  static void read_recording(const std::string& path, Recording* recording) {
     core::Result<std::unique_ptr<stream::StreamReader>> reader =
-        stream::StreamReader::open(path_);
+        stream::StreamReader::open(path);
     ASSERT_TRUE(reader.ok()) << reader.status().message();
-    recording_.session = (*reader)->session();
-    for (const stream::Record& record : records()) {
+    *recording = {(*reader)->session(), {}, {}};
+    for (const stream::Record& record : records(path)) {
       Bytes payload;
       const core::Status read = (*reader)->read(record, &payload);
       ASSERT_TRUE(read.ok()) << read.message();
-      recording_.infos.push_back(record.info);
-      recording_.payloads.push_back(std::move(payload));
+      recording->infos.push_back(record.info);
+      recording->payloads.push_back(std::move(payload));
     }
-    ASSERT_EQ(recording_.infos.size(), kFrames);
+    ASSERT_EQ(recording->infos.size(), kFrames);
   }
 
   // A server of the stream's session on 127.0.0.1, at `port` or a free one;
@@ -1207,11 +1218,12 @@ class LivePlayerTest : public StreamPlayerTest {
     ASSERT_TRUE(published.ok()) << published.message();
   }
 
-  // A live player of 127.0.0.1:`port`, started on the test's device; the
+  // A live player of `host`:`port`, started on the test's device; the
   // fixture owns it.
-  StreamPlayer* start_live(std::uint16_t port) {
+  StreamPlayer* start_live(std::uint16_t port,
+                           const std::string& host = "127.0.0.1") {
     core::Result<std::unique_ptr<StreamPlayer>> connected =
-        StreamPlayer::connect({"127.0.0.1", port});
+        StreamPlayer::connect({host, port});
     EXPECT_TRUE(connected.ok()) << connected.status().message();
     if (!connected.ok()) {
       return nullptr;
@@ -1239,6 +1251,39 @@ class LivePlayerTest : public StreamPlayerTest {
   // Whether the player's connection reaches `state` within kArrival.
   bool reaches(LiveState state) {
     return eventually([&] { return player_->live_status().state == state; });
+  }
+
+  // Expects `status` to say why its connection ended, bare: without the
+  // "<Api>: " of recon's messages, or the address the status line names.
+  static void expect_bare(const LiveStatus& status) {
+    const std::string& why = status.last_error;
+    EXPECT_FALSE(why.empty());
+    for (const std::string& prefix :
+         {std::string("StreamClient"), std::string("ChunkParser"),
+          status.address}) {
+      EXPECT_NE(why.rfind(prefix, 0), 0u) << why;
+    }
+  }
+
+  // The next mesh published, taken as next_frame takes it but with no check
+  // on the device, so at once; its stamp, or empty when none comes within
+  // `wait`.
+  std::optional<FrameStamp> take(SteadyClock::duration wait) {
+    const SteadyClock::time_point deadline = SteadyClock::now() + wait;
+    while (SteadyClock::now() < deadline) {
+      std::optional<FrameStamp> taken;
+      const recon::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
+          slot_, [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+            taken = stamp;
+            return true;
+          });
+      slot_ = (slot_ + 1) % kFramesInFlight;
+      if (outcome == recon::mesh::ExchangeOutcome::kCommitted) {
+        return taken;
+      }
+      std::this_thread::sleep_for(1ms);
+    }
+    return std::nullopt;
   }
 
   // The frames taken until one with `index` comes, each within kArrival.
@@ -1373,6 +1418,62 @@ TEST_F(LivePlayerTest, AllPublishedWhileAMeshWaitsAreDecodedAndTheNewestShown) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
+// Records one at a time, each published once the frame before is taken: each
+// is meshed as soon as it is decoded, as nothing newer has come, rather than
+// held until 100 ms after the last mesh. A frame's wait is timed beyond its
+// own decode and mesh, which a loaded runner's GPU slows.
+TEST_F(LivePlayerTest, ARecordIsMeshedOnceNothingNewerHasCome) {
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  std::vector<double> waits;  // ms, from each record's publish to its frame
+  for (std::uint64_t n = 0; n < 4 * kFrames; ++n) {
+    const std::uint64_t i = n % kFrames;
+    const SteadyClock::time_point sent = SteadyClock::now();
+    const core::Status published = server->publish(
+        restamped(recording_.infos[i], n / kFrames),
+        recording_.payloads[i].data(), recording_.payloads[i].size());
+    ASSERT_TRUE(published.ok()) << published.message();
+    const std::optional<FrameStamp> frame = take(kArrival);
+    ASSERT_TRUE(frame.has_value()) << "no frame " << n;
+    double wait =
+        std::chrono::duration<double, std::milli>(SteadyClock::now() - sent)
+            .count();
+    for (const core::StageRow& row : frame->stages.rows()) {
+      wait -= row.cpu_ms;  // its decode and mesh
+    }
+    if (n > 0) {  // the first has no mesh before it to wait on
+      waits.push_back(wait);
+    }
+  }
+  std::nth_element(waits.begin(), waits.begin() + waits.size() / 2,
+                   waits.end());
+  EXPECT_LT(waits[waits.size() / 2], 50.0) << "ms, the median";
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Records faster than their decode, so one is always in hand: a newer frame
+// still comes every 100 ms or so, rather than once the backlog drains, which
+// here it never does.
+TEST_F(LivePlayerTest, RecordsFasterThanTheirDecodeStillShowNewerFrames) {
+  const RawPeer peer(stream_feed(), 0ms);
+  StreamPlayer* player = start_live(peer.port());
+  ASSERT_NE(player, nullptr);
+  std::optional<std::uint64_t> last;
+  for (int n = 0; n < 5; ++n) {
+    const std::optional<FrameStamp> frame = next_frame();
+    ASSERT_TRUE(frame.has_value()) << "frame " << n;
+    if (last) {
+      EXPECT_GT(frame->index, *last);
+    }
+    last = frame->index;
+  }
+  EXPECT_FALSE(peer.closed(1, 0s).has_value()) << "the peer stopped";
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
 TEST_F(LivePlayerTest, AConsumerTakingNothingLeavesStatusOkThenGetsTheNewest) {
   const std::unique_ptr<networking::StreamServer> server = serve();
   ASSERT_NE(server, nullptr);
@@ -1410,11 +1511,15 @@ TEST_F(LivePlayerTest, AServerGoneIsARetryAndANewOneOnItsPortGivesFrames) {
     const LiveStatus status = player->live_status();
     return status.state == LiveState::kConnecting && !status.last_error.empty();
   }));
-  const std::string why = player->live_status().last_error;
-  EXPECT_EQ(why.find("StreamClient: "), std::string::npos) << why;
+  expect_bare(player->live_status());
   EXPECT_TRUE(player->status().ok()) << player->status().message();
-  // A new server on the same port, with a new session: frames again, on a
-  // new grid.
+  // A new server on the same port, of the stream at twice the voxel size,
+  // which a grid of the last connection's would refuse: frames again.
+  const std::string coarse = scratch_.file("coarse.vrst");
+  const core::Status written = write_stream(device(), allocator(), coarse,
+                                            std::nullopt, 2 * vp_test::kVoxel);
+  ASSERT_TRUE(written.ok()) << written.message();
+  ASSERT_NO_FATAL_FAILURE(read_recording(coarse, &recording_));
   server = serve(port);
   ASSERT_NE(server, nullptr);
   ASSERT_TRUE(reaches(LiveState::kConnected));
@@ -1424,13 +1529,19 @@ TEST_F(LivePlayerTest, AServerGoneIsARetryAndANewOneOnItsPortGivesFrames) {
     ASSERT_TRUE(frame.has_value()) << "no frame " << i;
     EXPECT_EQ(frame->index, i);
   }
+  // A park ends the connection, and nothing failed: no reason is left.
+  ASSERT_TRUE(player->park(kArrival));
+  EXPECT_TRUE(eventually([&] {
+    const LiveStatus status = player->live_status();
+    return status.state == LiveState::kConnecting && status.last_error.empty();
+  })) << player->live_status().last_error;
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-// Parked at points spread by a seeded generator, as a record is in hand, a
-// decode or an extract under way or a receive waiting: each time the other
-// end sees the connection close within kClosed of the park's return, and the
-// unpark connects again.
+// Parked at points spread by a seeded generator while records arrive, as one
+// is in hand, a decode or an extract is under way or a receive waits for the
+// next: each time the other end sees the connection close within kClosed of
+// the park's return, and the unpark connects again.
 TEST_F(LivePlayerTest, AParkClosesTheConnectionWithinASlice) {
   const RawPeer peer(stream_feed(), 10ms);
   StreamPlayer* player = start_live(peer.port());
@@ -1455,6 +1566,25 @@ TEST_F(LivePlayerTest, AParkClosesTheConnectionWithinASlice) {
     EXPECT_LT(*closed - parked, kClosed);
     player->unpark();
   }
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Parked while no record comes, as from a sender with no key yet: no step
+// refuses one, and the connection still closes within kClosed.
+TEST_F(LivePlayerTest, AParkClosesAnIdleConnectionWithinASlice) {
+  const RawPeer peer(
+      [feed = stream_feed()](std::uint64_t piece) {
+        return piece == 0 ? feed(0) : Bytes();  // the session alone
+      },
+      10ms);
+  StreamPlayer* player = start_live(peer.port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  ASSERT_TRUE(player->park(kArrival));
+  const SteadyClock::time_point parked = SteadyClock::now();
+  const std::optional<SteadyClock::time_point> closed = peer.closed(1);
+  ASSERT_TRUE(closed.has_value()) << "the connection stayed open";
+  EXPECT_LT(*closed - parked, kClosed);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
@@ -1491,10 +1621,24 @@ TEST_F(LivePlayerTest, APeerSendingNoStreamShowsWhyWhileStatusStaysOk) {
     const LiveStatus status = player->live_status();
     return status.state == LiveState::kConnecting && !status.last_error.empty();
   }));
+  expect_bare(player->live_status());
   EXPECT_TRUE(player->status().ok()) << player->status().message();
   EXPECT_FALSE(next_frame(kQuiet).has_value());
   // It connects again, about a second on.
   EXPECT_TRUE(eventually([&] { return peer.accepted() >= 2; }));
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// .invalid never resolves (RFC 6761).
+TEST_F(LivePlayerTest, ANameThatDoesNotResolveShowsWhyWhileStatusStaysOk) {
+  StreamPlayer* player = start_live(47801, "lab.invalid");
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(
+      eventually([&] { return !player->live_status().last_error.empty(); }));
+  const LiveStatus status = player->live_status();
+  expect_bare(status);
+  EXPECT_NE(status.last_error.find("lab.invalid"), std::string::npos)
+      << status.last_error;
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
@@ -1503,6 +1647,7 @@ TEST_F(LivePlayerTest, AStopIsPromptWhileARefusedConnectWaitsToRetry) {
   ASSERT_NE(player, nullptr);
   ASSERT_TRUE(
       eventually([&] { return !player->live_status().last_error.empty(); }));
+  expect_bare(player->live_status());
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }

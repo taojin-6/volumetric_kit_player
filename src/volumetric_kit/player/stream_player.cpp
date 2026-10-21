@@ -3,12 +3,13 @@
 
 #include "volumetric_kit/player/stream_player.hpp"
 
-#include <charconv>
+#include <algorithm>
+#include <cctype>
 #include <chrono>
-#include <system_error>
 #include <utility>
 
 #include "volumetric_kit/core/base/exception_status.hpp"
+#include "volumetric_kit/player/command_line.hpp"
 #include "volumetric_kit/recon/codec/decode_grid.hpp"
 #include "volumetric_kit/recon/stream/session.hpp"
 
@@ -50,13 +51,35 @@ core::Status nothing_shown(core::Status first_skip) {
   return std::move(first_skip).with_context(kWhat);
 }
 
-// Why a live connection ended, less the prefix the client puts on its own
-// messages, "StreamClient: <address>: ", as the status line names the address.
+// The index of `session`'s first geometry track; none without one.
+std::optional<std::uint16_t> first_geometry_track(
+    const stream::Session& session) {
+  for (std::size_t i = 0; i < session.tracks.size(); ++i) {
+    if (session.tracks[i].kind == stream::TrackKind::Geometry) {
+      return static_cast<std::uint16_t>(i);
+    }
+  }
+  return std::nullopt;
+}
+
+// Why a live connection ended, for the status line, which names the address
+// already: the message less its leading "<Api>: " (StreamClient's,
+// ChunkParser's), then less the address.
 std::string reason(const core::Status& ended, const std::string& address) {
-  const std::string own = "StreamClient: " + address + ": ";
-  const std::string& message = ended.message();
-  return message.compare(0, own.size(), own) == 0 ? message.substr(own.size())
-                                                  : message;
+  std::string_view why = ended.message();
+  const std::string_view api = why.substr(0, why.find(": "));
+  if (!api.empty() && api.size() < why.size() &&
+      std::all_of(api.begin(), api.end(), [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_' ||
+               c == ':';
+      })) {
+    why.remove_prefix(api.size() + 2);
+  }
+  const std::string own = address + ": ";
+  if (why.substr(0, own.size()) == own) {
+    why.remove_prefix(own.size());
+  }
+  return std::string(why);
 }
 
 }  // namespace
@@ -72,16 +95,12 @@ core::Result<LiveAddress> parse_live_address(std::string_view text) {
   if (colon == std::string_view::npos) {
     return address;
   }
-  const std::string_view port = text.substr(colon + 1);
-  std::uint32_t number = 0;
-  const auto [end, error] =
-      std::from_chars(port.data(), port.data() + port.size(), number);
-  if (error != std::errc() || end != port.data() + port.size() || number == 0 ||
-      number > 65535) {
+  const std::optional<std::uint64_t> port = parse_count(text.substr(colon + 1));
+  if (!port || *port > 65535) {
     return core::Status::invalid_argument(
         "'" + std::string(text) + "': the port is a number from 1 to 65535");
   }
-  address.port = static_cast<std::uint16_t>(number);
+  address.port = static_cast<std::uint16_t>(*port);
   return address;
 }
 
@@ -135,17 +154,13 @@ core::Result<std::unique_ptr<StreamPlayer>> StreamPlayer::open(
   try {
     VKC_ASSIGN(std::unique_ptr<stream::StreamReader> reader,
                stream::StreamReader::open(path));
-    const std::vector<stream::Track>& tracks = reader->session().tracks;
-    std::size_t track = 0;
-    while (track < tracks.size() &&
-           tracks[track].kind != stream::TrackKind::Geometry) {
-      ++track;
-    }
-    if (track == tracks.size() || reader->stats()[track].records == 0) {
+    const std::optional<std::uint16_t> track =
+        first_geometry_track(reader->session());
+    if (!track || reader->stats()[*track].records == 0) {
       return core::Status::not_found(path + ": no geometry to play");
     }
     return std::unique_ptr<StreamPlayer>(
-        new StreamPlayer(std::move(reader), static_cast<std::uint16_t>(track)));
+        new StreamPlayer(std::move(reader), *track));
   } catch (...) {
     return core::exception_status("StreamPlayer::open",
                                   core::Status::Code::IoError);
@@ -387,9 +402,7 @@ core::Status StreamPlayer::play_track() {
 core::Status StreamPlayer::play_live() {
   std::vector<std::uint8_t> payload;
   while (wait_unparked()) {
-    // A new grid each connection: a sender's frames may have another voxel
-    // size, which a grid of the last one's would refuse. The decoder is kept:
-    // the first key resyncs it.
+    // A new grid each connection, the decoder kept (DECISIONS.md).
     grid_.reset();
     core::Status ended;
     {
@@ -436,18 +449,12 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
       return {};
     }
     if (!track && client.session() != nullptr) {
-      const std::vector<stream::Track>& tracks = client.session()->tracks;
-      std::size_t first = 0;
-      while (first < tracks.size() &&
-             tracks[first].kind != stream::TrackKind::Geometry) {
-        ++first;
-      }
-      if (first == tracks.size()) {
+      track = first_geometry_track(*client.session());
+      if (!track) {
         *ended = core::Status::not_found(
             "the sender's session has no geometry track");
         return {};
       }
-      track = static_cast<std::uint16_t>(first);
       std::lock_guard<std::mutex> lock(mutex_);
       live_status_.state = LiveState::kConnected;
     }
@@ -473,6 +480,9 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
       } else if (!skippable(decoded)) {
         return decoded;
       }
+      // TODO: show why records are skipped while none of this connection's
+      // has decoded: a sender this version cannot decode shows as live, with
+      // no picture.
     }
     // The newest, once nothing more has come, or every kMeshEvery while
     // records keep coming, so a burst (a join's GOP) shows as it drains.
@@ -601,8 +611,9 @@ bool StreamPlayer::wait_unparked() {
 bool StreamPlayer::wait_to_retry(const core::Status& ended) {
   std::unique_lock<std::mutex> lock(mutex_);
   live_status_.state = LiveState::kConnecting;
+  live_status_.last_error =
+      ended.ok() ? std::string() : reason(ended, live_status_.address);
   if (!ended.ok()) {
-    live_status_.last_error = reason(ended, live_status_.address);
     changed_.wait_for(lock, kRetry, [this] { return quit_ || parked_; });
   }
   return !quit_;

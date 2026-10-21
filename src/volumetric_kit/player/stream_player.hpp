@@ -68,8 +68,9 @@ enum class LiveState {
 struct LiveStatus {
   LiveState state = LiveState::kConnecting;
   std::string address;  ///< to_string() of the player's address.
-  /// Why the last connection ended, or an attempt failed, the client's own
-  /// "StreamClient: host:port: " left off; empty until one has.
+  /// Why the last connection ended, or the last attempt failed: recon's
+  /// message less its leading "<Api>: " and the address. Empty until one
+  /// has, and once a park has ended one.
   std::string last_error;
   std::uint64_t seq = 0;                      ///< The newest record received.
   Playback::Clock::time_point last_record{};  ///< When it arrived.
@@ -302,8 +303,8 @@ class StreamPlayer {
   // Live, outside any step: wait while parked; false on quit.
   bool wait_unparked();
   // Live, as a connection ends (`ended` OK when quit or a park ended it):
-  // show why, and wait about a second for the retry, or until quit or a park;
-  // false on quit.
+  // show why, or nothing for OK, and after a failure wait about a second for
+  // the retry, or until quit or a park; false on quit.
   bool wait_to_retry(const core::Status& ended);
   // Apply a change to the controls under the lock, then wake the worker.
   template <typename Change>

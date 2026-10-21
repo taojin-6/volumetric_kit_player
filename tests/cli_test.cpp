@@ -10,7 +10,8 @@
 // just before glfwInit with a reason of its own: a refusal that moved past
 // that point fails here, on every OS, rather than open a window (AGENTS.md).
 // A run not back within kPrompt, as a window's loop would not be, is killed
-// and fails the test.
+// and fails the test. On the host: parse_count, which --frames and a port
+// take.
 
 #include <gtest/gtest.h>
 #include <poll.h>
@@ -23,18 +24,21 @@
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <string>
 #include <vector>
 
 #include "test_stream.hpp"
+#include "volumetric_kit/player/command_line.hpp"
 
 extern char** environ;
 
 namespace {
 
 using namespace std::chrono_literals;
+using volumetric_kit::player::parse_count;
 using vp_test::Scratch;
 using SteadyClock = std::chrono::steady_clock;
 
@@ -210,6 +214,16 @@ TEST(CliTest, RefusesAFileThatIsNotAStreamBeforeGlfw) {
   std::ofstream(path) << "not a stream, but long enough to have been one if "
                          "it began with the magic\n";
   expect_refused(run_app({path}), "InvalidArgument", path);
+}
+
+TEST(ParseCount, TakesDecimalDigitsAloneFromOne) {
+  EXPECT_EQ(parse_count("1"), 1u);
+  EXPECT_EQ(parse_count("60"), 60u);
+  EXPECT_EQ(parse_count("18446744073709551615"), UINT64_MAX);
+  for (const char* text : {"", "0", "-1", "+5", "five", "5x", " 5", "5 ",
+                           "18446744073709551616"}) {
+    EXPECT_FALSE(parse_count(text).has_value()) << "'" << text << "'";
+  }
 }
 
 }  // namespace

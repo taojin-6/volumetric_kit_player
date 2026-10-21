@@ -6,9 +6,10 @@
 /// @file test_stream.hpp
 /// The tests' stream, written with recon's MeshIntegrator, Encoder and
 /// StreamWriter: kFrames frames of a sphere moving a block a frame, at 25 fps
-/// with a pause before the fourth, an I-frame every third; or with one frame
-/// that meshes nothing. A stream that opens but never decodes. And a scratch
-/// directory of the test's own to write them into.
+/// with a pause before the fourth, an I-frame every third; with one frame
+/// that meshes nothing, or at another voxel size. A stream that opens but
+/// never decodes. And a scratch directory of the test's own to write them
+/// into.
 
 #include <gtest/gtest.h>
 #include <unistd.h>
@@ -113,15 +114,16 @@ inline HostMesh sphere(const recon::Vec3f& centre) {
 
 // The stream: kFrames frames of the sphere moving a block (8 voxels) a frame
 // along x, at pts_of, an I-frame every kIntraPeriod, each record a key
-// exactly when its frame is an I-frame. Frame `empty`, if given, holds no
-// block, so it meshes nothing: an I-frame of no blocks.
+// exactly when its frame is an I-frame, at `voxel` metres a voxel. Frame
+// `empty`, if given, holds no block, so it meshes nothing: an I-frame of no
+// blocks.
 inline core::Status write_stream(
     core::Device& device, core::Allocator& allocator, const std::string& path,
-    std::optional<std::uint64_t> empty = std::nullopt) {
+    std::optional<std::uint64_t> empty = std::nullopt, float voxel = kVoxel) {
   namespace stream = recon::stream;
   namespace vol = recon::volume;
   constexpr std::int32_t kBuckets = 1024;
-  const vol::VoxelGridParams params{kVoxel,
+  const vol::VoxelGridParams params{voxel,
                                     8,
                                     512,
                                     kTrunc,
@@ -151,7 +153,7 @@ inline core::Status write_stream(
     VKC_TRY(grid.clear());
     if (i != empty) {
       const HostMesh mesh =
-          sphere(recon::Vec3f(8.0f * kVoxel * static_cast<float>(i), 0, 0));
+          sphere(recon::Vec3f(8.0f * voxel * static_cast<float>(i), 0, 0));
       const auto vertex_count =
           static_cast<std::uint32_t>(mesh.vertices.size());
       const auto triangle_count =

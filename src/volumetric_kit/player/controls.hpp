@@ -55,8 +55,8 @@ void draw_controls(StreamPlayer& player,
 /// @endcode
 /// @param status  Its connection (StreamPlayer::live_status).
 /// @param now     The time, for how long no record has come.
-/// @return "connecting to <address>", or "reconnecting to <address>: <why>"
-///         once a connection has ended or failed;
+/// @return "connecting to <address>", or with a `last_error`
+///         "reconnecting to <address>: <last_error>";
 ///         "connected · the sender has no I-frame yet"; "live · seq <seq>",
 ///         with " · nothing for <n> s" once no record has come for over a
 ///         second, n in whole seconds.
