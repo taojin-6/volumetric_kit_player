@@ -29,8 +29,8 @@ vp_add_test(controls volumetric_kit::player volumetric_kit::recon_tsdf)
 # loader has none (NVIDIA's ICD).
 vp_add_test(player_view volumetric_kit::player
             volumetric_kit::core_test_support volumetric_kit::recon_tsdf)
-# The desktop app's command line, the app run on input it refuses before GLFW
-# (AGENTS.md); host only.
+# The desktop app's command line, the app run with VP_NO_WINDOW set (AGENTS.md);
+# host only.
 vp_add_test(cli volumetric_kit::player volumetric_kit::recon_tsdf)
 target_compile_definitions(
   vp_cli_test PRIVATE VP_PLAYER_APP="$<TARGET_FILE:volumetric_kit_player>")

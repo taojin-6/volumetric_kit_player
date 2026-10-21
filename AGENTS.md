@@ -53,8 +53,9 @@ records why.
 
 - Every change carries unit tests for what it changes.
 - **Tests and agents never open a window.** Nothing they run may reach
-  `glfwInit`: a test may run the app only on input it refuses first, with
-  `VP_NO_WINDOW` set, and agents skip gfx's `GlfwNativeWindowTest`. Only
+  `glfwInit`: a test runs the app only with `VP_NO_WINDOW` set, so it stops
+  on input it refuses or, as for a valid `--connect`, at that check just
+  before `glfwInit`; and agents skip gfx's `GlfwNativeWindowTest`. Only
   CI's Xvfb step on the Linux legs runs the window; the owner checks it by
   hand. Agents and CI build the iOS app but never run it; the owner runs it
   on a device.
