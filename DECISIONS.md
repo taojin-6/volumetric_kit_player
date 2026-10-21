@@ -36,12 +36,14 @@ chunks, joined at the newest key.
 - **No jitter buffer in v1.** Network jitter shows as judder. Add a bounded
   delay only if the owner sees judder.
 - **The panels live:** the controls are the status line alone, and the keys
-  do nothing; the bitrate and records a second are over the last second, as a
-  live stream has no track mean: the records each frame stands for
+  do nothing. The bitrate and records a second are over the last second, as
+  a live stream has no track mean: the records each frame stands for
   (`FrameStamp::records`), by when the worker published it rather than when
   it was taken, as the frame taken after a pause in drawing (a minimized
-  window) stands for the whole pause; `decode` is the shown record's own, and
-  there is no `read` row, as the network's wait is no stage.
+  window) stands for the whole pause. They and the status line's seq count
+  records as they arrive, decoded or not, so they show what the link
+  carries. `decode` is the shown record's own, and there is no `read` row,
+  as the network's wait is no stage.
 - **`vp_live_probe`** plays a live stream on gfx's headless surface and
   prints the panels' lines once a second: agents check a sender with it on a
   Mac, with no window. Mac only, as NVIDIA's ICD has no headless surface.

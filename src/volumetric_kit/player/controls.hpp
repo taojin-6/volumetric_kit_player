@@ -97,7 +97,7 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 ///         second (`-` when unknown); the frame's type (I for a key record,
 ///         else P), payload and triangles (each `-` before the first); and
 ///         the rate frames are taken at, over the nominal when it is known,
-///         or live beside the records received a second.
+///         or live beside the records a second.
 std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
