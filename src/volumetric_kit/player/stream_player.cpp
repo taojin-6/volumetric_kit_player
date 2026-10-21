@@ -485,8 +485,9 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
       // has decoded: a sender this version cannot decode shows as live, with
       // no picture.
     }
-    // The newest, once nothing more has come, or every kMeshEvery while
-    // records keep coming, so a burst (a join's GOP) shows as it drains.
+    // The newest: once nothing more has come, at once for the connection's
+    // first frame, or every kMeshEvery while records keep coming
+    // (DECISIONS.md).
     if (free &&
         (!*got || !published || Clock::now() - *published >= kMeshEvery)) {
       const Step step(*this, Step::kNoWait);  // the extract

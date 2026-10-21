@@ -13,8 +13,9 @@ chunks, joined at the newest key.
 
 - **Decode every record, mesh the newest.** The worker decodes each record as
   it arrives, and meshes once the consumer has taken the last mesh: when
-  nothing more has come, or every 100 ms while records keep coming, so a
-  join's GOP shows as it drains. Not paced by pts: the sender paces. Why: the
+  nothing more has come, at once for a connection's first frame, or every
+  100 ms while records keep coming, so a join shows a picture at once and
+  its GOP as it drains. Not paced by pts: the sender paces. Why: the
   file loop's wait for the consumer would let latency grow without bound and
   stop draining the socket, which hides lag from the sender's drop rule
   (newest key wins). The consumer check stays: a superseded mesh keeps its
