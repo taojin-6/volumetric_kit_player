@@ -53,12 +53,11 @@ records why.
 
 - Every change carries unit tests for what it changes.
 - **Tests and agents never open a window.** Nothing they run may reach
-  `glfwInit`: a test runs the app only with `VP_NO_WINDOW` set, so it stops
-  on input it refuses or, as for a valid `--connect`, at that check just
-  before `glfwInit`; and agents skip gfx's `GlfwNativeWindowTest`. Only
-  CI's Xvfb step on the Linux legs runs the window; the owner checks it by
-  hand. Agents and CI build the iOS app but never run it; the owner runs it
-  on a device.
+  `glfwInit`: a test runs the app only with `VP_NO_WINDOW` set, which stops
+  it even on input nothing refuses (DECISIONS.md); and agents skip gfx's
+  `GlfwNativeWindowTest`. Only CI's Xvfb step on the Linux legs runs the
+  window; the owner checks it by hand. Agents and CI build the iOS app but
+  never run it; the owner runs it on a device.
 - Logic is tested headless: host-only where it can be, otherwise on a device
   through the core's fixtures, which skip without one locally and fail in CI.
 - Run GPU tests under the validation layer: `VKC_TEST_VALIDATION=1`, and on

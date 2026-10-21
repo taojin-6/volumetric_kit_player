@@ -4,14 +4,11 @@
 // The desktop app's command line, the app run as a process: usage, a bad
 // --frames, a bad --connect and --connect with a path exit 2; a missing file
 // and one that is not a .vrst exit 1 with StreamPlayer::open's refusal and
-// nothing else, before glfwInit. No case hands the app a stream it can play
-// but a valid --connect, which does no I/O before the window, so only
-// VP_NO_WINDOW stops it. Each runs with VP_NO_WINDOW set, which stops the app
-// just before glfwInit with a reason of its own: a refusal that moved past
-// that point fails here, on every OS, rather than open a window (AGENTS.md).
-// A run not back within kPrompt, as a window's loop would not be, is killed
-// and fails the test. On the host: parse_count, which --frames and a port
-// take.
+// nothing else, before glfwInit. Each runs with VP_NO_WINDOW set, which stops
+// the app just before glfwInit with a reason of its own (DECISIONS.md); a
+// valid --connect, which nothing refuses, exits 1 with that reason. A run not
+// back within kPrompt, as a window's loop would not be, is killed and fails
+// the test. On the host: parse_count, which --frames and a port take.
 
 #include <gtest/gtest.h>
 #include <poll.h>

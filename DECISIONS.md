@@ -203,7 +203,8 @@ the sizes.
   same calls.
 - **`VP_NO_WINDOW` stops the app just before `glfwInit`,** and `cli_test`
   sets it. Why: a refusal that moved past that point then fails the test on
-  every OS, rather than open a window (AGENTS.md).
+  every OS, rather than open a window (AGENTS.md); and it alone stops a
+  valid `--connect`, which nothing refuses before the window.
 - **The configure fails if GLFW enters the library's link closure,** checked
   once every directory has linked. Why: the library links no window system
   (below); only the app links gfx's GLFW tier.
