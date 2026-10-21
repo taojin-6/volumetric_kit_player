@@ -50,7 +50,8 @@ FetchContent_MakeAvailable(volumetric_kit_recon)
 # merge (77f421e): windowing::SurfaceSource and glfw::Library, beside #143's
 # orbit drag gestures, #144's sRGB ImGui fix and #145's ImGuiTouch.
 # TODO(G1): PlayerViewConfig::ui_min_frame_height sets gfx's
-# ImGuiOverlayConfig::min_frame_height (volumetric_kit_gfx
+# ImGuiOverlayConfig::min_frame_height, and the stats panel draws with
+# ui::begin_collapsible_panel and ui::draw_stage_table (volumetric_kit_gfx
 # feat/ui-touch-panels), which this pin lacks, so until that PR merges this
 # branch builds only with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_GFX on its
 # checkout. Once it merges, and before this branch merges, pin its merge commit

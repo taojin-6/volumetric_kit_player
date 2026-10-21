@@ -1,59 +1,128 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// The controls on the host: status_line's wording, and draw_controls on a
-// CPU-only ImGui context fed by gfx's ImGuiTouch, over a stream opened but not
-// started. A tap on Play/Pause flips playing(), Step pauses, Loop toggles, a
-// finger on the panel is ImGui's, and the panel keeps clear of the safe area.
+// The controls and the stats panel on the host: status_line's and
+// stats_lines' wording, and draw_controls and StatsPanel on a CPU-only ImGui
+// context fed by gfx's ImGuiTouch, over a stream opened but not started. A
+// tap on Play/Pause flips playing(), Step pauses, Loop toggles, a finger on
+// the controls is ImGui's, and they keep clear of the safe area. The stats
+// sit at the work area's top left; a finger on their header is ImGui's and
+// on their body the scene's; a tap on the header closes them, with nothing
+// rebuilt, and another opens them with the frames taken meanwhile; their
+// table is the stage means, then the renderer's rows.
 
 #include "volumetric_kit/player/controls.hpp"
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <glm/vec2.hpp>
 
 #include "controls_layout.hpp"
 #include "imgui.h"
-#include "imgui_internal.h"  // FindWindowByName, to find the panel
+#include "imgui_internal.h"  // FindWindowByName, to find the panels
 #include "test_stream.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
+#include "volumetric_kit/player/playback_stats.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
+#include "volumetric_kit/recon/stream/session.hpp"
 
 namespace {
 
 namespace core = volumetric_kit::core;
+namespace stream = volumetric_kit::recon::stream;
 namespace ui = volumetric_kit::gfx::ui;
+using std::chrono::milliseconds;
+using std::chrono::seconds;
 using volumetric_kit::player::draw_controls;
 using volumetric_kit::player::FrameStamp;
 using volumetric_kit::player::kControlsWindow;
+using volumetric_kit::player::kStatsWindow;
+using volumetric_kit::player::PlaybackStats;
+using volumetric_kit::player::stats_lines;
+using volumetric_kit::player::StatsPanel;
 using volumetric_kit::player::status_line;
 using volumetric_kit::player::StreamPlayer;
+using Lines = std::vector<std::string>;
+using TimePoint = PlaybackStats::Clock::time_point;
+
+const TimePoint t0{seconds(100)};
+
+// A stamp of frame `index`, `bytes` long, a key record or not.
+FrameStamp stamp_of(std::uint64_t index, std::uint64_t bytes, bool key) {
+  FrameStamp stamp;
+  stamp.index = index;
+  stamp.bytes = bytes;
+  stamp.key = key;
+  return stamp;
+}
 
 TEST(StatusLine, SaysLoadingBeforeTheFirstFrame) {
   EXPECT_EQ(status_line(std::nullopt, 150, true, true), "loading");
 }
 
-TEST(StatusLine, NamesTheFrameFromOneThePlayStateLoopAndTime) {
-  const FrameStamp stamp{11, 440'000'000, 4.06};
+TEST(StatusLine, NamesTheFrameFromOneThePlayStateAndLoop) {
+  const FrameStamp stamp = stamp_of(11, 41'234, false);
   EXPECT_EQ(status_line(stamp, 150, true, true),
-            "frame 12/150 · playing · loop · 4.1 ms");
-  EXPECT_EQ(status_line(stamp, 150, false, false),
-            "frame 12/150 · paused · 4.1 ms");
+            "frame 12/150 · playing · loop");
+  EXPECT_EQ(status_line(stamp, 150, false, false), "frame 12/150 · paused");
 }
 
-// A 400 x 300-point display at 2 pixels per point, its bottom `inset` points
-// kept clear.
-ui::DisplayFrame display(double seconds, float inset = 0.0f) {
+// 300 records of 41 kB at 30 fps: 9.84 Mbit/s.
+stream::TrackStats a_track() {
+  stream::TrackStats track;
+  track.records = 300;
+  track.payload_bytes = 300 * 41'000;
+  track.max_pts_ns = 299 * 1'000'000'000ULL / 30;
+  return track;
+}
+
+TEST(StatsLines, SayDashForTheFrameBeforeTheFirst) {
+  const PlaybackStats stats(a_track(), {30, 1});
+  EXPECT_EQ(stats_lines(stats, std::nullopt, 0, t0),
+            (Lines{"bitrate 9.8 Mbit/s", "frame - · - kB · - k tris",
+                   "rate 0.0 / 30 fps"}));
+}
+
+TEST(StatsLines, NameTheFramesTypeBytesAndTrianglesAndTheRate) {
+  PlaybackStats stats(a_track(), {30, 1});
+  // 25 frames 40 ms apart: 24 steps over 0.96 s.
+  for (int i = 0; i < 25; ++i) {
+    stats.add_frame({}, t0 + milliseconds(40 * i));
+  }
+  const TimePoint now = t0 + milliseconds(960);
+  EXPECT_EQ(stats_lines(stats, stamp_of(7, 41'234, false), 182'364, now),
+            (Lines{"bitrate 9.8 Mbit/s", "frame P · 41.2 kB · 182 k tris",
+                   "rate 25.0 / 30 fps"}));
+  EXPECT_EQ(stats_lines(stats, stamp_of(6, 98'765, true), 0, now)[1],
+            "frame I · 98.8 kB · 0 k tris");
+}
+
+TEST(StatsLines, LeaveOutWhatIsUnknownAndShowAFractionalRate) {
+  EXPECT_EQ(
+      stats_lines(PlaybackStats({}, {0, 1}), std::nullopt, 0, t0),
+      (Lines{"bitrate - Mbit/s", "frame - · - kB · - k tris", "rate 0.0 fps"}));
+  EXPECT_EQ(
+      stats_lines(PlaybackStats({}, {30000, 1001}), std::nullopt, 0, t0)[2],
+      "rate 0.0 / 29.97 fps");
+  EXPECT_EQ(stats_lines(PlaybackStats({}, {25, 1}), std::nullopt, 0, t0)[2],
+            "rate 0.0 / 25 fps");
+}
+
+// A 400 x 300-point display at 2 pixels per point, `safe_area` kept clear.
+ui::DisplayFrame display(double seconds, const ui::EdgeInsets& safe_area) {
   ui::DisplayFrame frame;
   frame.pixels = {800, 600};
   frame.pixels_per_point = 2.0f;
-  frame.safe_area.bottom = inset;
+  frame.safe_area = safe_area;
   frame.seconds = seconds;
   return frame;
 }
@@ -68,6 +137,7 @@ class ControlsTest : public ::testing::Test {
         StreamPlayer::open(path);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     player_ = std::move(opened).value();
+    stats_.emplace(player_->track_stats(), player_->rate());
 
     // ImGui's own context, as the overlay's but with no renderer: its font
     // atlas built on the CPU, and no imgui.ini.
@@ -85,6 +155,8 @@ class ControlsTest : public ::testing::Test {
     frame();
     frame();
     ASSERT_NE(ImGui::FindWindowByName(kControlsWindow), nullptr);
+    ASSERT_NE(ImGui::FindWindowByName(kStatsWindow), nullptr);
+    ASSERT_NE(stats_body(), nullptr);
   }
 
   void TearDown() override {
@@ -94,18 +166,41 @@ class ControlsTest : public ::testing::Test {
     }
   }
 
-  // One frame, 1/60 s after the last, with the controls in it.
-  void frame(float inset = 0.0f) {
+  // The time the stats are drawn at: one frame on per frame.
+  TimePoint now() const {
+    return t0 + std::chrono::duration_cast<TimePoint::duration>(
+                    std::chrono::duration<double>(seconds_));
+  }
+
+  // One frame, 1/60 s after the last, with the controls and the stats in it.
+  void frame() {
     seconds_ += 1.0 / 60.0;
-    touch_->new_frame(display(seconds_, inset));
+    touch_->new_frame(display(seconds_, safe_area_));
     ImGui::NewFrame();
     draw_controls(*player_, std::nullopt);
+    panel_.draw(*stats_, shown_, triangles_, render_, now());
     ImGui::Render();
   }
 
-  // The panel, as the last frame laid it out; SetUp found it.
+  // The controls, as the last frame laid them out; SetUp found them.
   const ImGuiWindow& panel() const {
     return *ImGui::FindWindowByName(kControlsWindow);
+  }
+
+  // The stats' header, as the last frame laid it out; SetUp found it.
+  static const ImGuiWindow& stats_header() {
+    return *ImGui::FindWindowByName(kStatsWindow);
+  }
+
+  // The stats' body, which gfx names after the header; SetUp found it.
+  static const ImGuiWindow* stats_body() {
+    return ImGui::FindWindowByName(
+        (std::string(kStatsWindow) + "##body").c_str());
+  }
+
+  static glm::vec2 middle(const ImGuiWindow& window) {
+    return {window.Pos.x + 0.5f * window.Size.x,
+            window.Pos.y + 0.5f * window.Size.y};
   }
 
   // The middle of the row's `index`th control (controls_layout.hpp).
@@ -123,8 +218,38 @@ class ControlsTest : public ::testing::Test {
     }
   }
 
+  // Whether a finger at `at` is ImGui's in the frame it lands in. It then
+  // goes, pressing nothing.
+  bool captured(glm::vec2 at) {
+    touch_->touch_began(1, at);
+    frame();
+    const bool wants = ImGui::GetIO().WantCaptureMouse;
+    touch_->touch_cancelled(1);
+    frame();
+    frame();
+    return wants;
+  }
+
+  // The worker's frame `index` taken for drawing now, as the view's commit
+  // takes it.
+  void take(std::uint64_t index) {
+    FrameStamp stamp = stamp_of(index, 2'000, index % 3 == 0);
+    stamp.stages.add_cpu("read", 0.5);
+    stamp.stages.add_cpu("decode", 2.0);
+    stamp.stages.add_cpu("mesh", 1.0);
+    stats_->add_frame(stamp, now());
+    shown_ = std::move(stamp);
+    triangles_ = 1'200;
+  }
+
   vp_test::Scratch scratch_;
   std::unique_ptr<StreamPlayer> player_;
+  std::optional<PlaybackStats> stats_;
+  StatsPanel panel_;
+  std::optional<FrameStamp> shown_;
+  std::uint32_t triangles_ = 0;
+  std::vector<core::StageRow> render_;
+  ui::EdgeInsets safe_area_;
   ImGuiContext* context_ = nullptr;
   std::unique_ptr<ui::ImGuiTouch> touch_;  // reset before the context
   double seconds_ = 0.0;
@@ -163,7 +288,7 @@ TEST_F(ControlsTest, AFingerOnThePanelIsImGuis) {
   frame();
   frame();
   EXPECT_FALSE(io.WantCaptureMouse);
-  touch_->touch_began(2, {10.0f, 10.0f});  // above the panel
+  touch_->touch_began(2, {390.0f, 10.0f});  // above the panel, by no stats
   frame();
   EXPECT_FALSE(io.WantCaptureMouse);
   touch_->touch_ended(2);
@@ -174,12 +299,78 @@ TEST_F(ControlsTest, ThePanelSitsAtTheBottomCentreClearOfTheSafeArea) {
   const ImGuiWindow& window = panel();
   EXPECT_NEAR(window.Pos.x + 0.5f * window.Size.x, 200.0f, 1.0f);
   EXPECT_NEAR(window.Pos.y + window.Size.y, 300.0f, 1.0f);
-  frame(/*inset=*/34.0f);
+  safe_area_.bottom = 34.0f;
+  frame();
   EXPECT_NEAR(panel().Pos.y + panel().Size.y, 266.0f, 1.0f);
 }
 
 TEST_F(ControlsTest, TheFontDrawsTheStatusLinesDot) {
   EXPECT_TRUE(ImGui::GetFont()->IsGlyphInFont(0x00B7));
+}
+
+// A phone's insets in landscape: the Dynamic Island's side, and the top.
+TEST_F(ControlsTest, TheStatsSitAtTheWorkAreasTopLeftClearOfTheSafeArea) {
+  EXPECT_EQ(stats_header().Pos.x, 0.0f);
+  EXPECT_EQ(stats_header().Pos.y, 0.0f);
+  safe_area_.top = 62.0f;
+  safe_area_.left = 62.0f;
+  frame();
+  EXPECT_EQ(stats_header().Pos.x, 62.0f);
+  EXPECT_EQ(stats_header().Pos.y, 62.0f);
+  // The body directly below the header.
+  EXPECT_EQ(stats_body()->Pos.x, 62.0f);
+  EXPECT_EQ(stats_body()->Pos.y, 62.0f + stats_header().Size.y);
+}
+
+TEST_F(ControlsTest, AFingerOnTheStatsHeaderIsImGuisAndOnTheirBodyTheScenes) {
+  EXPECT_TRUE(captured(middle(stats_header())));
+  EXPECT_FALSE(captured(middle(*stats_body())));
+  EXPECT_TRUE(panel_.open()) << "the fingers pressed nothing";
+}
+
+TEST_F(ControlsTest, ATapOnTheStatsHeaderClosesThemAndAnotherOpensThem) {
+  ASSERT_TRUE(panel_.open());
+  ASSERT_TRUE(stats_body()->Active);
+  const Lines before = panel_.lines();
+  ASSERT_EQ(before.size(), 3u);
+  EXPECT_EQ(before[1], "frame - · - kB · - k tris");
+  EXPECT_EQ(before[2], "rate 0.0 / 25 fps");
+  tap(middle(stats_header()));
+  EXPECT_FALSE(panel_.open());
+  EXPECT_FALSE(stats_body()->Active) << "closed, the header alone";
+  // Half a second closed, past the refresh, with a frame taken every other
+  // tick for the last of it: nothing is rebuilt.
+  for (int tick = 0; tick < 30; ++tick) {
+    if (tick % 2 == 0) {
+      take(static_cast<std::uint64_t>(tick / 2));
+    }
+    frame();
+  }
+  EXPECT_FALSE(stats_body()->Active);
+  EXPECT_EQ(panel_.lines(), before) << "rebuilt while closed";
+  // Open again, it shows the frames taken while it was closed: the newest,
+  // frame 14, and the 15 over 28 ticks, 30 a second.
+  tap(middle(stats_header()));
+  EXPECT_TRUE(panel_.open());
+  EXPECT_TRUE(stats_body()->Active);
+  EXPECT_EQ(panel_.lines(), (Lines{before[0], "frame P · 2.0 kB · 1 k tris",
+                                   "rate 30.0 / 25 fps"}));
+}
+
+TEST_F(ControlsTest, TheStatsTableIsTheStageMeansThenTheRenderersRows) {
+  render_ = {{"draw", 0.4, 0.3, true}};
+  take(0);
+  // A frame past the refresh rebuilds.
+  seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  frame();
+  const std::vector<core::StageRow>& rows = panel_.rows();
+  ASSERT_EQ(rows.size(), 4u);
+  EXPECT_STREQ(rows[0].name, "read");
+  EXPECT_STREQ(rows[1].name, "decode");
+  EXPECT_STREQ(rows[2].name, "mesh");
+  EXPECT_STREQ(rows[3].name, "draw");
+  EXPECT_DOUBLE_EQ(rows[1].cpu_ms, 2.0);
+  EXPECT_TRUE(rows[3].has_gpu);
 }
 
 }  // namespace
