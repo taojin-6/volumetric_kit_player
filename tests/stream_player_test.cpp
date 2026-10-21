@@ -25,24 +25,25 @@
 // Live, from a recon StreamServer on 127.0.0.1 publishing the stream (looped
 // and restamped for a steady flow), or a raw peer: frames arrive with their
 // seq as their index and decode and mesh rows alone; a join after a P-frame
-// shows that GOP from its key; every record published while a mesh waits for
-// the consumer is decoded, and the newest is shown with the records since;
-// records slower than their decode are meshed once nothing newer has come,
-// and records faster still show a newer frame every 100 ms or so; a consumer
-// that takes nothing for 1.5 s leaves status() OK, and its next take is
-// followed by the newest frame, while PlaybackStats fed as the view feeds it
-// reads no spike in the records a second; a server that goes away is a retry
-// with its bare reason, a new one on its port, at another voxel size, gives
-// frames again, and a park then leaves no reason; a park closes the
-// connection within kClosed, 50 times at seeded points as records flow, and
-// once with none coming; an unpark joins at the newest key; bytes that are
-// no stream and a name that does not resolve show why, with status() OK; a
-// park ends the wait to retry, so the unpark connects at once; and a stop is
-// prompt while a refused connect waits to retry, connected and idle, and
-// parked. On the host: open refuses what it cannot play, and connect an
-// empty host or port 0. The device tests skip with no device. A stop that no
-// control can wake, such as one lost in the exchange's wait, fails only on
-// ctest's timeout.
+// shows that GOP from its key; P-frames before a connection's first key are
+// skipped, though counted, with status() OK; every record published while a
+// mesh waits for the consumer is decoded, and the newest is shown with the
+// records since; records slower than their decode are meshed once nothing
+// newer has come, and records faster still show a newer frame every 100 ms
+// or so; a consumer that takes nothing for 1.5 s leaves status() OK, and its
+// next take is followed by the newest frame, while PlaybackStats fed as the
+// view feeds it reads no spike in the records a second; a server that goes
+// away is a retry with its bare reason, a new one on its port, at another
+// voxel size, gives frames again, and a park then leaves no reason; a park
+// closes the connection within kClosed, 50 times at seeded points as records
+// flow, and once with none coming; an unpark joins at the newest key; bytes
+// that are no stream, a session with no geometry track and a name that does
+// not resolve show why, with status() OK; a park ends the wait to retry, so
+// the unpark connects at once; and a stop is prompt while a refused connect
+// waits to retry, connected and idle, and parked. On the host: open refuses
+// what it cannot play, and connect an empty host or port 0. The device tests
+// skip with no device. A stop that no control can wake, such as one lost in
+// the exchange's wait, fails only on ctest's timeout.
 
 #include "volumetric_kit/player/stream_player.hpp"
 
@@ -1209,14 +1210,18 @@ class LivePlayerTest : public StreamPlayerTest {
     ASSERT_EQ(recording->infos.size(), kFrames);
   }
 
-  // A server of the stream's session on 127.0.0.1, at `port` or a free one;
-  // null with a failure recorded.
+  // A server of `session`, the stream's by default, on 127.0.0.1, at `port`
+  // or a free one; null with a failure recorded.
   std::unique_ptr<networking::StreamServer> serve(std::uint16_t port = 0) {
+    return serve(recording_.session, port);
+  }
+  static std::unique_ptr<networking::StreamServer> serve(
+      const stream::Session& session, std::uint16_t port = 0) {
     networking::ServerOptions options;
     options.host = "127.0.0.1";
     options.port = port;
     core::Result<std::unique_ptr<networking::StreamServer>> server =
-        networking::StreamServer::start(recording_.session, options);
+        networking::StreamServer::start(session, options);
     EXPECT_TRUE(server.ok()) << server.status().message();
     return server.ok() ? std::move(server).value() : nullptr;
   }
@@ -1396,6 +1401,24 @@ TEST_F(LivePlayerTest, AJoinAfterAPFrameShowsThatGopFromItsKey) {
   }
   EXPECT_EQ(records, 2u) << "K3 and P4";
   EXPECT_TRUE(player_->status().ok()) << player_->status().message();
+}
+
+// A connection that begins at a P-frame, as from a sender that does not join
+// at a key: the P-frames before the first key are skipped, though counted as
+// received, and the first frame shown is the key's or after it.
+TEST_F(LivePlayerTest, PFramesBeforeTheFirstKeyAreSkipped) {
+  const RawPeer peer(
+      [feed = stream_feed()](std::uint64_t piece) {
+        return feed(piece == 0 ? 0 : piece + 1);  // the session, then P1 on
+      },
+      10ms);
+  StreamPlayer* player = start_live(peer.port());
+  ASSERT_NE(player, nullptr);
+  const std::optional<FrameStamp> frame = next_frame();
+  ASSERT_TRUE(frame.has_value());
+  EXPECT_GE(frame->index, kIntraPeriod);
+  EXPECT_EQ(frame->records, frame->index) << "P1 on, the skipped included";
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
 TEST_F(LivePlayerTest, AllPublishedWhileAMeshWaitsAreDecodedAndTheNewestShown) {
@@ -1687,6 +1710,25 @@ TEST_F(LivePlayerTest, AParkEndsTheWaitToRetry) {
   const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
       SteadyClock::now() - unparked);
   EXPECT_LT(waited, kQuiet) << waited.count() << " ms";
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A sender of a track of another kind alone.
+TEST_F(LivePlayerTest, ASessionWithNoGeometryTrackShowsWhyWhileStatusStaysOk) {
+  stream::Session session;
+  stream::Track track;
+  track.kind = static_cast<stream::TrackKind>(2);
+  session.tracks.push_back(track);
+  const std::unique_ptr<networking::StreamServer> server = serve(session);
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(eventually([&] {
+    const LiveStatus status = player->live_status();
+    return status.state == LiveState::kConnecting && !status.last_error.empty();
+  }));
+  EXPECT_EQ(player->live_status().last_error,
+            "the sender's session has no geometry track");
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
