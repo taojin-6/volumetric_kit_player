@@ -17,11 +17,11 @@ is implemented.
   and where a frame's time goes, from what recon and gfx already count
   (`TrackStats`, `StageMetrics`, the `Profiler`).
 - **The windows.** The stage means cover the last N frames taken, N the
-  nominal frames a second rounded (30 when unknown), so a pause holds them
-  and a step moves them by one; the rate covers the last second of wall time;
-  `draw` is the profiler's newest resolved frame. The text is rebuilt 4 times
-  a second. Why: means over wall time would sink to 0 on a pause, and digits
-  that change every frame cannot be read.
+  nominal frames a second rounded (30 when unknown, at most 240), so a pause
+  holds them and a step moves them by one; the rate covers the last second of
+  wall time; `draw` is the profiler's newest resolved frame. The text is
+  rebuilt 4 times a second. Why: means over wall time would sink to 0 on a
+  pause, and digits that change every frame cannot be read.
 - **The bitrate is the track's mean:** 8 × payload bytes a record over the
   mean pts step, from the footer or the open scan, with no payload read. It
   agrees with recon's examples' `mbit_per_s` (bytes a frame × fps, over an
@@ -41,6 +41,9 @@ is implemented.
   landscape phone and move the controls; ImGui's own collapse has a
   font-sized arrow, takes a double-click, and its window takes input over its
   whole body.
+- **`StatsPanel` holds the open state and the rebuild,** rather than
+  `PlayerView`. Why: a host test can then show that nothing is rebuilt while
+  the panel is closed and that its figures hold for a refresh.
 
 ## 2026-10-20 — Phone sizing: the text and the targets apart
 

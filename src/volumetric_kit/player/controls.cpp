@@ -108,14 +108,15 @@ void StatsPanel::draw(const PlaybackStats& stats,
                       std::uint32_t triangles,
                       const std::vector<core::StageRow>& render,
                       Playback::Clock::time_point now) {
-  if (open_ && (!rebuilt_ || now - *rebuilt_ >= kRefresh)) {
-    lines_ = stats_lines(stats, shown, triangles, now);
-    rows_ = stats.stage_means();
-    rows_.insert(rows_.end(), render.begin(), render.end());
-    rebuilt_ = now;
-  }
   if (gfx::ui::begin_collapsible_panel(
           kStatsWindow, "Stats", ImGui::GetMainViewport()->WorkPos, &open_)) {
+    // After the header, so the frame a tap opens it on is current.
+    if (!rebuilt_ || now - *rebuilt_ >= kRefresh) {
+      lines_ = stats_lines(stats, shown, triangles, now);
+      rows_ = stats.stage_means();
+      rows_.insert(rows_.end(), render.begin(), render.end());
+      rebuilt_ = now;
+    }
     for (const std::string& line : lines_) {
       ImGui::TextUnformatted(line.c_str());
     }

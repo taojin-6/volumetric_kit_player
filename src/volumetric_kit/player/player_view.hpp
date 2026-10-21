@@ -36,9 +36,9 @@ struct PlayerViewConfig {
   /// The UI's size (gfx::ui::ImGuiOverlayConfig::scale): 1 on desktop, 1.3
   /// on a phone.
   float ui_scale = 1.0f;
-  /// The controls' least height, in points
-  /// (gfx::ui::ImGuiOverlayConfig::min_frame_height): 0 on desktop, 44 on
-  /// iOS.
+  /// The UI's least frame height, in points: the controls' and the stats'
+  /// header's (gfx::ui::ImGuiOverlayConfig::min_frame_height). 0 on desktop,
+  /// 44 on iOS.
   float ui_min_frame_height = 0.0f;
   /// The Khronos validation layer on the shared instance, where it loads (a
   /// logged warning where it does not). The desktop shell sets it in Debug,

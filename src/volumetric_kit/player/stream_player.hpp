@@ -46,9 +46,10 @@ struct FrameStamp {
   bool key = false;          ///< A key record: an intra (I) frame; else P.
   /// Host ms of its "read" (its record's header and payload, CRC included,
   /// and other tracks' records passed on the way), "decode" (the first
-  /// frame's grid included) and "mesh", each blocking on its fence, so the
-  /// device's work is inside. "decode" also has the codec kernels' device ms
-  /// where its queue can time; the grid's remove and allocate are not timed.
+  /// frame's grid included) and "mesh"; decode and mesh each block on their
+  /// fence, so the device's work is inside. "decode" also has the codec
+  /// kernels' device ms where its queue can time; the grid's remove and
+  /// allocate are not timed.
   core::StageMetrics stages;
 };
 

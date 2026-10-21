@@ -103,9 +103,9 @@ class StatsPanel {
   /// How often the figures are rebuilt while it is open.
   static constexpr std::chrono::milliseconds kRefresh{250};
 
-  /// @brief Rebuild the figures if it is open and @ref kRefresh has passed
-  ///        since their last rebuild, then draw it; a tap or click on the
-  ///        header closes or opens it.
+  /// @brief Draw it; a tap or click on the header closes or opens it. Open
+  ///        after the header, it first rebuilds the figures if @ref kRefresh
+  ///        has passed since their last rebuild.
   /// @param stats      The figures.
   /// @param shown      The newest frame drawn, for @ref stats_lines.
   /// @param triangles  Its mesh's triangles.

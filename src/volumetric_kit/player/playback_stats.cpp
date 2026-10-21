@@ -14,12 +14,13 @@ namespace {
 // The span the rate is taken over.
 constexpr std::chrono::seconds kRateSpan{1};
 
-// The frames of `period` in a second, rounded, and at least 1.
+// The frames of `period` in a second, rounded, from 1 to kMaxWindow; a period
+// of 0, from a rate past a billion, takes the most.
 std::size_t frames_a_second(std::chrono::nanoseconds period) {
   const double frames =
       std::chrono::duration<double>(std::chrono::seconds(1)) / period;
-  return std::max<std::size_t>(1,
-                               static_cast<std::size_t>(std::lround(frames)));
+  return static_cast<std::size_t>(std::lround(
+      std::clamp(frames, 1.0, static_cast<double>(PlaybackStats::kMaxWindow))));
 }
 
 }  // namespace

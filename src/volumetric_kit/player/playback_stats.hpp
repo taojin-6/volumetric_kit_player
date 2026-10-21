@@ -36,10 +36,14 @@ class PlaybackStats {
  public:
   using Clock = Playback::Clock;
 
+  /// The most frames the stage means cover, so a corrupt rate cannot grow
+  /// the window without bound.
+  static constexpr std::size_t kMaxWindow = 240;
+
   /// @param track  The track's counts, for @ref mean_mbit_per_s.
   /// @param rate   Its nominal rate. The stage means cover its frames a
-  ///               second, rounded, and at least 1: 30 when unknown
-  ///               (@ref kFallbackPeriod).
+  ///               second, rounded, from 1 to @ref kMaxWindow: 30 when
+  ///               unknown (@ref kFallbackPeriod).
   PlaybackStats(const recon::stream::TrackStats& track,
                 recon::stream::Rate rate);
 

@@ -10,7 +10,9 @@
 // fit a phone and a fingertip at the iOS shell's sizes, as do the stats, with
 // the profiler's draw row in their table; ui_wants_pointer() follows a finger
 // on the panel and on the stats' header, not on their body; and teardown
-// mid-playback, the profiler attached, is clean. The view
+// mid-playback, the profiler attached, is clean. Whether the draw row has a
+// device half is not checked, as the view keeps its profiler to itself; the
+// owner checks the GPU column by hand. The view
 // makes its own shared device, validated as the test policy asks, so the
 // layer's errors fail the test. The tests skip where the
 // loader offers no headless surface (NVIDIA's ICD). On Apple a skip fails

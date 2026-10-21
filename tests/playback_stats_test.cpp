@@ -4,9 +4,9 @@
 // PlaybackStats on the host, with the time passed in: the track's mean
 // bitrate, and none below 2 records or over a pts span of 0; the nominal
 // rate, and none when unknown; the stage means over the last frames, as many
-// as the nominal rate's frames a second (30 when unknown), CPU over every
-// frame and GPU over those that have one, held while no frame comes; and the
-// rate frames are taken at over the last second.
+// as the nominal rate's frames a second (30 when unknown, at most 240), CPU
+// over every frame and GPU over those that have one, held while no frame
+// comes; and the rate frames are taken at over the last second.
 
 #include "volumetric_kit/player/playback_stats.hpp"
 
@@ -125,14 +125,18 @@ TEST(PlaybackStats, NoGpuInTheWindowHasNoGpuMean) {
 }
 
 // The window is the nominal rate's frames a second, rounded: 25 at 25 fps, 30
-// at 30000/1001 and when unknown. Frame i reads for i ms.
+// at 30000/1001 and when unknown, and at most kMaxWindow, as for a 90 kHz
+// timebase written as the rate or a rate whose period rounds to 0 ns. Frame i
+// reads for i ms.
 TEST(PlaybackStats, TheWindowIsAsManyFramesAsASecondHolds) {
+  constexpr int kMost = static_cast<int>(PlaybackStats::kMaxWindow);
   for (const auto& [num, den, window] :
        {std::tuple{25u, 1u, 25}, std::tuple{30000u, 1001u, 30},
-        std::tuple{0u, 1u, 30}}) {
+        std::tuple{0u, 1u, 30}, std::tuple{90'000u, 1u, kMost},
+        std::tuple{4'000'000'000u, 1u, kMost}}) {
     SCOPED_TRACE(::testing::Message() << num << "/" << den);
     PlaybackStats stats({}, {num, den});
-    constexpr int kFrames = 40;
+    constexpr int kFrames = 300;
     for (int i = 1; i <= kFrames; ++i) {
       stats.add_frame(frame(i), t0);
     }

@@ -9,7 +9,8 @@
 // sit at the work area's top left; a finger on their header is ImGui's and
 // on their body the scene's; a tap on the header closes them, with nothing
 // rebuilt, and another opens them with the frames taken meanwhile; their
-// table is the stage means, then the renderer's rows.
+// figures hold for a refresh; and their table is the stage means, then the
+// renderer's rows.
 
 #include "volumetric_kit/player/controls.hpp"
 
@@ -348,13 +349,37 @@ TEST_F(ControlsTest, ATapOnTheStatsHeaderClosesThemAndAnotherOpensThem) {
   }
   EXPECT_FALSE(stats_body()->Active);
   EXPECT_EQ(panel_.lines(), before) << "rebuilt while closed";
-  // Open again, it shows the frames taken while it was closed: the newest,
-  // frame 14, and the 15 over 28 ticks, 30 a second.
-  tap(middle(stats_header()));
+  // Open again, from the frame the tap opens it on, it shows the frames taken
+  // while it was closed: the newest, frame 14, and the 15 over 28 ticks, 30 a
+  // second.
+  touch_->touch_began(1, middle(stats_header()));
+  touch_->touch_ended(1);
+  for (int i = 0; i < 4 && !panel_.open(); ++i) {
+    frame();
+  }
   EXPECT_TRUE(panel_.open());
   EXPECT_TRUE(stats_body()->Active);
   EXPECT_EQ(panel_.lines(), (Lines{before[0], "frame P · 2.0 kB · 1 k tris",
                                    "rate 30.0 / 25 fps"}));
+}
+
+// A frame taken within a refresh of the last rebuild leaves the figures as
+// they were; the first frame past it shows it.
+TEST_F(ControlsTest, TheFiguresHoldUntilTheRefresh) {
+  const double refresh =
+      std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  take(0);
+  seconds_ += refresh;
+  frame();
+  const Lines first = panel_.lines();
+  ASSERT_EQ(first.size(), 3u);
+  EXPECT_EQ(first[1], "frame I · 2.0 kB · 1 k tris");
+  take(1);
+  frame();
+  EXPECT_EQ(panel_.lines(), first) << "rebuilt within the refresh";
+  seconds_ += refresh;
+  frame();
+  EXPECT_EQ(panel_.lines()[1], "frame P · 2.0 kB · 1 k tris");
 }
 
 TEST_F(ControlsTest, TheStatsTableIsTheStageMeansThenTheRenderersRows) {
