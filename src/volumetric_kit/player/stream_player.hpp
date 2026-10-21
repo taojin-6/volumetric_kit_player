@@ -68,13 +68,30 @@ enum class LiveState {
 struct LiveStatus {
   LiveState state = LiveState::kConnecting;
   std::string address;  ///< to_string() of the player's address.
-  /// Why the last connection ended, or the last attempt failed: recon's
-  /// message less its leading "<Api>: " and the address. Empty until one
-  /// has, and once a park has ended one.
+  /// Why the last connection ended, or the last attempt failed
+  /// (@ref live_reason). Empty until one has, and once a park has ended one.
   std::string last_error;
   std::uint64_t seq = 0;                      ///< The newest record received.
   Playback::Clock::time_point last_record{};  ///< When it arrived.
 };
+
+/// @brief Why a live connection ended, for its status line, which names the
+///        address already.
+///
+/// @code
+/// // "cannot connect: Connection refused"
+/// const std::string why = live_reason(
+///     core::Status::io_error(
+///         "StreamClient: lab:47801: cannot connect: Connection refused"),
+///     "lab:47801");
+/// @endcode
+/// @param ended    What ended it: recon's `networking::StreamClient` error, or
+///                 the player's own.
+/// @param address  to_string() of the address the client was given.
+/// @return @p ended's message less the "StreamClient: <address>: " or
+///         "StreamClient::connect: " it starts with (StreamClient's message
+///         convention); whole with neither, as a bare "out of memory".
+std::string live_reason(const core::Status& ended, const std::string& address);
 
 /// @brief What the worker publishes with each frame's mesh.
 struct FrameStamp {

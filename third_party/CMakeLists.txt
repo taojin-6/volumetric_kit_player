@@ -33,7 +33,7 @@ vkc_require_core(0.12.0 VULKAN)
 # The stream reader, the codec's decode grid, Marching Cubes, the mesh exchange
 # and the live stream's client. Its tests, examples, install and -Werror stay
 # off in a subproject, so its library's core floor (0.2.0) is the one checked.
-# The pin is recon #260's head (a7f8849): networking::StreamClient and
+# The pin is recon #260's head (adbb1d1): networking::StreamClient and
 # StreamServer, beside #256's empty mesh payload at MeshExchange's commit,
 # #255's volume::kDefaultBucketSize / kDefaultMaxChain and #253's
 # codec::make_decode_grid and decode_growing.
@@ -41,7 +41,7 @@ vkc_require_core(0.12.0 VULKAN)
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG a7f88496c5c1331d8541ea4a2157ecca1ac7667c)
+  GIT_TAG adbb1d10244f57b6237fa22c7dbf18fd36c61474)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------

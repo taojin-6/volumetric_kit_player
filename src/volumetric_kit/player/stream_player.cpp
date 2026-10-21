@@ -3,8 +3,6 @@
 
 #include "volumetric_kit/player/stream_player.hpp"
 
-#include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <utility>
 
@@ -62,26 +60,6 @@ std::optional<std::uint16_t> first_geometry_track(
   return std::nullopt;
 }
 
-// Why a live connection ended, for the status line, which names the address
-// already: the message less its leading "<Api>: " (StreamClient's,
-// ChunkParser's), then less the address.
-std::string reason(const core::Status& ended, const std::string& address) {
-  std::string_view why = ended.message();
-  const std::string_view api = why.substr(0, why.find(": "));
-  if (!api.empty() && api.size() < why.size() &&
-      std::all_of(api.begin(), api.end(), [](char c) {
-        return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_' ||
-               c == ':';
-      })) {
-    why.remove_prefix(api.size() + 2);
-  }
-  const std::string own = address + ": ";
-  if (why.substr(0, own.size()) == own) {
-    why.remove_prefix(own.size());
-  }
-  return std::string(why);
-}
-
 }  // namespace
 
 core::Result<LiveAddress> parse_live_address(std::string_view text) {
@@ -106,6 +84,18 @@ core::Result<LiveAddress> parse_live_address(std::string_view text) {
 
 std::string to_string(const LiveAddress& address) {
   return address.host + ":" + std::to_string(address.port);
+}
+
+std::string live_reason(const core::Status& ended, const std::string& address) {
+  std::string_view why = ended.message();
+  for (const std::string& prefix : {"StreamClient: " + address + ": ",
+                                    std::string("StreamClient::connect: ")}) {
+    if (why.substr(0, prefix.size()) == prefix) {
+      why.remove_prefix(prefix.size());
+      break;
+    }
+  }
+  return std::string(why);
 }
 
 // Constructed at a step's start: waits while parked, or with kNoWait does not
@@ -615,7 +605,7 @@ bool StreamPlayer::wait_to_retry(const core::Status& ended) {
   std::unique_lock<std::mutex> lock(mutex_);
   live_status_.state = LiveState::kConnecting;
   live_status_.last_error =
-      ended.ok() ? std::string() : reason(ended, live_status_.address);
+      ended.ok() ? std::string() : live_reason(ended, live_status_.address);
   if (!ended.ok()) {
     changed_.wait_for(lock, kRetry, [this] { return quit_ || parked_; });
   }

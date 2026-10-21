@@ -3,16 +3,15 @@
 
 // The controls and the stats panel on the host: status_line's,
 // live_status_line's and stats_lines' wording, file and live;
-// parse_live_address; and draw_controls and StatsPanel on a CPU-only ImGui
-// context fed by gfx's ImGuiTouch, over a stream opened but not started. A
-// tap on Play/Pause flips playing(), Step pauses, Loop toggles, a finger on
-// the controls is ImGui's, and they keep clear of the safe area; a live
-// player's, never started, are its status line alone. The stats
-// sit at the work area's top left; a finger on their header is ImGui's and
-// on their body the scene's; a tap on the header closes them, with nothing
-// rebuilt, and another opens them with the frames taken meanwhile; their
-// figures hold for a refresh; and their table is the stage means, then the
-// renderer's rows.
+// live_reason; parse_live_address; and draw_controls and StatsPanel on a
+// CPU-only ImGui context fed by gfx's ImGuiTouch, over a stream opened but not
+// started. A tap on Play/Pause flips playing(), Step pauses, Loop toggles, a
+// finger on the controls is ImGui's, and they keep clear of the safe area; a
+// live player's, never started, are its status line alone. The stats sit at the
+// work area's top left; a finger on their header is ImGui's and on their body
+// the scene's; a tap on the header closes them, with nothing rebuilt, and
+// another opens them with the frames taken meanwhile; their figures hold for a
+// refresh; and their table is the stage means, then the renderer's rows.
 
 #include "volumetric_kit/player/controls.hpp"
 
@@ -50,6 +49,7 @@ using volumetric_kit::player::draw_controls;
 using volumetric_kit::player::FrameStamp;
 using volumetric_kit::player::kControlsWindow;
 using volumetric_kit::player::kStatsWindow;
+using volumetric_kit::player::live_reason;
 using volumetric_kit::player::live_status_line;
 using volumetric_kit::player::LiveAddress;
 using volumetric_kit::player::LiveState;
@@ -155,6 +155,28 @@ TEST(LiveStatusLine, SaysConnectingThenWhyItReconnects) {
   status.last_error = "the sender closed the connection";
   EXPECT_EQ(live_status_line(status, t0),
             "reconnecting to lab:47801: the sender closed the connection");
+}
+
+// recon's prefix goes, as the line names the address; a message with none,
+// or another address's, is shown whole.
+TEST(LiveReason, DropsStreamClientsPrefixAndKeepsAnyOtherMessageWhole) {
+  const auto reason = [](const char* message) {
+    return live_reason(core::Status::io_error(message), "lab:47801");
+  };
+  EXPECT_EQ(reason("StreamClient: lab:47801: cannot connect: Connection "
+                   "refused"),
+            "cannot connect: Connection refused");
+  EXPECT_EQ(reason("StreamClient: lab:47801: ChunkParser: the stream is not "
+                   "a .vrst file"),
+            "ChunkParser: the stream is not a .vrst file");
+  EXPECT_EQ(reason("StreamClient::connect: an empty host"), "an empty host");
+  for (const char* whole :
+       {"out of memory", "the sender's session has no geometry track",
+        "StreamClient: lab:1: cannot connect: Connection refused",
+        "ChunkParser: the stream is not a .vrst file", "cannot connect: x",
+        "StreamClient: lab:47801"}) {
+    EXPECT_EQ(reason(whole), whole);
+  }
 }
 
 TEST(LiveStatusLine, SaysTheSenderHasNoKeyOnceConnected) {

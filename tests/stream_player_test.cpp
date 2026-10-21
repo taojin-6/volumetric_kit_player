@@ -33,12 +33,13 @@
 // or so; a consumer that takes nothing for 1.5 s leaves status() OK, and its
 // next take is followed by the newest frame, while PlaybackStats fed as the
 // view feeds it reads no spike in the records a second; a server that goes
-// away is a retry with its bare reason, a new one on its port, at another
-// voxel size, gives frames again, and a park then leaves no reason; a park
-// closes the connection within kClosed, 50 times at seeded points as records
-// flow, and once with none coming; an unpark joins at the newest key; bytes
-// that are no stream, a session with no geometry track and a name that does
-// not resolve show why, with status() OK; a park ends the wait to retry, so
+// away is a retry with its reason, a new one on its port, at another voxel
+// size, gives frames again, and a park then leaves no reason; a park closes
+// the connection within kClosed, 50 times at seeded points as records flow,
+// and once with none coming; an unpark joins at the newest key; bytes that
+// are no stream, a session with no geometry track and a name that does not
+// resolve show why, with status() OK; a reason of StreamClient's shows less
+// its prefix, which names the address; a park ends the wait to retry, so
 // the unpark connects at once; and a stop is prompt while a refused connect
 // waits to retry, connected and idle, and parked. On the host: open refuses
 // what it cannot play, and connect an empty host or port 0. The device tests
@@ -1269,16 +1270,14 @@ class LivePlayerTest : public StreamPlayerTest {
     return eventually([&] { return player_->live_status().state == state; });
   }
 
-  // Expects `status` to say why its connection ended, bare: without the
-  // "<Api>: " of recon's messages, or the address the status line names.
-  static void expect_bare(const LiveStatus& status) {
+  // Expects `status` to say why its connection ended with a reason starting
+  // `start`: StreamClient's message less its "StreamClient: <address>: ", so
+  // naming the address nowhere.
+  static void expect_reason(const LiveStatus& status,
+                            const std::string& start) {
     const std::string& why = status.last_error;
-    EXPECT_FALSE(why.empty());
-    for (const std::string& prefix :
-         {std::string("StreamClient"), std::string("ChunkParser"),
-          status.address}) {
-      EXPECT_NE(why.rfind(prefix, 0), 0u) << why;
-    }
+    EXPECT_EQ(why.rfind(start, 0), 0u) << why;
+    EXPECT_EQ(why.find(status.address), std::string::npos) << why;
   }
 
   // The next mesh published, taken as next_frame takes it but with no check
@@ -1579,7 +1578,8 @@ TEST_F(LivePlayerTest, AServerGoneIsARetryAndANewOneOnItsPortGivesFrames) {
     const LiveStatus status = player->live_status();
     return status.state == LiveState::kConnecting && !status.last_error.empty();
   }));
-  expect_bare(player->live_status());
+  EXPECT_EQ(player->live_status().last_error,
+            "the sender closed the connection");
   EXPECT_TRUE(player->status().ok()) << player->status().message();
   // A new server on the same port, of the stream at twice the voxel size,
   // which a grid of the last connection's would refuse: frames again.
@@ -1684,7 +1684,7 @@ TEST_F(LivePlayerTest, APeerSendingNoStreamShowsWhyWhileStatusStaysOk) {
     const LiveStatus status = player->live_status();
     return status.state == LiveState::kConnecting && !status.last_error.empty();
   }));
-  expect_bare(player->live_status());
+  expect_reason(player->live_status(), "ChunkParser: ");
   EXPECT_TRUE(player->status().ok()) << player->status().message();
   EXPECT_FALSE(next_frame(kQuiet).has_value());
   // It connects again, about a second on.
@@ -1738,10 +1738,7 @@ TEST_F(LivePlayerTest, ANameThatDoesNotResolveShowsWhyWhileStatusStaysOk) {
   ASSERT_NE(player, nullptr);
   ASSERT_TRUE(
       eventually([&] { return !player->live_status().last_error.empty(); }));
-  const LiveStatus status = player->live_status();
-  expect_bare(status);
-  EXPECT_NE(status.last_error.find("lab.invalid"), std::string::npos)
-      << status.last_error;
+  expect_reason(player->live_status(), "cannot look up the name: ");
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
@@ -1750,7 +1747,8 @@ TEST_F(LivePlayerTest, AStopIsPromptWhileARefusedConnectWaitsToRetry) {
   ASSERT_NE(player, nullptr);
   ASSERT_TRUE(
       eventually([&] { return !player->live_status().last_error.empty(); }));
-  expect_bare(player->live_status());
+  EXPECT_EQ(player->live_status().last_error,
+            "cannot connect: Connection refused");
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
