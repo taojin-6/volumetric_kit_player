@@ -1,15 +1,16 @@
 # volumetric_kit_player
 
-Plays a recorded `volumetric_kit` stream (`.vrst`) like a video player: each
-frame is decoded and meshed on the GPU by
+Plays a recorded `volumetric_kit` stream (`.vrst`) like a video player, or a
+sender's live stream over TCP: each frame is decoded and meshed on the GPU by
 [volumetric_kit_recon](https://github.com/taojin-6/volumetric_kit_recon) and
 drawn by [volumetric_kit_gfx](https://github.com/taojin-6/volumetric_kit_gfx),
-paced by the stream's timestamps.
+paced by the stream's timestamps or by the sender.
 
 > **Status:** the playback clock (`src/volumetric_kit/player/playback.hpp`),
 > which paces frames by their timestamps with play, pause and step; the
 > stream player (`src/volumetric_kit/player/stream_player.hpp`), which decodes
-> and meshes each frame on the GPU on a worker thread; the view
+> and meshes each frame on the GPU on a worker thread, from a file or live
+> from a sender; the view
 > (`src/volumetric_kit/player/player_view.hpp`), which draws each mesh under
 > an orbit camera, a controls panel and a stats panel on any window system;
 > the desktop app (`apps/volumetric_kit_player/`), a GLFW window over the
@@ -71,6 +72,28 @@ The keys are the panel's shortcuts:
 
 `--frames N` exits after N presents of a stream frame and prints the frame
 drawn, for CI's smoke run (DECISIONS.md).
+
+### Live
+
+`--connect host[:port]`, in place of the path, plays what a sender serves
+(recon's `fuse_orbbec` with `output.serve`, or its `serve_stream`), on port
+47801 unless one is named. For the lab's sender, over the VPN:
+
+```bash
+"$root/build/apps/volumetric_kit_player/volumetric_kit_player" \
+  --connect taojin-desktop.arena.andrew.cmu.edu:47801  # or 192.168.21.217
+```
+
+The picture joins at the sender's newest I-frame. The panel at the bottom is
+then a status line alone: connecting, live with the newest record's seq and
+how long nothing has come, or reconnecting with why, about every second until
+Esc. The keys that play, pause, step and loop do nothing. The stats show the
+bitrate and the records a second over the last second. The iOS app plays
+files only, for now.
+
+On a Mac, `"$root/build/tests/vp_live_probe" host[:port] [--frames N]` plays
+a live stream with no window and prints the status and stats lines once a
+second.
 
 ## iOS
 

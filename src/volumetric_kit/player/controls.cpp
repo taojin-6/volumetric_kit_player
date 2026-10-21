@@ -30,6 +30,32 @@ std::string rate_text(double fps) {
   return text;
 }
 
+// A file's controls: Play/Pause, Step and Loop, then the status line.
+void draw_file_controls(StreamPlayer& player,
+                        const std::optional<FrameStamp>& shown) {
+  const ImVec2 button(kButtonEms * ImGui::GetFontSize(), 0.0f);
+  // One ID for both labels, so a press that flips the label completes.
+  if (ImGui::Button(player.playing() ? "Pause###play" : "Play###play",
+                    button)) {
+    if (player.playing()) {
+      player.pause();
+    } else {
+      player.play();
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Step", button)) {
+    player.step();
+  }
+  ImGui::SameLine();
+  bool loop = player.loop();
+  if (ImGui::Checkbox("Loop", &loop)) {
+    player.set_loop(loop);
+  }
+  ImGui::TextUnformatted(
+      status_line(shown, player.frame_count(), player.playing(), loop).c_str());
+}
+
 }  // namespace
 
 void draw_controls(StreamPlayer& player,
@@ -44,30 +70,37 @@ void draw_controls(StreamPlayer& player,
       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
       ImGuiWindowFlags_NoFocusOnAppearing;
   if (ImGui::Begin(kControlsWindow, nullptr, kFlags)) {
-    const ImVec2 button(kButtonEms * ImGui::GetFontSize(), 0.0f);
-    // One ID for both labels, so a press that flips the label completes.
-    if (ImGui::Button(player.playing() ? "Pause###play" : "Play###play",
-                      button)) {
-      if (player.playing()) {
-        player.pause();
-      } else {
-        player.play();
-      }
+    if (player.live()) {
+      ImGui::TextUnformatted(
+          live_status_line(player.live_status(), Playback::Clock::now())
+              .c_str());
+    } else {
+      draw_file_controls(player, shown);
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Step", button)) {
-      player.step();
-    }
-    ImGui::SameLine();
-    bool loop = player.loop();
-    if (ImGui::Checkbox("Loop", &loop)) {
-      player.set_loop(loop);
-    }
-    ImGui::TextUnformatted(
-        status_line(shown, player.frame_count(), player.playing(), loop)
-            .c_str());
   }
   ImGui::End();
+}
+
+std::string live_status_line(const LiveStatus& status,
+                             Playback::Clock::time_point now) {
+  switch (status.state) {
+    case LiveState::kConnecting:
+      if (status.last_error.empty()) {
+        return "connecting to " + status.address;
+      }
+      return "reconnecting to " + status.address + ": " + status.last_error;
+    case LiveState::kConnected:
+      return "connected · the sender has no I-frame yet";
+    case LiveState::kLive:
+      break;
+  }
+  std::string line = "live · seq " + std::to_string(status.seq);
+  const auto quiet = std::chrono::duration_cast<std::chrono::seconds>(
+      now - status.last_record);
+  if (now - status.last_record > std::chrono::seconds(1)) {
+    line += " · nothing for " + std::to_string(quiet.count()) + " s";
+  }
+  return line;
 }
 
 std::string status_line(const std::optional<FrameStamp>& shown,
@@ -87,8 +120,10 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
-                                     Playback::Clock::time_point now) {
-  const std::optional<double> mbit = stats.mean_mbit_per_s();
+                                     Playback::Clock::time_point now,
+                                     bool live) {
+  const std::optional<double> mbit =
+      live ? stats.rolling_mbit_per_s(now) : stats.mean_mbit_per_s();
   std::string frame = "frame - · - kB · - k tris";
   if (shown) {
     frame = std::string("frame ") + (shown->key ? "I" : "P") + " · " +
@@ -99,20 +134,25 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
   if (const std::optional<double> nominal = stats.nominal_fps()) {
     rate += " / " + rate_text(*nominal);
   }
-  return {"bitrate " + (mbit ? fixed(*mbit, 1) : "-") + " Mbit/s",
-          std::move(frame), rate + " fps"};
+  rate += " fps";
+  if (live) {
+    rate += " · " + fixed(stats.records_per_s(now), 0) + " rec/s";
+  }
+  return {"bitrate " + (mbit ? fixed(*mbit, 1) : "-") + " Mbit/s" +
+              (live ? " · last 1 s" : ""),
+          std::move(frame), std::move(rate)};
 }
 
 void StatsPanel::draw(const PlaybackStats& stats,
                       const std::optional<FrameStamp>& shown,
                       std::uint32_t triangles,
                       const std::vector<core::StageRow>& render,
-                      Playback::Clock::time_point now) {
+                      Playback::Clock::time_point now, bool live) {
   if (gfx::ui::begin_collapsible_panel(
           kStatsWindow, "Stats", ImGui::GetMainViewport()->WorkPos, &open_)) {
     // After the header, so the frame a tap opens it on is current.
     if (!rebuilt_ || now - *rebuilt_ >= kRefresh) {
-      lines_ = stats_lines(stats, shown, triangles, now);
+      lines_ = stats_lines(stats, shown, triangles, now, live);
       rows_ = stats.stage_means();
       rows_.insert(rows_.end(), render.begin(), render.end());
       rebuilt_ = now;

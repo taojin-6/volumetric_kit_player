@@ -6,22 +6,23 @@ This is the working guide for Codex, Claude Code and other agents.
 ## Project and boundaries
 
 `volumetric_kit_player` is an application: it plays a recorded `.vrst`
-stream like a video player, decoding and meshing each frame on the GPU and
-drawing it in a window. [README.md](README.md) says what is implemented;
+stream like a video player, or a sender's live stream over TCP, decoding and
+meshing each frame on the GPU and drawing it in a window. [README.md](README.md) says what is implemented;
 [DECISIONS.md](DECISIONS.md) records why.
 
 - It is assembled from its siblings, each fetched pinned by commit:
   [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core)
   (the device, `Status`/`Result`, the test fixtures),
   [`volumetric_kit_recon`](https://github.com/taojin-6/volumetric_kit_recon)
-  (the stream reader, the codec, Marching Cubes) and
+  (the stream reader and client, the codec, Marching Cubes) and
   [`volumetric_kit_gfx`](https://github.com/taojin-6/volumetric_kit_gfx)
   (the window, the mesh pipeline, the camera). From the primary checkout
   they are `../volumetric_kit_<name>/`.
 - Code another application could use belongs in its owner, as a task in that
   repository. The player keeps only its assembly and its playback.
 - Processing runs on the GPU, on one `VkDevice` that recon and gfx share. The
-  host reads the file's bytes and handles input, with no host fallbacks.
+  host reads the stream's bytes, from a file or a socket, and handles input,
+  with no host fallbacks.
 
 ## Layout and naming
 

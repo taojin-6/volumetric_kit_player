@@ -36,6 +36,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   can time. `PlaybackStats` keeps the figures; `FrameStamp` carries the
   record's `bytes`, `key` and `stages`; `StreamPlayer::track_stats` and `rate`
   give the track's counts and nominal rate.
+- Live mode: `StreamPlayer::connect` plays a sender's live stream (recon's
+  `networking::StreamServer`) over TCP, and the desktop app takes
+  `--connect host[:port]`. The worker decodes every record and meshes the
+  newest; a connection that ends or is refused is retried about every
+  second, its reason on the status line (`LiveStatus`), and a park closes
+  it. Live, the stats show the bitrate and records a second over the last
+  second (`FrameStamp::records`, `record_bytes`). `tests/vp_live_probe`
+  plays one with no window, on a Mac.
 
 ### Changed
 

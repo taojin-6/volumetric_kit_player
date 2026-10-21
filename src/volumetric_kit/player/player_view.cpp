@@ -153,7 +153,8 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   overlay_.new_frame();
   draw_controls(*player_, shown_);
   stats_panel_.draw(stats_, shown_, shown_triangles_,
-                    profiler_.metrics().sections, PlaybackStats::Clock::now());
+                    profiler_.metrics().sections, PlaybackStats::Clock::now(),
+                    player_->live());
   // 3. The newest mesh, an empty one included; the slot's last frame has
   // completed. Each frame published is taken here once, and counted.
   exchange_.begin_frame(frame.slot, [this](const recon::mesh::DeviceMesh& mesh,

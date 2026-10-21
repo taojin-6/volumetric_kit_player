@@ -2,11 +2,13 @@
 // Copyright (c) 2026 Tao Jin
 
 // PlaybackStats on the host, with the time passed in: the track's mean
-// bitrate, and none below 2 records or over a pts span of 0; the nominal
-// rate, and none when unknown; the stage means over the last frames, as many
-// as the nominal rate's frames a second (30 when unknown, at most 240), CPU
-// over every frame and GPU over those that have one, held while no frame
-// comes; and the rate frames are taken at over the last second.
+// bitrate, and none below 2 records, over a pts span of 0 or from no track (a
+// live stream's); the nominal rate, and none when unknown; the stage means
+// over the last frames, as many as the nominal rate's frames a second (30
+// when unknown, at most 240), CPU over every frame and GPU over those that
+// have one, held while no frame comes; and the rate frames are taken at, and
+// the bitrate and records a second their records brought, over the last
+// second.
 
 #include "volumetric_kit/player/playback_stats.hpp"
 
@@ -178,6 +180,56 @@ TEST(PlaybackStats, TheRateIsFramesTakenOverTheLastSecond) {
   stats.add_frame(frame(1.0), t0 + milliseconds(3000));
   stats.add_frame(frame(1.0), t0 + milliseconds(3050));
   EXPECT_DOUBLE_EQ(stats.frames_per_s(t0 + milliseconds(3050)), 20.0);
+}
+
+// A live stream's view passes no track and no rate.
+TEST(PlaybackStats, NoMeanFromAnEmptyTrack) {
+  const PlaybackStats stats({}, {});
+  EXPECT_FALSE(stats.mean_mbit_per_s().has_value());
+  EXPECT_FALSE(stats.nominal_fps().has_value());
+}
+
+// A frame taken after `records` records of `bytes` bytes in all.
+FrameStamp after(std::uint64_t records, std::uint64_t bytes) {
+  FrameStamp stamp;
+  stamp.records = records;
+  stamp.record_bytes = bytes;
+  return stamp;
+}
+
+// Over the frames taken in the last second, each but the first, which counts
+// the records before the window.
+TEST(PlaybackStats, TheRollingBitrateAndRecordsCoverTheLastSecond) {
+  PlaybackStats stats({}, {});
+  EXPECT_FALSE(stats.rolling_mbit_per_s(t0).has_value());
+  EXPECT_EQ(stats.records_per_s(t0), 0.0);
+  stats.add_frame(after(50, 1'000'000), t0);
+  EXPECT_FALSE(stats.rolling_mbit_per_s(t0).has_value()) << "below 2 frames";
+  EXPECT_EQ(stats.records_per_s(t0), 0.0);
+  // 4 more 200 ms apart, of 2 records and 25 kB each: 0.8 Mbit and 8 records
+  // over 0.8 s.
+  for (int i = 1; i <= 4; ++i) {
+    stats.add_frame(after(2, 25'000), t0 + milliseconds(200 * i));
+  }
+  const TimePoint now = t0 + milliseconds(800);
+  ASSERT_TRUE(stats.rolling_mbit_per_s(now).has_value());
+  EXPECT_NEAR(*stats.rolling_mbit_per_s(now), 1.0, 1e-9);
+  EXPECT_NEAR(stats.records_per_s(now), 10.0, 1e-9);
+  // Once the first has left the last second, the second is the first: 0.6
+  // Mbit and 6 records over 0.6 s.
+  const TimePoint later = t0 + milliseconds(1100);
+  ASSERT_TRUE(stats.rolling_mbit_per_s(later).has_value());
+  EXPECT_NEAR(*stats.rolling_mbit_per_s(later), 1.0, 1e-9);
+  EXPECT_NEAR(stats.records_per_s(later), 10.0, 1e-9);
+  // A second with none: no figure.
+  EXPECT_FALSE(stats.rolling_mbit_per_s(t0 + seconds(3)).has_value());
+  EXPECT_EQ(stats.records_per_s(t0 + seconds(3)), 0.0);
+  // Taken all at once: no time to divide by.
+  PlaybackStats burst({}, {});
+  burst.add_frame(after(1, 1'000), t0);
+  burst.add_frame(after(1, 1'000), t0);
+  EXPECT_FALSE(burst.rolling_mbit_per_s(t0).has_value());
+  EXPECT_EQ(burst.records_per_s(t0), 0.0);
 }
 
 }  // namespace

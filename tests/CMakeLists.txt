@@ -43,6 +43,14 @@ target_link_libraries(
   PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_stream
           volumetric_kit::recon_tsdf GTest::gtest)
 vp_target_warnings(vp_write_stream)
+# A sender's live stream played through the view with no window, its status and
+# stats printed once a second, for agents on a Mac: a tool, not a test. Apple
+# only, as NVIDIA's ICD has no headless surface.
+if(APPLE)
+  add_executable(vp_live_probe vp_live_probe.cpp)
+  target_link_libraries(vp_live_probe PRIVATE volumetric_kit::player)
+  vp_target_warnings(vp_live_probe)
+endif()
 # MoltenVK has a headless surface and several queue families, so on Apple the
 # view's tests cross families rather than skip, on MoltenVK's default families
 # and on its specialized ones, as the core's cross-family tests do: any skip but

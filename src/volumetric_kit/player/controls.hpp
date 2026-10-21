@@ -32,8 +32,9 @@ inline constexpr float kButtonEms = 4.5f;
 
 /// @brief Draw Play/Pause, Step and Loop in a row, the status line below, at
 ///        the bottom centre of the main viewport's work area, so they stay
-///        clear of a notch and a home indicator. There is no text field, so
-///        touch needs no keyboard.
+///        clear of a notch and a home indicator; a live player's
+///        (StreamPlayer::live), its @ref live_status_line alone. There is no
+///        text field, so touch needs no keyboard.
 ///
 /// @code
 /// overlay.new_frame();
@@ -44,6 +45,23 @@ inline constexpr float kButtonEms = 4.5f;
 /// @pre An ImGui frame is open on the view's context.
 void draw_controls(StreamPlayer& player,
                    const std::optional<FrameStamp>& shown);
+
+/// @brief A live player's status line.
+///
+/// @code
+/// // "live · seq 1234 · nothing for 3 s"
+/// const std::string line =
+///     live_status_line(player.live_status(), Playback::Clock::now());
+/// @endcode
+/// @param status  Its connection (StreamPlayer::live_status).
+/// @param now     The time, for how long no record has come.
+/// @return "connecting to <address>", or "reconnecting to <address>: <why>"
+///         once a connection has ended or failed;
+///         "connected · the sender has no I-frame yet"; "live · seq <seq>",
+///         with " · nothing for <n> s" once no record has come for over a
+///         second, n in whole seconds.
+std::string live_status_line(const LiveStatus& status,
+                             Playback::Clock::time_point now);
 
 /// @brief The status line under the controls.
 ///
@@ -66,20 +84,25 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 /// @code
 /// // {"bitrate 11.8 Mbit/s", "frame P · 41.2 kB · 182 k tris",
 /// //  "rate 29.8 / 30 fps"}
-/// const auto lines = stats_lines(stats, shown, triangles, now);
+/// const auto lines = stats_lines(stats, shown, triangles, now, false);
+/// // live: {"bitrate 9.7 Mbit/s · last 1 s", "frame P · ...",
+/// //        "rate 29.8 fps · 30 rec/s"}
 /// @endcode
 /// @param stats      The figures.
 /// @param shown      The newest frame drawn; empty before the first.
 /// @param triangles  Its mesh's triangles.
-/// @param now        The time, for the rate.
-/// @return The track's mean bitrate (`-` when unknown); the frame's type (I
-///         for a key record, else P), payload and triangles (each `-` before
-///         the first); and the rate frames are taken at, over the nominal
-///         when it is known.
+/// @param now        The time, for the rates.
+/// @param live       Whether they are a live player's (StreamPlayer::live).
+/// @return The track's mean bitrate, or live its bitrate over the last
+///         second (`-` when unknown); the frame's type (I for a key record,
+///         else P), payload and triangles (each `-` before the first); and
+///         the rate frames are taken at, over the nominal when it is known,
+///         or live beside the records received a second.
 std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
-                                     Playback::Clock::time_point now);
+                                     Playback::Clock::time_point now,
+                                     bool live);
 
 /// @brief The "Stats" panel, at the top left of the main viewport's work
 ///        area: a header (gfx::ui::begin_collapsible_panel) and below it, while
@@ -96,7 +119,7 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
 /// @code
 /// overlay.new_frame();
 /// panel.draw(stats, shown, triangles, profiler.metrics().sections,
-///            PlaybackStats::Clock::now());
+///            PlaybackStats::Clock::now(), player.live());
 /// @endcode
 class StatsPanel {
  public:
@@ -111,11 +134,13 @@ class StatsPanel {
   /// @param triangles  Its mesh's triangles.
   /// @param render     The rows after the stage means: the renderer's
   ///                   (gfx::Profiler::metrics).
-  /// @param now        The time, for the rate and the rebuild.
+  /// @param now        The time, for the rates and the rebuild.
+  /// @param live       Whether they are a live player's, for
+  ///                   @ref stats_lines.
   /// @pre An ImGui frame is open on the view's context.
   void draw(const PlaybackStats& stats, const std::optional<FrameStamp>& shown,
             std::uint32_t triangles, const std::vector<core::StageRow>& render,
-            Playback::Clock::time_point now);
+            Playback::Clock::time_point now, bool live);
 
   /// @return Whether it is open.
   bool open() const noexcept { return open_; }

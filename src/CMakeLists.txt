@@ -17,6 +17,7 @@ target_link_libraries(
   player
   PUBLIC volumetric_kit::recon_codec
          volumetric_kit::recon_mesh
+         volumetric_kit::recon_networking
          volumetric_kit::recon_stream
          volumetric_kit::gfx_app
          volumetric_kit::gfx_camera

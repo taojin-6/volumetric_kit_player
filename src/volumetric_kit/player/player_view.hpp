@@ -126,6 +126,8 @@ class PlayerView {
   bool ui_wants_pointer() const noexcept;
   /// @return The last stream frame drawn, for a read-out (the CI smoke).
   const std::optional<FrameStamp>& shown() const noexcept { return shown_; }
+  /// @return The stats panel, for a read-out of its figures (vp_live_probe).
+  const StatsPanel& stats_panel() const noexcept { return stats_panel_; }
 
  private:
   static constexpr std::uint32_t kFramesInFlight = 2;
