@@ -18,6 +18,7 @@
 
 #include <glm/vec2.hpp>
 
+#include "controls_layout.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"  // FindWindowByName, to find the panel
 #include "test_stream.hpp"
@@ -30,7 +31,6 @@ namespace core = volumetric_kit::core;
 namespace ui = volumetric_kit::gfx::ui;
 using volumetric_kit::player::draw_controls;
 using volumetric_kit::player::FrameStamp;
-using volumetric_kit::player::kButtonFrames;
 using volumetric_kit::player::kControlsWindow;
 using volumetric_kit::player::status_line;
 using volumetric_kit::player::StreamPlayer;
@@ -39,12 +39,11 @@ TEST(StatusLine, SaysLoadingBeforeTheFirstFrame) {
   EXPECT_EQ(status_line(std::nullopt, 150, true, true), "loading");
 }
 
-TEST(StatusLine, NamesTheFrameFromOneThePlayStateLoopAndTime) {
-  const FrameStamp stamp{11, 440'000'000, 4.06};
+TEST(StatusLine, NamesTheFrameFromOneThePlayStateAndLoop) {
+  const FrameStamp stamp{11, 440'000'000};
   EXPECT_EQ(status_line(stamp, 150, true, true),
-            "frame 12/150 · playing · loop · 4.1 ms");
-  EXPECT_EQ(status_line(stamp, 150, false, false),
-            "frame 12/150 · paused · 4.1 ms");
+            "frame 12/150 · playing · loop");
+  EXPECT_EQ(status_line(stamp, 150, false, false), "frame 12/150 · paused");
 }
 
 // A 400 x 300-point display at 2 pixels per point, its bottom `inset` points
@@ -108,18 +107,9 @@ class ControlsTest : public ::testing::Test {
     return *ImGui::FindWindowByName(kControlsWindow);
   }
 
-  // The middle of the row's `index`th control, in points: Play/Pause, Step,
-  // then Loop's box. The buttons are kButtonFrames frame heights wide.
+  // The middle of the row's `index`th control (controls_layout.hpp).
   glm::vec2 control(int index) const {
-    const ImGuiStyle& style = ImGui::GetStyle();
-    const float height = ImGui::GetFrameHeight();
-    const float button = kButtonFrames * height;
-    const float left =
-        panel().Pos.x + style.WindowPadding.x +
-        static_cast<float>(index) * (button + style.ItemSpacing.x);
-    const float top = panel().Pos.y + style.WindowPadding.y;
-    const float width = index < 2 ? button : height;
-    return {left + 0.5f * width, top + 0.5f * height};
+    return vp_test::control_middle(panel(), index);
   }
 
   // A finger lifts where it lands, and the frames ImGui takes the tap over

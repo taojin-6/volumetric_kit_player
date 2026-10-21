@@ -76,7 +76,8 @@ vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(CAMetalLayer* layer,
   VKC_ASSIGN(const vg::windowing::SurfaceSource surface,
              vg::windowing::metal_surface((__bridge const void*)layer));
   vkp::PlayerViewConfig config;
-  config.ui_scale = 2.0f;
+  config.ui_scale = 1.3f;              // 17-pt text, near iOS body text
+  config.ui_min_frame_height = 44.0f;  // Apple's least touch target
   return vkp::PlayerView::create(surface, pixels, std::move(player), config);
 }
 

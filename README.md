@@ -108,8 +108,9 @@ the panel, one finger orbits the camera, two pan it, and a pinch zooms.
 
 It logs the view's bring-up time, each park's wait and any failure, which
 Console.app shows. The owner checks the app on a device by hand
-(DECISIONS.md); nothing runs it in CI. Devices it has run on: none yet. Each
-one that check passes on is added here, and no others are claimed.
+(DECISIONS.md); nothing runs it in CI. Devices it has run on: iPhone 18 Pro
+Max (2026-10-20). Each one that check passes on is added here, and no others
+are claimed.
 
 ## Development
 

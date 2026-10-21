@@ -4,6 +4,35 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-20 — Phone sizing: the text and the targets apart
+
+`PlayerViewConfig::ui_min_frame_height` and `kButtonEms`; the iOS shell sets
+the sizes.
+
+- **The iOS shell sets `ui_scale` 1.3 and `ui_min_frame_height` 44,** which
+  the view passes to gfx's `ImGuiOverlayConfig`; the desktop keeps 1 and 0.
+  Why: one scale set both: at 2 the targets were still 38 pt tall, and the
+  panel was wider than a phone in portrait.
+- **Play/Pause and Step are `kButtonEms` (4.5) font sizes wide,** not frame
+  heights. Why: the frame height now carries the touch padding, and three of
+  them would take a phone's row past 375 pt, the narrowest phone's width.
+- **The status line has no ms.** Why: with the frame's decode and mesh time
+  on it, the panel outgrew a 375-pt phone while playing.
+
+**Not SwiftUI,** for the panel on iOS:
+
+- **It would break the one copy.** gfx draws the panel in shared C++ under
+  every shell (below), and SwiftUI runs only on Apple platforms: a second copy
+  now, and a third with Android.
+- **Its cost is in the seam.** In `volumetric_kit_ios`'s scanner, the SwiftUI
+  view took the camera's touches, needed hand-written size constraints and a
+  2 Hz gate on its string rebuilds, and its rows drifted between C++ and Swift
+  until one side owned them.
+- **The problem was sizes,** which one gfx field fixes in the shared C++.
+  Revisit when the app ships to people who are not developers, for
+  accessibility and a native look, or when the UI grows past an overlay: a
+  stream browser, settings, text entry.
+
 ## 2026-10-20 — The iOS app, a UIKit shell over the view
 
 `apps/ios/`; README.md says how to build it and give it a stream.

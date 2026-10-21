@@ -3,8 +3,6 @@
 
 #include "volumetric_kit/player/controls.hpp"
 
-#include <cstdio>
-
 #include "imgui.h"
 
 namespace volumetric_kit::player {
@@ -21,7 +19,7 @@ void draw_controls(StreamPlayer& player,
       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
       ImGuiWindowFlags_NoFocusOnAppearing;
   if (ImGui::Begin(kControlsWindow, nullptr, kFlags)) {
-    const ImVec2 button(kButtonFrames * ImGui::GetFrameHeight(), 0.0f);
+    const ImVec2 button(kButtonEms * ImGui::GetFontSize(), 0.0f);
     // One ID for both labels, so a press that flips the label completes.
     if (ImGui::Button(player.playing() ? "Pause###play" : "Play###play",
                       button)) {
@@ -52,15 +50,13 @@ std::string status_line(const std::optional<FrameStamp>& shown,
   if (!shown) {
     return "loading";
   }
-  char ms[32];
-  std::snprintf(ms, sizeof ms, "%.1f ms", shown->decode_mesh_ms);
   std::string line = "frame " + std::to_string(shown->index + 1) + "/" +
                      std::to_string(frame_count) + " · " +
                      (playing ? "playing" : "paused");
   if (loop) {
     line += " · loop";
   }
-  return line + " · " + ms;
+  return line;
 }
 
 }  // namespace volumetric_kit::player

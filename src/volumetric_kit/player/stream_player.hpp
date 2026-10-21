@@ -39,8 +39,7 @@ struct FrameStamp {
   // TODO: count from the record's seq, less the track's first, so a damaged
   // header shifts nothing.
   std::uint64_t index = 0;
-  std::uint64_t pts_ns = 0;     ///< Its pts, on its track's clock.
-  double decode_mesh_ms = 0.0;  ///< The wall time decoding and meshing took.
+  std::uint64_t pts_ns = 0;  ///< Its pts, on its track's clock.
 };
 
 /// @brief The handoff of the worker's meshes to the thread that draws them.
@@ -187,7 +186,7 @@ class StreamPlayer {
   // Wait until the frame at pts_ns is due, and count it shown: false on quit.
   bool wait_due(std::uint64_t pts_ns);
   // Once the consumer took the last mesh, mesh the grid and publish it with
-  // @p stamp, adding the extract's time to its decode's: false on quit.
+  // @p stamp: false on quit.
   core::Result<bool> publish(const FrameStamp& stamp);
   // At the end of a pass that showed a frame: true to play the track again,
   // false on quit.

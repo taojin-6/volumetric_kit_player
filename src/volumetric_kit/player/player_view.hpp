@@ -31,8 +31,12 @@ namespace volumetric_kit::player {
 /// @brief What a shell may set beyond the surface.
 struct PlayerViewConfig {
   /// The controls' size (gfx::ui::ImGuiOverlayConfig::scale): 1 on desktop,
-  /// about 2 on a phone.
+  /// 1.3 on a phone.
   float ui_scale = 1.0f;
+  /// The controls' least height, in points
+  /// (gfx::ui::ImGuiOverlayConfig::min_frame_height): 0 on desktop, 44 on
+  /// iOS.
+  float ui_min_frame_height = 0.0f;
   /// The Khronos validation layer on the shared instance, where it loads (a
   /// logged warning where it does not). The desktop shell sets it in Debug,
   /// and iOS has no layer (DECISIONS.md); the tests take it from
@@ -74,7 +78,7 @@ class PlayerView {
   ///                 outlive the view.
   /// @param extent   The drawable now, in pixels; both sides > 0.
   /// @param player   An opened player, not started.
-  /// @param config   The UI scale and validation.
+  /// @param config   The UI's sizes and validation.
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
   ///         @p player or an empty @p extent; or the first failure (device,
   ///         swapchain, pipeline, overlay, StreamPlayer::start).
