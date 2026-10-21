@@ -15,8 +15,9 @@ function(vp_add_test name)
     TIMEOUT 300)
 endfunction()
 
-# The pacing clock, host only.
+# The pacing clock and the stats panel's figures, host only.
 vp_add_test(playback volumetric_kit::player)
+vp_add_test(playback_stats volumetric_kit::player)
 # The decode and mesh worker, on a device (the core's fixtures), over the tests'
 # stream (test_stream.hpp), which recon's mesh integrator writes.
 vp_add_test(stream_player volumetric_kit::player

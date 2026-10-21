@@ -29,6 +29,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   scene is not active. CI builds it unsigned on the Debug Mac leg.
 - `StreamPlayer::park` and `unpark`: hold the worker for a suspend, so it
   starts no GPU work until it resumes from the same frame.
+- A stats panel at the top left (`StatsPanel`), which a tap or click on its
+  header closes and opens: the track's mean bitrate, the frame drawn (I or P,
+  its payload and triangles), the rate frames are drawn at, and the read,
+  decode, mesh and draw times, decode's and draw's on the device too where it
+  can time. `PlaybackStats` keeps the figures; `FrameStamp` carries the
+  record's `bytes`, `key` and `stages`; `StreamPlayer::track_stats` and `rate`
+  give the track's counts and nominal rate.
 
 ### Changed
 

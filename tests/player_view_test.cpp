@@ -7,8 +7,12 @@
 // frame that meshes nothing too, which still presents; 0 x 0
 // skips without blocking; a step moves one frame; the worker's failure
 // surfaces from frame(); the panel draws at a phone's scale, and its controls
-// fit a phone and a fingertip at the iOS shell's sizes; ui_wants_pointer()
-// follows a finger on the panel; and teardown mid-playback is clean. The view
+// fit a phone and a fingertip at the iOS shell's sizes, as do the stats, with
+// the profiler's draw row in their table; ui_wants_pointer() follows a finger
+// on the panel and on the stats' header, not on their body; and teardown
+// mid-playback, the profiler attached, is clean. Whether the draw row has a
+// device half is not checked, as the view keeps its profiler to itself; the
+// owner checks the GPU column by hand. The view
 // makes its own shared device, validated as the test policy asks, so the
 // layer's errors fail the test. The tests skip where the
 // loader offers no headless surface (NVIDIA's ICD). On Apple a skip fails
@@ -55,8 +59,10 @@ namespace recon = volumetric_kit::recon;
 using namespace std::chrono_literals;
 using volumetric_kit::player::FrameStamp;
 using volumetric_kit::player::kControlsWindow;
+using volumetric_kit::player::kStatsWindow;
 using volumetric_kit::player::PlayerView;
 using volumetric_kit::player::PlayerViewConfig;
+using volumetric_kit::player::StatsPanel;
 using volumetric_kit::player::status_line;
 using volumetric_kit::player::StreamPlayer;
 using SteadyClock = std::chrono::steady_clock;
@@ -210,6 +216,45 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
     }
     return {panel->Pos.x + 0.5f * panel->Size.x,
             panel->Pos.y + 0.5f * panel->Size.y};
+  }
+
+  // The stats' body window, which gfx names after the header; null before it
+  // is first drawn. The view's context is current.
+  static ImGuiWindow* stats_body() {
+    return ImGui::FindWindowByName(
+        (std::string(kStatsWindow) + "##body").c_str());
+  }
+
+  // Whether the view's UI wants a finger at `at`, in points, as of the frame
+  // it lands in. The finger then goes, pressing nothing.
+  bool wants_pointer_at(glm::vec2 at) {
+    touch_->touch_began(1, at);
+    EXPECT_TRUE(present());
+    const bool wants = view_->ui_wants_pointer();
+    touch_->touch_cancelled(1);
+    for (int i = 0; i < 2; ++i) {
+      EXPECT_TRUE(present());
+    }
+    return wants;
+  }
+
+  // A finger lifts where it lands, and the frames ImGui takes the tap over
+  // present: its position, its press, its release, and its position cleared.
+  void tap(glm::vec2 at) {
+    touch_->touch_began(1, at);
+    touch_->touch_ended(1);
+    for (int i = 0; i < 4; ++i) {
+      EXPECT_TRUE(present());
+    }
+  }
+
+  // The rows of the stats' table after its header, as the last frame drew
+  // it; -1 with no table.
+  static int stats_rows() {
+    ImGuiWindow* const body = stats_body();
+    const ImGuiTable* const table =
+        body != nullptr ? ImGui::TableFindByID(body->GetID("stages")) : nullptr;
+    return table != nullptr ? table->CurrentRow : -1;
   }
 
   // The ImGui item under a finger at `at`, in points, as the frame it lands in
@@ -412,10 +457,25 @@ TEST_F(PlayerViewTest, UiWantsPointerFollowsAFingerOnThePanel) {
     ASSERT_TRUE(present());
   }
   EXPECT_FALSE(view_->ui_wants_pointer());
-  touch_->touch_began(2, {4.0f, 4.0f});  // the top-left corner: the scene
+  // The top-right corner: the scene.
+  touch_->touch_began(2, {static_cast<float>(kExtent.width) - 4.0f, 4.0f});
   ASSERT_TRUE(present());
   EXPECT_FALSE(view_->ui_wants_pointer());
   touch_->touch_ended(2);
+}
+
+// The top-left corner is the stats' header; their body is the scene's.
+TEST_F(PlayerViewTest, UiWantsPointerTakesTheStatsHeaderNotTheirBody) {
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(present());
+  }
+  EXPECT_TRUE(wants_pointer_at({4.0f, 4.0f}));
+  ImGui::SetCurrentContext(view_->ui_context());
+  const ImGuiWindow* const body = stats_body();
+  ASSERT_NE(body, nullptr);
+  EXPECT_FALSE(wants_pointer_at(
+      {body->Pos.x + 0.5f * body->Size.x, body->Pos.y + 0.5f * body->Size.y}));
 }
 
 // A phone's scale takes ImGui's vector font rather than its pixel one, which
@@ -473,6 +533,56 @@ TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
   EXPECT_FALSE(view_->player().playing());
   EXPECT_TRUE(view_->player().loop());
   EXPECT_FALSE(view_->shown().has_value());
+}
+
+// On the narrowest phone, at the iOS shell's sizes, playing, past a refresh
+// so the stats hold a frame's figures: their table has the worker's three
+// rows and the profiler's draw row, the panel fits across and ends above the
+// controls, and its header is a fingertip tall.
+TEST_F(PlayerViewTest, TheStatsFitAPhone) {
+  extent_ = kPhone;
+  pixels_per_point_ = kPhonePixelsPerPoint;
+  ui_scale_ = kPhoneScale;
+  ui_min_frame_height_ = kFingertip;
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  tick_for(2 * StatsPanel::kRefresh);
+  ImGui::SetCurrentContext(view_->ui_context());
+  const ImGuiWindow* const header = ImGui::FindWindowByName(kStatsWindow);
+  ImGuiWindow* const body = stats_body();
+  const ImGuiWindow* const controls = ImGui::FindWindowByName(kControlsWindow);
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(body, nullptr);
+  ASSERT_NE(controls, nullptr);
+  EXPECT_EQ(stats_rows(), 4);
+  // The widths ImGui fits the body and the header to.
+  EXPECT_LE(body->ContentSize.x + 2.0f * body->WindowPadding.x, widest_panel());
+  EXPECT_LE(header->ContentSize.x + 2.0f * header->WindowPadding.x,
+            widest_panel());
+  EXPECT_LE(body->Pos.y + body->Size.y, controls->Pos.y);
+  EXPECT_GE(header->Size.y, kFingertip);
+}
+
+// A tap on the stats' header, the top-left corner, closes them; a frame
+// stepped meanwhile is still counted, so reopened, past a refresh, their
+// table has the worker's rows besides the profiler's.
+TEST_F(PlayerViewTest, TheStatsCountTheFramesTakenWhileClosed) {
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(present());
+  }
+  tap({4.0f, 4.0f});
+  ImGui::SetCurrentContext(view_->ui_context());
+  ASSERT_NE(stats_body(), nullptr);
+  EXPECT_FALSE(stats_body()->Active) << "closed, the header alone";
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  EXPECT_FALSE(stats_body()->Active);
+  tap({4.0f, 4.0f});
+  tick_for(2 * StatsPanel::kRefresh);
+  ImGui::SetCurrentContext(view_->ui_context());
+  EXPECT_TRUE(stats_body()->Active);
+  EXPECT_EQ(stats_rows(), 4) << "read, decode, mesh and draw";
 }
 
 TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {

@@ -4,6 +4,47 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-20 — A stats panel that a tap on its header closes
+
+`StatsPanel`, `PlaybackStats`, and `FrameStamp`'s `bytes`, `key` and
+`stages`; their headers say what each figure is.
+
+- **What it shows:** the track's mean bitrate; the newest frame drawn, I or P,
+  with its payload and triangles; the rate frames are taken for drawing, over
+  the nominal; and a table of the worker's `read`, `decode` and `mesh` (host
+  ms, and decode's device ms where its queue can time) and `draw`, gfx's
+  `Profiler` around the mesh and the overlay. Why: a stream's size, its pace
+  and where a frame's time goes, from what recon and gfx already count
+  (`TrackStats`, `StageMetrics`, the `Profiler`).
+- **The windows.** The stage means cover the last N frames taken, N the
+  nominal frames a second rounded (30 when unknown, at most 240), so a pause
+  holds them and a step moves them by one; the rate covers the last second of
+  wall time; `draw` is the profiler's newest resolved frame. The text is
+  rebuilt 4 times a second. Why: means over wall time would sink to 0 on a
+  pause, and digits that change every frame cannot be read.
+- **The bitrate is the track's mean:** 8 × payload bytes a record over the
+  mean pts step, from the footer or the open scan, with no payload read. It
+  agrees with recon's examples' `mbit_per_s` (bytes a frame × fps, over an
+  encoder's GOP model) when the pts step is the nominal period and the file's
+  share of I-frames is the GOP's. Why: exact and steady, and the frame line
+  shows the I/P swing; a rolling figure waits for a need.
+- **Decode's device time is always on:** the worker passes a `StageMetrics` to
+  `decode_growing`. Why: recon's A/B on the Mac shows no cost on a real
+  workload, and without timestamps the timer does nothing. A switch waits for
+  an iPhone decode that looks inflated.
+- **Its own panel at the work area's top left, open at launch,** with gfx's
+  collapsible header (`begin_collapsible_panel`): a tap or click on it closes
+  the panel and another opens it; only the header takes input, so a finger or
+  the mouse on the body orbits. Closed, nothing is rebuilt, but the counts go
+  on, so it reopens with current figures; the state is not kept across
+  launches. Why: grown into the controls, it would cover the bottom of a
+  landscape phone and move the controls; ImGui's own collapse has a
+  font-sized arrow, takes a double-click, and its window takes input over its
+  whole body.
+- **`StatsPanel` holds the open state and the rebuild,** rather than
+  `PlayerView`. Why: a host test can then show that nothing is rebuilt while
+  the panel is closed and that its figures hold for a refresh.
+
 ## 2026-10-20 — Phone sizing: the text and the targets apart
 
 `PlayerViewConfig::ui_min_frame_height` and `kButtonEms`; the iOS shell sets

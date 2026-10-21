@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// StreamPlayer on a device, over the tests' stream (test_stream.hpp). Paused
-// and stepped, so each frame goes when the test says: frames arrive in order
-// with their index and pts, each mesh non-empty on the device, and a frame
-// that meshes nothing still reaches the commit with its stamp; with loop on a
-// step past the end wraps, with loop off the last frame holds until play
-// restarts; a corrupt P-frame, a damaged record header or a record this
+// StreamPlayer on a device, over the tests' stream (test_stream.hpp). Its
+// track's counts and rate are what was written. Paused and stepped, so each
+// frame goes when the test says: frames arrive in order with their index,
+// pts, payload bytes, key and stage times (read, decode with the device's
+// half where it can time, mesh), each mesh non-empty on the device, and a
+// frame that meshes nothing still reaches the commit with its stamp; with
+// loop on a step past the end wraps, with loop off the last frame holds until
+// play restarts; a corrupt P-frame, a damaged record header or a record this
 // version cannot read resyncs at the next key, and a stream with no key left
 // stops the worker with the reason; quit is prompt, playing, paused or
 // waiting for a consumer that takes nothing; a fatal error stops the worker,
@@ -45,6 +47,7 @@
 #include "volumetric_kit/core/testing/vulkan_fixture.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
+#include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/stream/stream_writer.hpp"
@@ -356,7 +359,34 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   std::unique_ptr<StreamPlayer> player_;
 };
 
+TEST_F(StreamPlayerTest, TheTracksCountsAndRateAreWhatWasWritten) {
+  const std::vector<stream::Record> all = records();
+  ASSERT_EQ(all.size(), kFrames);
+  std::uint64_t bytes = 0;
+  for (const stream::Record& record : all) {
+    bytes += record.size;
+  }
+  core::Result<std::unique_ptr<StreamPlayer>> opened =
+      StreamPlayer::open(path_);
+  ASSERT_TRUE(opened.ok()) << opened.status().message();
+  const stream::TrackStats& track = (*opened)->track_stats();
+  EXPECT_EQ(track.records, kFrames);
+  EXPECT_EQ(track.keys, (kFrames + kIntraPeriod - 1) / kIntraPeriod);
+  EXPECT_EQ(track.payload_bytes, bytes);
+  EXPECT_EQ(track.min_pts_ns, pts_of(0));
+  EXPECT_EQ(track.max_pts_ns, pts_of(kFrames - 1));
+  EXPECT_EQ((*opened)->rate().num, 25u);
+  EXPECT_EQ((*opened)->rate().den, 1u);
+}
+
 TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
+  const std::vector<stream::Record> all = records();
+  ASSERT_EQ(all.size(), kFrames);
+  // The decoder's timer is private; one on the same device can time where it
+  // can (the core's StageRow::has_gpu).
+  core::Result<core::GpuTimer> timer = core::GpuTimer::create(device());
+  ASSERT_TRUE(timer.ok()) << timer.status().message();
+  const bool device_times = timer.value().available();
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   EXPECT_EQ(player->frame_count(), kFrames);
@@ -367,6 +397,20 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
     ASSERT_TRUE(frame.has_value()) << "no frame " << i;
     EXPECT_EQ(frame->index, i);
     EXPECT_EQ(frame->pts_ns, pts_of(i));
+    EXPECT_EQ(frame->bytes, all[i].size);
+    EXPECT_EQ(frame->key, all[i].info.key);
+    EXPECT_EQ(frame->key, i % kIntraPeriod == 0);
+    const std::vector<core::StageRow>& rows = frame->stages.rows();
+    ASSERT_EQ(rows.size(), 3u) << "frame " << i;
+    EXPECT_STREQ(rows[0].name, "read");
+    EXPECT_STREQ(rows[1].name, "decode");
+    EXPECT_STREQ(rows[2].name, "mesh");
+    for (const core::StageRow& row : rows) {
+      EXPECT_GT(row.cpu_ms, 0.0) << row.name << ", frame " << i;
+    }
+    EXPECT_FALSE(rows[0].has_gpu);
+    EXPECT_EQ(rows[1].has_gpu, device_times);
+    EXPECT_FALSE(rows[2].has_gpu) << "Marching Cubes has no device timer";
   }
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();

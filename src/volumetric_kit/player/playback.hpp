@@ -13,6 +13,21 @@
 
 namespace volumetric_kit::player {
 
+/// The period taken for an unknown rate: 30 frames a second.
+inline constexpr std::chrono::nanoseconds kFallbackPeriod{1'000'000'000 / 30};
+
+/// @brief The nominal period of a track of `num / den` frames a second.
+///
+/// @code
+/// const auto period = nominal_period(30000, 1001).value_or(kFallbackPeriod);
+/// @endcode
+/// @param num  The rate's numerator.
+/// @param den  Its denominator.
+/// @return The period, in whole nanoseconds; empty when the rate is unknown
+///         (`num` or `den` 0).
+std::optional<std::chrono::nanoseconds> nominal_period(std::uint32_t num,
+                                                       std::uint32_t den);
+
 /// @brief When each frame of a stream is due, from its pts, like a video
 ///        player's clock.
 ///
@@ -47,7 +62,7 @@ class Playback {
   /// @brief A clock for a track of `rate_num / rate_den` frames a second,
   ///        playing.
   /// @param rate_num The nominal rate's numerator; 0 when unknown, which
-  ///        is taken as 30 frames a second, as is a `rate_den` of 0.
+  ///        is taken as @ref kFallbackPeriod, as is a `rate_den` of 0.
   /// @param rate_den The nominal rate's denominator.
   Playback(std::uint32_t rate_num, std::uint32_t rate_den);
 

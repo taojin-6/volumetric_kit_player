@@ -7,23 +7,23 @@ namespace volumetric_kit::player {
 namespace {
 
 constexpr std::int64_t kNsPerSecond = 1'000'000'000;
-constexpr std::uint32_t kFallbackFps = 30;
 // The longest pts gap honoured; a longer one, as from a corrupt stream,
 // would stall playback (or overflow the due time).
 constexpr std::uint64_t kMaxGapNs = kNsPerSecond;
 
-std::chrono::nanoseconds nominal_period(std::uint32_t num, std::uint32_t den) {
+}  // namespace
+
+std::optional<std::chrono::nanoseconds> nominal_period(std::uint32_t num,
+                                                       std::uint32_t den) {
   if (num == 0 || den == 0) {
-    return std::chrono::nanoseconds(kNsPerSecond / kFallbackFps);
+    return std::nullopt;
   }
   return std::chrono::nanoseconds(static_cast<std::int64_t>(den) *
                                   kNsPerSecond / num);
 }
 
-}  // namespace
-
 Playback::Playback(std::uint32_t rate_num, std::uint32_t rate_den)
-    : period_(nominal_period(rate_num, rate_den)) {}
+    : period_(nominal_period(rate_num, rate_den).value_or(kFallbackPeriod)) {}
 
 void Playback::play() {
   if (playing_) {

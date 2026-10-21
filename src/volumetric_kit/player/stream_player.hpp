@@ -20,12 +20,14 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/player/playback.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh_exchange.hpp"
+#include "volumetric_kit/recon/stream/session.hpp"
 #include "volumetric_kit/recon/stream/stream_reader.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
@@ -40,6 +42,15 @@ struct FrameStamp {
   // header shifts nothing.
   std::uint64_t index = 0;
   std::uint64_t pts_ns = 0;  ///< Its pts, on its track's clock.
+  std::uint64_t bytes = 0;   ///< Its record's payload bytes.
+  bool key = false;          ///< A key record: an intra (I) frame; else P.
+  /// Host ms of its "read" (its record's header and payload, CRC included,
+  /// and other tracks' records passed on the way), "decode" (the first
+  /// frame's grid included) and "mesh"; decode and mesh each block on their
+  /// fence, so the device's work is inside. "decode" also has the codec
+  /// kernels' device ms where its queue can time; the grid's remove and
+  /// allocate are not timed.
+  core::StageMetrics stages;
 };
 
 /// @brief The handoff of the worker's meshes to the thread that draws them.
@@ -120,6 +131,10 @@ class StreamPlayer {
 
   /// @return The geometry track's records: the frames it plays.
   std::uint64_t frame_count() const noexcept;
+  /// @return The geometry track's counts, from the footer or the open scan.
+  const recon::stream::TrackStats& track_stats() const noexcept;
+  /// @return The track's nominal rate; `num` 0 when unknown.
+  recon::stream::Rate rate() const noexcept;
 
   /// @brief Start the worker on @p device; it builds first (above).
   /// @param device     The compute device; it must outlive this.
@@ -186,8 +201,8 @@ class StreamPlayer {
   // Wait until the frame at pts_ns is due, and count it shown: false on quit.
   bool wait_due(std::uint64_t pts_ns);
   // Once the consumer took the last mesh, mesh the grid and publish it with
-  // @p stamp: false on quit.
-  core::Result<bool> publish(const FrameStamp& stamp);
+  // @p stamp, the extract timed into its "mesh" row: false on quit.
+  core::Result<bool> publish(FrameStamp stamp);
   // At the end of a pass that showed a frame: true to play the track again,
   // false on quit.
   bool wait_at_end();

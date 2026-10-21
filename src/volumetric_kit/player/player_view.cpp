@@ -76,6 +76,10 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
                                      device_config));
   VKC_ASSIGN(app::WindowedApp windowed,
              app::WindowedApp::adopt(*shared, app_config));
+  gfx::ProfilerConfig profiler_config;
+  profiler_config.frames_in_flight = kFramesInFlight;
+  VKC_ASSIGN(gfx::Profiler profiler,
+             gfx::Profiler::create(windowed.device(), profiler_config));
   VKC_ASSIGN(core::Device recon_device,
              core::Device::adopt(shared->compute_payload(),
                                  recon::device_requirements()));
@@ -96,10 +100,13 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
           windowed.device(), windowed.instance_handle(), overlay_config));
   const MeshWiring wiring = mesh_wiring(
       shared->graphics_family(), shared->compute_family(), kFramesInFlight);
-  std::unique_ptr<PlayerView> view(new PlayerView(
-      std::move(shared), std::move(windowed), std::move(recon_device),
-      std::move(recon_allocator), std::move(mesh_pipeline), std::move(overlay),
-      wiring.exchange, std::move(player)));
+  std::unique_ptr<PlayerView> view(
+      new PlayerView(std::move(shared), std::move(windowed),
+                     std::move(profiler), std::move(recon_device),
+                     std::move(recon_allocator), std::move(mesh_pipeline),
+                     std::move(overlay), wiring.exchange, std::move(player)));
+  // In its place, as the loop keeps its address; the destructor detaches it.
+  view->app_.set_profiler(&view->profiler_);
   view->camera_.set_target({0.0f, 0.85f, 0.0f});
   view->camera_.set_distance(3.0f);
   VKC_TRY(view->player_->start(view->recon_device_, view->recon_allocator_,
@@ -108,7 +115,8 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
 }
 
 PlayerView::PlayerView(std::unique_ptr<core::SharedDevice> shared,
-                       app::WindowedApp app, core::Device recon_device,
+                       app::WindowedApp app, gfx::Profiler profiler,
+                       core::Device recon_device,
                        core::Allocator recon_allocator,
                        pipelines::HybridMeshPipeline mesh_pipeline,
                        gfx::ui::ImGuiOverlay overlay,
@@ -116,39 +124,47 @@ PlayerView::PlayerView(std::unique_ptr<core::SharedDevice> shared,
                        std::unique_ptr<StreamPlayer> player)
     : shared_(std::move(shared)),
       app_(std::move(app)),
+      profiler_(std::move(profiler)),
       recon_device_(std::move(recon_device)),
       recon_allocator_(std::move(recon_allocator)),
       mesh_pipeline_(std::move(mesh_pipeline)),
       overlay_(std::move(overlay)),
       exchange_(exchange),
-      player_(std::move(player)) {}
+      player_(std::move(player)),
+      stats_(player_->track_stats(), player_->rate()) {}
 
 PlayerView::~PlayerView() {
   player_->stop();
   shared_->wait_idle();
+  app_.set_profiler(nullptr);
 }
 
 core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   VKC_TRY(player_->status());
-  // 1. A skipped tick opens no ImGui frame.
+  // 1. A skipped tick opens no ImGui frame. A frame begun opens the
+  // profiler's too.
   VKC_ASSIGN(std::optional<gfx::windowing::Frame> begun,
              app_.begin_frame(extent));
   if (!begun) {
     return false;
   }
   const gfx::windowing::Frame& frame = *begun;
-  // 2. The controls, as of the last frame drawn.
+  // 2. The controls and the stats, as of the last frame drawn.
   overlay_.new_frame();
   draw_controls(*player_, shown_);
+  stats_panel_.draw(stats_, shown_, shown_triangles_,
+                    profiler_.metrics().sections, PlaybackStats::Clock::now());
   // 3. The newest mesh, an empty one included; the slot's last frame has
-  // completed.
-  exchange_.begin_frame(
-      frame.slot, [this](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
-        shown_ = stamp;
-        return true;
-      });
+  // completed. Each frame published is taken here once, and counted.
+  exchange_.begin_frame(frame.slot, [this](const recon::mesh::DeviceMesh& mesh,
+                                           FrameStamp& stamp) {
+    stats_.add_frame(stamp, PlaybackStats::Clock::now());
+    shown_triangles_ = mesh.triangle_count;
+    shown_ = std::move(stamp);
+    return true;
+  });
   const core::Status drawn = drawable(exchange_);
-  // 4. The mesh, then the controls over it. recon's extract waited on its
+  // 4. The mesh, then the panels over it. recon's extract waited on its
   // fence before it published, and this frame's submit makes its writes
   // visible to the draw.
   gfx::RenderTargetBeginInfo clear;
@@ -157,23 +173,28 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   clear.clear_color.float32[2] = 0.07f;
   clear.clear_color.float32[3] = 1.0f;
   frame.target->begin(frame.cmd, clear);
-  const recon::mesh::DeviceMesh& mesh = exchange_.live();
-  if (mesh.valid() && !mesh.empty()) {
-    const pipelines::HybridMeshDraw draw{live_mesh(mesh)};
-    const VkExtent2D size = app_.swapchain().extent();
-    pipelines::HybridMeshFrame draws;
-    draws.extent = size;
-    draws.view_proj = camera_
-                          .to_camera(kFovY,
-                                     static_cast<float>(size.width) /
-                                         static_cast<float>(size.height),
-                                     kNear, kFar)
-                          .view_proj();
-    draws.draws = &draw;
-    draws.draw_count = 1;
-    mesh_pipeline_.submit(frame.cmd, draws);
+  {
+    // The stats' "draw" row: CPU is the recording, GPU the device's time
+    // where the graphics queue can time.
+    const gfx::Profiler::Scope timed = profiler_.gpu_scope(frame.cmd, "draw");
+    const recon::mesh::DeviceMesh& mesh = exchange_.live();
+    if (mesh.valid() && !mesh.empty()) {
+      const pipelines::HybridMeshDraw draw{live_mesh(mesh)};
+      const VkExtent2D size = app_.swapchain().extent();
+      pipelines::HybridMeshFrame draws;
+      draws.extent = size;
+      draws.view_proj = camera_
+                            .to_camera(kFovY,
+                                       static_cast<float>(size.width) /
+                                           static_cast<float>(size.height),
+                                       kNear, kFar)
+                            .view_proj();
+      draws.draws = &draw;
+      draws.draw_count = 1;
+      mesh_pipeline_.submit(frame.cmd, draws);
+    }
+    overlay_.render(frame.cmd);
   }
-  overlay_.render(frame.cmd);
   frame.target->end(frame.cmd);
   // 5. Every path from begin_frame ends the frame.
   const core::Status ended = app_.end_frame(frame);

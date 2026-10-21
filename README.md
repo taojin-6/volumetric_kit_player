@@ -11,9 +11,9 @@ paced by the stream's timestamps.
 > stream player (`src/volumetric_kit/player/stream_player.hpp`), which decodes
 > and meshes each frame on the GPU on a worker thread; the view
 > (`src/volumetric_kit/player/player_view.hpp`), which draws each mesh under
-> an orbit camera and a controls panel on any window system; the desktop
-> app (`apps/volumetric_kit_player/`), a GLFW window over the view; and the
-> iOS app (`apps/ios/`), a UIKit shell over the view.
+> an orbit camera, a controls panel and a stats panel on any window system;
+> the desktop app (`apps/volumetric_kit_player/`), a GLFW window over the
+> view; and the iOS app (`apps/ios/`), a UIKit shell over the view.
 
 [AGENTS.md](AGENTS.md) is the working guide for agents, and `CLAUDE.md`
 imports it. [DECISIONS.md](DECISIONS.md) records the choices made.
@@ -55,7 +55,9 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib \
 ```
 
 The panel at the bottom plays, pauses, steps and loops, and shows the frame.
-The keys are its shortcuts:
+The stats at the top left show the bitrate, the frame drawn, the rate and
+where each frame's time goes; a click on their header closes and opens them.
+The keys are the panel's shortcuts:
 
 | Input | Does |
 | --- | --- |
@@ -104,7 +106,8 @@ To give it a stream, launch it once, then copy a `.vrst` into its folder: in
 the Files app under On My iPhone (or iPad) › Player, or in Finder under the
 device's Files tab. Each time the app comes back to the foreground it looks
 again, and until it finds one it says so. It plays with loop on. A tap works
-the panel, one finger orbits the camera, two pan it, and a pinch zooms.
+the panel and the stats' header, one finger orbits the camera, two pan it,
+and a pinch zooms.
 
 It logs the view's bring-up time, each park's wait and any failure, which
 Console.app shows. The owner checks the app on a device by hand

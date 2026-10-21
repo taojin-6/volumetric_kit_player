@@ -14,6 +14,8 @@ namespace {
 using std::chrono::milliseconds;
 using std::chrono::nanoseconds;
 using std::chrono::seconds;
+using volumetric_kit::player::kFallbackPeriod;
+using volumetric_kit::player::nominal_period;
 using volumetric_kit::player::Playback;
 using TimePoint = Playback::Clock::time_point;
 
@@ -138,6 +140,17 @@ TEST(Playback, AFractionalRateKeepsItsPeriod) {
   Playback clock(30000, 1001);
   clock.shown(0, t0);
   EXPECT_EQ(clock.due(0, t0), t0 + nanoseconds(33'366'666));
+}
+
+TEST(NominalPeriod, IsWholeNanosecondsOfAKnownRate) {
+  EXPECT_EQ(nominal_period(25, 1), nanoseconds(40'000'000));
+  EXPECT_EQ(nominal_period(30000, 1001), nanoseconds(33'366'666));
+}
+
+TEST(NominalPeriod, IsEmptyForAnUnknownRateWhichFallsBackToThirty) {
+  EXPECT_FALSE(nominal_period(0, 1).has_value());
+  EXPECT_FALSE(nominal_period(30, 0).has_value());
+  EXPECT_EQ(kFallbackPeriod, nanoseconds(33'333'333));
 }
 
 TEST(Playback, ALoopRestartAnchorsAtTheFirstPts) {

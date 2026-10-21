@@ -113,6 +113,14 @@ std::uint64_t StreamPlayer::frame_count() const noexcept {
   return reader_->stats()[track_].records;
 }
 
+const stream::TrackStats& StreamPlayer::track_stats() const noexcept {
+  return reader_->stats()[track_];
+}
+
+stream::Rate StreamPlayer::rate() const noexcept {
+  return reader_->session().tracks[track_].rate;
+}
+
 core::Status StreamPlayer::start(core::Device& device,
                                  core::Allocator& allocator,
                                  const recon::mesh::MarchingCubesConfig& config,
@@ -228,13 +236,18 @@ core::Status StreamPlayer::play_track() {
     std::uint64_t index = 0;  // the next record's place in this pass
     bool shown = false;       // a frame was shown in this pass
     core::Status first_skip;  // the first record or frame it skipped
+    // The next frame's stamp's rows, which other tracks' records add to.
+    core::StageMetrics stages;
     for (;;) {
       Step step(*this);  // the record's read and decode
       if (!step) {
         return {};
       }
       stream::Record record;
-      const core::Result<bool> more = reader_->next(&pos, &record);
+      const core::Result<bool> more = [&] {
+        const core::StageScope read(stages, "read");
+        return reader_->next(&pos, &record);
+      }();
       if (more.ok() && !more.value()) {
         break;  // the end
       }
@@ -246,14 +259,19 @@ core::Status StreamPlayer::play_track() {
       const std::uint64_t frame = index;
       if (status.ok()) {
         ++index;
+        const core::StageScope read(stages, "read");
         status = reader_->read(record, &payload);
       }
-      if (status.ok() && !grid_.has_value()) {
-        status = make_grid(payload);
-      }
+      core::StageMetrics decoded;  // recon's rows, for the device's half
       if (status.ok()) {
-        status = codec::decode_growing(*decoder_, payload.data(),
-                                       payload.size(), *grid_);
+        const core::StageScope decode(stages, "decode");
+        if (!grid_.has_value()) {
+          status = make_grid(payload);
+        }
+        if (status.ok()) {
+          status = codec::decode_growing(*decoder_, payload.data(),
+                                         payload.size(), *grid_, &decoded);
+        }
       }
       if (!status.ok()) {
         if (!skippable(status)) {
@@ -262,13 +280,22 @@ core::Status StreamPlayer::play_track() {
         if (first_skip.ok()) {
           first_skip = std::move(status);
         }
+        stages.clear();
         continue;
+      }
+      // "codec decode" alone has a device span; its breakdowns are host time.
+      for (const core::StageRow& row : decoded.rows()) {
+        if (row.has_gpu) {
+          stages.add_gpu("decode", row.gpu_ms);
+        }
       }
       step.end();
       if (!wait_due(record.info.pts_ns)) {
         return {};
       }
-      VKC_ASSIGN(const bool published, publish({frame, record.info.pts_ns}));
+      VKC_ASSIGN(const bool published,
+                 publish({frame, record.info.pts_ns, record.size,
+                          record.info.key, std::exchange(stages, {})}));
       if (!published) {
         return {};
       }
@@ -316,7 +343,7 @@ bool StreamPlayer::wait_due(std::uint64_t pts_ns) {
   return true;
 }
 
-core::Result<bool> StreamPlayer::publish(const FrameStamp& stamp) {
+core::Result<bool> StreamPlayer::publish(FrameStamp stamp) {
   while (!exchange_->release_and_may_publish(*extractor_)) {
     exchange_->wait_collected(kCollectWait, quit_);
     if (quit_) {
@@ -327,9 +354,12 @@ core::Result<bool> StreamPlayer::publish(const FrameStamp& stamp) {
   if (!step) {
     return false;
   }
-  VKC_ASSIGN(const recon::mesh::DeviceMesh mesh,
-             extractor_->extract_device(*grid_));
-  exchange_->publish(mesh, stamp);
+  core::Result<recon::mesh::DeviceMesh> mesh = [&] {
+    const core::StageScope extract(stamp.stages, "mesh");
+    return extractor_->extract_device(*grid_);
+  }();
+  VKC_TRY(mesh.status());
+  exchange_->publish(mesh.value(), std::move(stamp));
   return true;
 }
 

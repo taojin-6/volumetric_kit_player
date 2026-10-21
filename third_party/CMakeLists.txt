@@ -42,13 +42,15 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------
-# The swapchain on a shared device, the mesh pipeline, the orbit camera and the
-# controls panel (ImGui). Its tests, examples, install and -Werror stay off in a
-# subproject. Its GLFW tier is built with the desktop app alone, so not on iOS:
-# the library links no window system (the top-level CMakeLists.txt checks). The
-# pin is gfx main at #148's merge (b35520f): ImGuiOverlayConfig's
-# min_frame_height, beside #146's windowing::SurfaceSource and glfw::Library,
-# #145's ImGuiTouch, #144's sRGB ImGui fix and #143's orbit drag gestures.
+# The swapchain on a shared device, the mesh pipeline, the orbit camera, the
+# controls and stats panels (ImGui) and the profiler that times the draw. Its
+# tests, examples, install and -Werror stay off in a subproject. Its GLFW tier
+# is built with the desktop app alone, so not on iOS: the library links no
+# window system (the top-level CMakeLists.txt checks). The pin is gfx main at
+# #148's merge (b35520f): ImGuiOverlayConfig's min_frame_height, and
+# ui::begin_collapsible_panel and ui::draw_stage_table for the stats, beside
+# #146's windowing::SurfaceSource and glfw::Library, #145's ImGuiTouch, #144's
+# sRGB ImGui fix and #143's orbit drag gestures.
 set(VG_WITH_GLFW ${VP_DESKTOP_APP})
 FetchContent_Declare(
   volumetric_kit_gfx
