@@ -65,13 +65,14 @@ class PlaybackStats {
   ///         @p now: (n - 1) over the time from the first to the last; 0
   ///         below 2, or for all taken at once.
   double frames_per_s(Clock::time_point now) const;
-  /// @return The Mbit/s their records brought, over the same frames: 8 x
-  ///         the `record_bytes` of each but the first, over the time from the
-  ///         first to the last; empty below 2, or for all taken at once.
+  /// @return The Mbit/s the records brought over the second up to @p now, by
+  ///         when their frames were published (`FrameStamp::published`), not
+  ///         taken: 8 x the `record_bytes` of each frame published in it but
+  ///         the first, over the time from the first's publish to the last's;
+  ///         empty below 2, or for all published at once.
   std::optional<double> rolling_mbit_per_s(Clock::time_point now) const;
-  /// @return Records received a second, over the same frames: the `records`
-  ///         of each but the first, over the time from the first to the
-  ///         last; 0 below 2, or for all taken at once.
+  /// @return The records a second, as @ref rolling_mbit_per_s: their frames'
+  ///         `records` in place of their bytes; 0 where it is empty.
   double records_per_s(Clock::time_point now) const;
   /// @return Each row of the newest frame's stamp, in its order, as its mean
   ///         over the window: CPU over every frame in it, GPU over those
@@ -80,17 +81,20 @@ class PlaybackStats {
   std::vector<core::StageRow> stage_means() const;
 
  private:
-  // A frame taken: when, and its records' count and bytes.
+  // A frame taken: when, when it was published, and its records' count and
+  // bytes.
   struct Taken {
     Clock::time_point at;
+    Clock::time_point published;
     std::uint64_t records = 0;
     std::uint64_t bytes = 0;
   };
 
-  // The sum of `value` over the frames taken in the second up to `now`, each
-  // but the first, a second from the first to the last; empty below 2, or for
-  // all taken at once.
+  // The sum of `value` over the frames whose `when` is in the second up to
+  // `now`, each but the first, a second from the first's `when` to the
+  // last's; empty below 2, or for all at once.
   std::optional<double> per_second(Clock::time_point now,
+                                   Clock::time_point Taken::* when,
                                    double (*value)(const Taken&)) const;
 
   recon::stream::TrackStats track_;

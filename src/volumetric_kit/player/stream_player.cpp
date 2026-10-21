@@ -576,6 +576,7 @@ core::Status StreamPlayer::mesh_and_publish(FrameStamp stamp) {
     return extractor_->extract_device(*grid_);
   }();
   VKC_TRY(mesh.status());
+  stamp.published = Clock::now();
   exchange_->publish(mesh.value(), std::move(stamp));
   return {};
 }

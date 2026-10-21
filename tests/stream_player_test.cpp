@@ -30,18 +30,19 @@
 // records slower than their decode are meshed once nothing newer has come,
 // and records faster still show a newer frame every 100 ms or so; a consumer
 // that takes nothing for 1.5 s leaves status() OK, and its next take is
-// followed by the newest frame; a server that goes away is a retry with its
-// bare reason, a new one on its port, at another voxel size, gives frames
-// again, and a park then leaves no reason; a park closes the connection
-// within kClosed, 50 times at seeded points as records flow, and once with
-// none coming; an unpark joins at the newest key; bytes that are no stream
-// and a name that does not resolve show why, with status() OK; a park ends
-// the wait to retry, so the unpark connects at once; and a stop is prompt
-// while a refused connect waits to retry, connected and idle, and parked.
-// On the host: open refuses what it cannot play, and connect an empty host
-// or port 0. The device tests skip with no device. A stop that no control
-// can wake, such as one lost in the exchange's wait, fails only on ctest's
-// timeout.
+// followed by the newest frame, while PlaybackStats fed as the view feeds it
+// reads no spike in the records a second; a server that goes away is a retry
+// with its bare reason, a new one on its port, at another voxel size, gives
+// frames again, and a park then leaves no reason; a park closes the
+// connection within kClosed, 50 times at seeded points as records flow, and
+// once with none coming; an unpark joins at the newest key; bytes that are
+// no stream and a name that does not resolve show why, with status() OK; a
+// park ends the wait to retry, so the unpark connects at once; and a stop is
+// prompt while a refused connect waits to retry, connected and idle, and
+// parked. On the host: open refuses what it cannot play, and connect an
+// empty host or port 0. The device tests skip with no device. A stop that no
+// control can wake, such as one lost in the exchange's wait, fails only on
+// ctest's timeout.
 
 #include "volumetric_kit/player/stream_player.hpp"
 
@@ -82,6 +83,7 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/player/playback_stats.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/networking/stream_server.hpp"
 #include "volumetric_kit/recon/stream/chunks.hpp"
@@ -98,6 +100,7 @@ using volumetric_kit::player::FrameExchange;
 using volumetric_kit::player::FrameStamp;
 using volumetric_kit::player::LiveState;
 using volumetric_kit::player::LiveStatus;
+using volumetric_kit::player::PlaybackStats;
 using volumetric_kit::player::StreamPlayer;
 using vp_test::kFrames;
 using vp_test::kIntraPeriod;
@@ -1500,6 +1503,40 @@ TEST_F(LivePlayerTest, AConsumerTakingNothingLeavesStatusOkThenGetsTheNewest) {
   ASSERT_TRUE(next.has_value());
   EXPECT_GE(next->index, newest);
   EXPECT_GT(next->records, 1u);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// The same pause, with each frame taken into PlaybackStats as the view takes
+// it: the frame that waited, then the next, which stands for every record of
+// the pause, come a moment apart, yet the records a second read at most twice
+// the flow's; and a second of frames on, they read again.
+TEST_F(LivePlayerTest, AConsumerPauseLeavesTheRecordsASecondAtTheFlows) {
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  const Publisher flow(*server, recording_, kFlow);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  PlaybackStats stats(player->track_stats(), player->rate());
+  const auto taken = [&] {
+    const std::optional<FrameStamp> frame = take(kArrival);
+    if (frame) {
+      stats.add_frame(*frame, PlaybackStats::Clock::now());
+    }
+    return frame.has_value();
+  };
+  constexpr double kMost = 2.0 * static_cast<double>(1s / kFlow);
+  ASSERT_TRUE(taken());
+  std::this_thread::sleep_for(1500ms);
+  ASSERT_TRUE(taken());  // the frame that waited
+  ASSERT_TRUE(taken());
+  EXPECT_LE(stats.records_per_s(PlaybackStats::Clock::now()), kMost);
+  const SteadyClock::time_point until = SteadyClock::now() + 1s;
+  while (SteadyClock::now() < until) {
+    ASSERT_TRUE(taken());
+  }
+  const double records = stats.records_per_s(PlaybackStats::Clock::now());
+  EXPECT_GT(records, 0.0);
+  EXPECT_LE(records, kMost);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 

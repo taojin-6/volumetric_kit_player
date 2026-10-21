@@ -42,8 +42,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   newest; a connection that ends or is refused is retried about every
   second, its reason on the status line (`LiveStatus`), and a park closes
   it. Live, the stats show the bitrate and records a second over the last
-  second (`FrameStamp::records`, `record_bytes`). `tests/vp_live_probe`
-  plays one with no window, on a Mac.
+  second (`FrameStamp::records`, `record_bytes`, `published`).
+  `tests/vp_live_probe` plays one with no window, on a Mac.
 
 ### Changed
 

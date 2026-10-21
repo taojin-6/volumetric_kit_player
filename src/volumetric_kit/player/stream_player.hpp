@@ -99,6 +99,8 @@ struct FrameStamp {
   /// included: 1 for a file; live, more when only the newest was meshed.
   std::uint64_t records = 1;
   std::uint64_t record_bytes = 0;  ///< Their payload bytes.
+  /// When the worker published it, so when its records had all come.
+  Playback::Clock::time_point published{};
 };
 
 /// @brief The handoff of the worker's meshes to the thread that draws them.

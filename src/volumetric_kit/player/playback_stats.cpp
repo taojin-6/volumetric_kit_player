@@ -37,10 +37,11 @@ PlaybackStats::PlaybackStats(const recon::stream::TrackStats& track,
 }
 
 void PlaybackStats::add_frame(const FrameStamp& stamp, Clock::time_point now) {
+  // A frame taken over a second ago was published over a second ago too.
   while (!taken_.empty() && now - taken_.front().at >= kRateSpan) {
     taken_.pop_front();
   }
-  taken_.push_back({now, stamp.records, stamp.record_bytes});
+  taken_.push_back({now, stamp.published, stamp.records, stamp.record_bytes});
   if (stages_.size() == window_) {
     stages_.pop_front();
   }
@@ -61,14 +62,16 @@ std::optional<double> PlaybackStats::mean_mbit_per_s() const noexcept {
 }
 
 double PlaybackStats::frames_per_s(Clock::time_point now) const {
-  return per_second(now, [](const Taken&) { return 1.0; }).value_or(0.0);
+  return per_second(now, &Taken::at, [](const Taken&) { return 1.0; })
+      .value_or(0.0);
 }
 
 std::optional<double> PlaybackStats::rolling_mbit_per_s(
     Clock::time_point now) const {
-  const std::optional<double> bits = per_second(now, [](const Taken& taken) {
-    return 8.0 * static_cast<double>(taken.bytes);
-  });
+  const std::optional<double> bits =
+      per_second(now, &Taken::published, [](const Taken& taken) {
+        return 8.0 * static_cast<double>(taken.bytes);
+      });
   if (!bits) {
     return std::nullopt;
   }
@@ -76,7 +79,7 @@ std::optional<double> PlaybackStats::rolling_mbit_per_s(
 }
 
 double PlaybackStats::records_per_s(Clock::time_point now) const {
-  return per_second(now,
+  return per_second(now, &Taken::published,
                     [](const Taken& taken) {
                       return static_cast<double>(taken.records);
                     })
@@ -84,11 +87,12 @@ double PlaybackStats::records_per_s(Clock::time_point now) const {
 }
 
 std::optional<double> PlaybackStats::per_second(
-    Clock::time_point now, double (*value)(const Taken&)) const {
+    Clock::time_point now, Clock::time_point Taken::* when,
+    double (*value)(const Taken&)) const {
   const auto first = std::find_if(
       taken_.begin(), taken_.end(),
-      [&](const Taken& taken) { return now - taken.at < kRateSpan; });
-  if (taken_.end() - first < 2 || taken_.back().at == first->at) {
+      [&](const Taken& taken) { return now - taken.*when < kRateSpan; });
+  if (taken_.end() - first < 2 || taken_.back().*when == (*first).*when) {
     return std::nullopt;
   }
   double sum = 0.0;
@@ -96,7 +100,8 @@ std::optional<double> PlaybackStats::per_second(
     sum += value(*taken);
   }
   return sum /
-         std::chrono::duration<double>(taken_.back().at - first->at).count();
+         std::chrono::duration<double>(taken_.back().*when - (*first).*when)
+             .count();
 }
 
 std::vector<core::StageRow> PlaybackStats::stage_means() const {

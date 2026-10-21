@@ -6,9 +6,10 @@
 // live stream's); the nominal rate, and none when unknown; the stage means
 // over the last frames, as many as the nominal rate's frames a second (30
 // when unknown, at most 240), CPU over every frame and GPU over those that
-// have one, held while no frame comes; and the rate frames are taken at, and
-// the bitrate and records a second their records brought, over the last
-// second.
+// have one, held while no frame comes; the rate frames are taken at over the
+// last second; and the bitrate and records a second their records brought,
+// over the frames published in the last second, so a pause in taking does
+// not crowd them into a moment.
 
 #include "volumetric_kit/player/playback_stats.hpp"
 
@@ -189,27 +190,30 @@ TEST(PlaybackStats, NoMeanFromAnEmptyTrack) {
   EXPECT_FALSE(stats.nominal_fps().has_value());
 }
 
-// A frame taken after `records` records of `bytes` bytes in all.
-FrameStamp after(std::uint64_t records, std::uint64_t bytes) {
+// A frame published at `at` after `records` records of `bytes` bytes in all.
+FrameStamp after(std::uint64_t records, std::uint64_t bytes, TimePoint at) {
   FrameStamp stamp;
   stamp.records = records;
   stamp.record_bytes = bytes;
+  stamp.published = at;
   return stamp;
 }
 
-// Over the frames taken in the last second, each but the first, which counts
-// the records before the window.
+// Over the frames published in the last second, each but the first, which
+// counts the records before the window; here each is taken as it is
+// published.
 TEST(PlaybackStats, TheRollingBitrateAndRecordsCoverTheLastSecond) {
   PlaybackStats stats({}, {});
   EXPECT_FALSE(stats.rolling_mbit_per_s(t0).has_value());
   EXPECT_EQ(stats.records_per_s(t0), 0.0);
-  stats.add_frame(after(50, 1'000'000), t0);
+  stats.add_frame(after(50, 1'000'000, t0), t0);
   EXPECT_FALSE(stats.rolling_mbit_per_s(t0).has_value()) << "below 2 frames";
   EXPECT_EQ(stats.records_per_s(t0), 0.0);
   // 4 more 200 ms apart, of 2 records and 25 kB each: 0.8 Mbit and 8 records
   // over 0.8 s.
   for (int i = 1; i <= 4; ++i) {
-    stats.add_frame(after(2, 25'000), t0 + milliseconds(200 * i));
+    const TimePoint at = t0 + milliseconds(200 * i);
+    stats.add_frame(after(2, 25'000, at), at);
   }
   const TimePoint now = t0 + milliseconds(800);
   ASSERT_TRUE(stats.rolling_mbit_per_s(now).has_value());
@@ -224,12 +228,44 @@ TEST(PlaybackStats, TheRollingBitrateAndRecordsCoverTheLastSecond) {
   // A second with none: no figure.
   EXPECT_FALSE(stats.rolling_mbit_per_s(t0 + seconds(3)).has_value());
   EXPECT_EQ(stats.records_per_s(t0 + seconds(3)), 0.0);
-  // Taken all at once: no time to divide by.
+  // Published all at once: no time to divide by.
   PlaybackStats burst({}, {});
-  burst.add_frame(after(1, 1'000), t0);
-  burst.add_frame(after(1, 1'000), t0);
+  burst.add_frame(after(1, 1'000, t0), t0);
+  burst.add_frame(after(1, 1'000, t0), t0);
   EXPECT_FALSE(burst.rolling_mbit_per_s(t0).has_value());
   EXPECT_EQ(burst.records_per_s(t0), 0.0);
+}
+
+// A pause in taking, as a minimized window's: the frame that waited is taken
+// 10 s late, and the next, 2 ms after it, stands for every record of the
+// pause. Over when the frames were published, the figures stay the records'
+// own, 10 a second of 1 kB (0.08 Mbit/s), rather than the pause's records
+// over those 2 ms.
+TEST(PlaybackStats, APauseInTakingDoesNotCrowdItsRecordsIntoAMoment) {
+  constexpr double kRecords = 10.0;  // a second
+  constexpr double kMbit = kRecords * 8'000 * 1e-6;
+  PlaybackStats stats({}, {});
+  // A second of frames of a record each, taken as they are published.
+  for (int i = 0; i <= 10; ++i) {
+    const TimePoint at = t0 + milliseconds(100 * i);
+    stats.add_frame(after(1, 1'000, at), at);
+  }
+  const TimePoint restored = t0 + milliseconds(11'100);
+  stats.add_frame(after(1, 1'000, t0 + milliseconds(1'100)), restored);
+  stats.add_frame(after(100, 100'000, restored + milliseconds(1)),
+                  restored + milliseconds(2));
+  EXPECT_LE(stats.records_per_s(restored + milliseconds(2)), kRecords + 1e-9);
+  EXPECT_LE(stats.rolling_mbit_per_s(restored + milliseconds(2)).value_or(0.0),
+            kMbit + 1e-9);
+  // Then a record each 100 ms again.
+  for (int i = 1; i <= 10; ++i) {
+    SCOPED_TRACE(::testing::Message() << "frame " << i << " after the pause");
+    const TimePoint at = restored + milliseconds(1 + 100 * i);
+    stats.add_frame(after(1, 1'000, at), at);
+    EXPECT_NEAR(stats.records_per_s(at), kRecords, 1e-9);
+    ASSERT_TRUE(stats.rolling_mbit_per_s(at).has_value());
+    EXPECT_NEAR(*stats.rolling_mbit_per_s(at), kMbit, 1e-9);
+  }
 }
 
 }  // namespace

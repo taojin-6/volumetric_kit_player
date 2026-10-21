@@ -133,13 +133,14 @@ TEST(StatsLines, LiveTheyShowTheLastSecondsBitrateAndRecords) {
   EXPECT_EQ(stats_lines(stats, std::nullopt, 0, t0, true),
             (Lines{"bitrate - Mbit/s · last 1 s", "frame - · - kB · - k tris",
                    "rate 0.0 fps · 0 rec/s"}));
-  // 11 frames 100 ms apart, each after 3 records of 12.5 kB: 3 Mbit/s, 30
-  // records a second.
+  // 11 frames 100 ms apart, each taken as it is published after 3 records of
+  // 12.5 kB: 3 Mbit/s, 30 records a second.
   FrameStamp taken = stamp_of(0, 12'500, false);
   taken.records = 3;
   taken.record_bytes = 3 * 12'500;
   for (int i = 0; i <= 10; ++i) {
-    stats.add_frame(taken, t0 + milliseconds(100 * i));
+    taken.published = t0 + milliseconds(100 * i);
+    stats.add_frame(taken, taken.published);
   }
   EXPECT_EQ(
       stats_lines(stats, taken, 1'200, t0 + seconds(1), true),
