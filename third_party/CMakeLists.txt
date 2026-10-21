@@ -13,9 +13,9 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first
 # (DECISIONS.md). The pin is core main at #42's merge (7757c13, 0.12.0): its iOS
 # module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT) and
-# answers glm. It is ahead of recon's and gfx's core pins (7a1219e, 1315d80),
-# which yield to it because the player declares the core first. The floor below
-# is that version, so an older FETCHCONTENT_SOURCE_DIR override is refused. The
+# answers glm. gfx pins the same core (#147); recon's pin (7a1219e) is older and
+# yields to it because the player declares the core first. The floor below is
+# that version, so an older FETCHCONTENT_SOURCE_DIR override is refused. The
 # player installs nothing, so the core's install rules are off too.
 set(VKC_WITH_VULKAN ON)
 set(VKC_INSTALL OFF)
@@ -45,24 +45,15 @@ FetchContent_MakeAvailable(volumetric_kit_recon)
 # The swapchain on a shared device, the mesh pipeline, the orbit camera and the
 # controls panel (ImGui). Its tests, examples, install and -Werror stay off in a
 # subproject. Its GLFW tier is built with the desktop app alone, so not on iOS:
-# the library links no window system (the top-level CMakeLists.txt checks).
-# gfx's own core pin yields to the one above. The pin is gfx main at #146's
-# merge (77f421e): windowing::SurfaceSource and glfw::Library, beside #143's
-# orbit drag gestures, #144's sRGB ImGui fix and #145's ImGuiTouch.
-# TODO(G1): PlayerViewConfig::ui_min_frame_height sets gfx's
-# ImGuiOverlayConfig::min_frame_height (volumetric_kit_gfx
-# feat/ui-touch-panels), which this pin lacks, so until that PR merges this
-# branch builds only with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_GFX on its
-# checkout. Once it merges, and before this branch merges, pin its merge commit
-# here and wherever else the gfx pin is recorded (today nowhere else, no CI
-# cache key included), restate the pin paragraph above, and in the core's
-# paragraph drop gfx's core pin 1315d80, as gfx #147 pins the core at 7757c13
-# like the player; then remove this block.
+# the library links no window system (the top-level CMakeLists.txt checks). The
+# pin is gfx main at #148's merge (b35520f): ImGuiOverlayConfig's
+# min_frame_height, beside #146's windowing::SurfaceSource and glfw::Library,
+# #145's ImGuiTouch, #144's sRGB ImGui fix and #143's orbit drag gestures.
 set(VG_WITH_GLFW ${VP_DESKTOP_APP})
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  GIT_TAG 77f421e58d83f90dfc9401ed7492e88dbfe875c4)
+  GIT_TAG b35520f5c6068e93bef0dccadd3ef1fa10fa9c6b)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
 if(VP_BUILD_TESTS)
