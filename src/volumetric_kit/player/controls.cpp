@@ -3,8 +3,6 @@
 
 #include "volumetric_kit/player/controls.hpp"
 
-#include <cstdio>
-
 #include "imgui.h"
 
 namespace volumetric_kit::player {
@@ -52,15 +50,13 @@ std::string status_line(const std::optional<FrameStamp>& shown,
   if (!shown) {
     return "loading";
   }
-  char ms[32];
-  std::snprintf(ms, sizeof ms, "%.1f ms", shown->decode_mesh_ms);
   std::string line = "frame " + std::to_string(shown->index + 1) + "/" +
                      std::to_string(frame_count) + " · " +
                      (playing ? "playing" : "paused");
   if (loop) {
     line += " · loop";
   }
-  return line + " · " + ms;
+  return line;
 }
 
 }  // namespace volumetric_kit::player

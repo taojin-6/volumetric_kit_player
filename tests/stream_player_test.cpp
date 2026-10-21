@@ -367,7 +367,6 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
     ASSERT_TRUE(frame.has_value()) << "no frame " << i;
     EXPECT_EQ(frame->index, i);
     EXPECT_EQ(frame->pts_ns, pts_of(i));
-    EXPECT_GT(frame->decode_mesh_ms, 0.0);
   }
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();

@@ -36,6 +36,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   control at least 44 pt tall (`PlayerViewConfig::ui_min_frame_height`, over
   gfx's `min_frame_height`). Play/Pause and Step are `kButtonEms` (4.5) font
   sizes wide, rather than three frame heights.
+- The status line no longer shows the frame's decode and mesh time;
+  `FrameStamp::decode_mesh_ms` is gone.
 
 ### Fixed
 

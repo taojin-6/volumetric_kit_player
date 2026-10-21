@@ -30,11 +30,6 @@ bool skippable(const core::Status& status) {
          status.domain() == core::Status::Code::NotFound;
 }
 
-double ms_since(Clock::time_point start) {
-  return std::chrono::duration<double, std::milli>(Clock::now() - start)
-      .count();
-}
-
 // The error that ends a pass of the track showing no frame, with the first
 // refusal in it.
 core::Status nothing_shown(core::Status first_skip) {
@@ -256,7 +251,6 @@ core::Status StreamPlayer::play_track() {
       if (status.ok() && !grid_.has_value()) {
         status = make_grid(payload);
       }
-      const Clock::time_point start = Clock::now();
       if (status.ok()) {
         status = codec::decode_growing(*decoder_, payload.data(),
                                        payload.size(), *grid_);
@@ -270,13 +264,11 @@ core::Status StreamPlayer::play_track() {
         }
         continue;
       }
-      const double decode_ms = ms_since(start);
       step.end();
       if (!wait_due(record.info.pts_ns)) {
         return {};
       }
-      VKC_ASSIGN(const bool published,
-                 publish({frame, record.info.pts_ns, decode_ms}));
+      VKC_ASSIGN(const bool published, publish({frame, record.info.pts_ns}));
       if (!published) {
         return {};
       }
@@ -335,11 +327,9 @@ core::Result<bool> StreamPlayer::publish(const FrameStamp& stamp) {
   if (!step) {
     return false;
   }
-  const Clock::time_point start = Clock::now();
   VKC_ASSIGN(const recon::mesh::DeviceMesh mesh,
              extractor_->extract_device(*grid_));
-  exchange_->publish(mesh, {stamp.index, stamp.pts_ns,
-                            stamp.decode_mesh_ms + ms_since(start)});
+  exchange_->publish(mesh, stamp);
   return true;
 }
 

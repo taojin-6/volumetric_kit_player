@@ -10,14 +10,14 @@ is implemented.
 the sizes.
 
 - **The iOS shell sets `ui_scale` 1.3 and `ui_min_frame_height` 44,** which
-  the view passes to gfx's `ImGuiOverlayConfig`: 17-pt text, near iOS body
-  text, and every control at least 44 pt tall, Apple's least touch target.
-  The desktop keeps 1 and 0. Why: one scale set both, and the 2 that made the
-  targets big enough made the panel wider than a phone in portrait.
+  the view passes to gfx's `ImGuiOverlayConfig`; the desktop keeps 1 and 0.
+  Why: one scale set both: at 2 the targets were still 38 pt tall, and the
+  panel was wider than a phone in portrait.
 - **Play/Pause and Step are `kButtonEms` (4.5) font sizes wide,** not frame
   heights. Why: the frame height now carries the touch padding, and three of
-  them would take a phone's row past 375 pt, the narrowest phone's width; at
-  4.5 em "Pause" fits at any scale, and the row is 279 pt.
+  them would take a phone's row past 375 pt, the narrowest phone's width.
+- **The status line has no ms.** Why: with the frame's decode and mesh time
+  on it, the panel outgrew a 375-pt phone while playing.
 
 **Not SwiftUI,** for the panel on iOS:
 

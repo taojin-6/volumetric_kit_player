@@ -40,7 +40,7 @@ void draw_controls(StreamPlayer& player,
 /// @brief The status line under the controls.
 ///
 /// @code
-/// // "frame 12/150 · playing · loop · 4.1 ms"
+/// // "frame 12/150 · playing · loop"
 /// const std::string line = status_line(stamp, 150, true, true);
 /// @endcode
 /// @param shown        The last stream frame drawn; empty before the first.
@@ -48,9 +48,8 @@ void draw_controls(StreamPlayer& player,
 /// @param playing      Whether it plays, rather than being paused.
 /// @param loop         Whether it loops.
 /// @return The frame drawn, counted from 1, over the track's; `playing` or
-///         `paused`; `loop` when on; and the frame's decode and mesh time:
-///         "frame 12/150 · playing · loop · 4.1 ms". "loading" before the
-///         first.
+///         `paused`; and `loop` when on: "frame 12/150 · playing · loop".
+///         "loading" before the first.
 std::string status_line(const std::optional<FrameStamp>& shown,
                         std::uint64_t frame_count, bool playing, bool loop);
 

@@ -21,7 +21,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cfloat>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -51,15 +53,16 @@ namespace core = volumetric_kit::core;
 namespace gfx = volumetric_kit::gfx;
 namespace recon = volumetric_kit::recon;
 using namespace std::chrono_literals;
+using volumetric_kit::player::FrameStamp;
 using volumetric_kit::player::kControlsWindow;
 using volumetric_kit::player::PlayerView;
 using volumetric_kit::player::PlayerViewConfig;
+using volumetric_kit::player::status_line;
 using volumetric_kit::player::StreamPlayer;
 using SteadyClock = std::chrono::steady_clock;
 
 constexpr VkExtent2D kExtent{320, 240};
 // The narrowest phone in portrait: 375 x 667 points, at 3 pixels a point.
-constexpr float kPhoneWidth = 375.0f;
 constexpr float kPhonePixelsPerPoint = 3.0f;
 constexpr VkExtent2D kPhone{1125, 2001};
 // The iOS shell's sizes (PlayerViewController.mm).
@@ -223,6 +226,21 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
       EXPECT_TRUE(present());
     }
     return item;
+  }
+
+  // The widest ImGui lets an auto-sized panel grow, in points: the work area
+  // less its safe-area padding on each side. The view's context is current.
+  static float widest_panel() {
+    return ImGui::GetMainViewport()->WorkSize.x -
+           2.0f * ImGui::GetStyle().DisplaySafeAreaPadding.x;
+  }
+
+  // The width of `text` in `panel`'s font as of the last frame, in points,
+  // rounded up as ImGui rounds a line's. The view's context is current.
+  static float text_width(const ImGuiWindow& panel, const std::string& text) {
+    ImFont* const font = ImGui::GetIO().Fonts->Fonts[0];
+    return std::ceil(
+        font->CalcTextSizeA(panel.FontRefSize, FLT_MAX, 0.0f, text.c_str()).x);
   }
 
   vp_test::Scratch scratch_;
@@ -413,10 +431,10 @@ TEST_F(PlayerViewTest, ThePanelDrawsAtAPhonesScale) {
   EXPECT_TRUE(fonts[0]->IsGlyphInFont(0x00B7));
 }
 
-// On the narrowest phone, at the iOS shell's sizes: a finger anywhere in the
-// 44 points below the row's top lands on each control, and the row fits
-// across the display. Before the first frame the status line says "loading",
-// so the row is the panel's widest line.
+// On the narrowest phone, at the iOS shell's sizes: a fingertip's square at
+// each control's top left lands on it, "Pause" fits its button, and the panel
+// fits across, both its row and the widest status line, a 5-digit track's
+// playing in a loop.
 TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
   extent_ = kPhone;
   pixels_per_point_ = kPhonePixelsPerPoint;
@@ -429,16 +447,27 @@ TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
   ImGui::SetCurrentContext(view_->ui_context());
   ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
   ASSERT_NE(panel, nullptr);
-  // The width ImGui fits the panel to, before it caps it at the display's.
-  EXPECT_LE(panel->ContentSize.x + 2.0f * panel->WindowPadding.x, kPhoneWidth);
+  // The width ImGui fits the panel to. Before the first frame the status
+  // line says "loading", so it fits the row.
+  const float padding = 2.0f * panel->WindowPadding.x;
+  EXPECT_LE(panel->ContentSize.x + padding, widest_panel());
+  FrameStamp last;
+  last.index = 99'998;
+  EXPECT_LE(text_width(*panel, status_line(last, 99'999, true, true)) + padding,
+            widest_panel());
+  EXPECT_GE(
+      vp_test::control_size(*panel, 0).x,
+      text_width(*panel, "Pause") + 2.0f * ImGui::GetStyle().FramePadding.x);
   const ImGuiID controls[] = {panel->GetID("###play"), panel->GetID("Step"),
                               panel->GetID("Loop")};
-  const float top = panel->Pos.y + panel->WindowPadding.y;
   for (int i = 0; i < 3; ++i) {
-    const float x = vp_test::control_middle(*panel, i).x;
-    EXPECT_EQ(item_under({x, top + 0.5f}), controls[i]) << "control " << i;
-    EXPECT_EQ(item_under({x, top + kFingertip - 0.5f}), controls[i])
-        << "control " << i;
+    const glm::vec2 corner = vp_test::control_top_left(*panel, i);
+    for (const float dx : {0.5f, kFingertip - 0.5f}) {
+      for (const float dy : {0.5f, kFingertip - 0.5f}) {
+        EXPECT_EQ(item_under(corner + glm::vec2(dx, dy)), controls[i])
+            << "control " << i << " at +" << dx << ", +" << dy;
+      }
+    }
   }
   // The fingers pressed nothing.
   EXPECT_FALSE(view_->player().playing());

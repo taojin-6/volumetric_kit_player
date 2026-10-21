@@ -39,12 +39,11 @@ TEST(StatusLine, SaysLoadingBeforeTheFirstFrame) {
   EXPECT_EQ(status_line(std::nullopt, 150, true, true), "loading");
 }
 
-TEST(StatusLine, NamesTheFrameFromOneThePlayStateLoopAndTime) {
-  const FrameStamp stamp{11, 440'000'000, 4.06};
+TEST(StatusLine, NamesTheFrameFromOneThePlayStateAndLoop) {
+  const FrameStamp stamp{11, 440'000'000};
   EXPECT_EQ(status_line(stamp, 150, true, true),
-            "frame 12/150 · playing · loop · 4.1 ms");
-  EXPECT_EQ(status_line(stamp, 150, false, false),
-            "frame 12/150 · paused · 4.1 ms");
+            "frame 12/150 · playing · loop");
+  EXPECT_EQ(status_line(stamp, 150, false, false), "frame 12/150 · paused");
 }
 
 // A 400 x 300-point display at 2 pixels per point, its bottom `inset` points
