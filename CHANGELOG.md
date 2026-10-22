@@ -60,6 +60,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Meshes share their vertices (`mesh_wiring`), so the mesh ring holds,
   and each draw fetches, about a third of the bytes: Rafa2's from 191 to
   59 MB. `PlayerView::mesh()` reads the drawn mesh's counts.
+- Live, the swapchain has two images (`view_swapchain`), so a frame shows
+  a vsync sooner; a file keeps gfx's default.
 
 ### Fixed
 

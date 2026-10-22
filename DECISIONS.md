@@ -54,6 +54,10 @@ chunks, joined at the newest key.
   decoder is kept, as a key resyncs it.
 - **No jitter buffer in v1.** Network jitter shows as judder. Add a bounded
   delay only if the owner sees judder.
+- **Two swapchain images live** (`view_swapchain`), FIFO still. Why: with
+  gfx's default, the surface's least + 1, a mesh taken waits behind one more
+  queued image, a vsync longer. A file keeps the default, as its pts paces
+  it.
 - **The panels live:** the controls are the status line alone, and the keys
   do nothing. The bitrate and records a second are over the last second, as
   a live stream has no track mean: the records each frame stands for

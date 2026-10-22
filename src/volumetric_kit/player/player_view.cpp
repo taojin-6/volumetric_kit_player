@@ -37,6 +37,17 @@ pipelines::LiveMesh live_mesh(const recon::mesh::DeviceMesh& mesh) {
 
 }  // namespace
 
+gfx::windowing::SwapchainConfig view_swapchain(VkExtent2D extent, bool live) {
+  gfx::windowing::SwapchainConfig config;
+  config.extent = extent;
+  config.preferred_present_mode = VK_PRESENT_MODE_FIFO_KHR;
+  config.depth_format = VK_FORMAT_D32_SFLOAT;
+  if (live) {
+    config.min_image_count = 2;
+  }
+  return config;
+}
+
 core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
     const gfx::windowing::SurfaceSource& surface, VkExtent2D extent,
     std::unique_ptr<StreamPlayer> player, const PlayerViewConfig& config) {
@@ -48,9 +59,7 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
         "PlayerView::create needs a drawable of at least 1 x 1");
   }
   app::WindowedAppConfig app_config;
-  app_config.swapchain.extent = extent;
-  app_config.swapchain.preferred_present_mode = VK_PRESENT_MODE_FIFO_KHR;
-  app_config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
+  app_config.swapchain = view_swapchain(extent, player->live());
   app_config.frames_in_flight = kFramesInFlight;
   app::WindowDeviceConfig device_config;
   device_config.instance.app_name = "volumetric_kit_player";

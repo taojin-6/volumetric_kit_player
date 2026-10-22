@@ -11,7 +11,9 @@
 // fit a phone and a fingertip at the iOS shell's sizes, as do the stats, with
 // the profiler's draw row in their table; ui_wants_pointer() follows a finger
 // on the panel and on the stats' header, not on their body; and teardown
-// mid-playback, the profiler attached, is clean. Whether the draw row has a
+// mid-playback, the profiler attached, is clean. A live view presents, on
+// the two images its swapchain asks for (checked on the host). Whether the
+// draw row has a
 // device half is not checked, as the view keeps its profiler to itself; the
 // owner checks the GPU column by hand. The view
 // makes its own shared device, validated as the test policy asks, so the
@@ -66,6 +68,7 @@ using volumetric_kit::player::PlayerViewConfig;
 using volumetric_kit::player::StatsPanel;
 using volumetric_kit::player::status_line;
 using volumetric_kit::player::StreamPlayer;
+using volumetric_kit::player::view_swapchain;
 using SteadyClock = std::chrono::steady_clock;
 
 constexpr VkExtent2D kExtent{320, 240};
@@ -604,6 +607,40 @@ TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {
   for (const std::string& warning : warnings()) {
     EXPECT_EQ(warning.find("continuing without it"), std::string::npos)
         << warning;
+  }
+}
+
+// Live, on its two swapchain images: frames present, with no sender (port 1
+// refuses) and so nothing to draw.
+TEST_F(PlayerViewTest, ALiveViewPresents) {
+  core::Result<std::unique_ptr<StreamPlayer>> live =
+      StreamPlayer::connect({"127.0.0.1", 1});
+  ASSERT_TRUE(live.ok()) << live.status().message();
+  core::Result<std::unique_ptr<PlayerView>> view =
+      PlayerView::create(surface_, extent_, std::move(live).value(), config());
+  ASSERT_TRUE(view.ok()) << view.status().message();
+  view_ = std::move(view).value();
+  core::Result<std::unique_ptr<gfx::ui::ImGuiTouch>> touch =
+      gfx::ui::ImGuiTouch::create(view_->ui_context());
+  ASSERT_TRUE(touch.ok()) << touch.status().message();
+  touch_ = std::move(touch).value();
+  for (int i = 0; i < 4; ++i) {
+    ASSERT_TRUE(present());
+  }
+  EXPECT_FALSE(view_->shown().has_value());
+}
+
+// On the host: FIFO and D32 depth; live, two images, so a mesh taken shows a
+// vsync sooner, and a file's, gfx's default.
+TEST(ViewSwapchain, LiveAsksForTwoImages) {
+  for (const bool live : {false, true}) {
+    const gfx::windowing::SwapchainConfig config =
+        view_swapchain(kExtent, live);
+    EXPECT_EQ(config.extent.width, kExtent.width);
+    EXPECT_EQ(config.extent.height, kExtent.height);
+    EXPECT_EQ(config.preferred_present_mode, VK_PRESENT_MODE_FIFO_KHR);
+    EXPECT_EQ(config.depth_format, VK_FORMAT_D32_SFLOAT);
+    EXPECT_EQ(config.min_image_count, live ? 2u : 0u) << "live " << live;
   }
 }
 
