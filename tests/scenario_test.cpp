@@ -140,8 +140,8 @@ TEST(ParseLiveSource, RefusesAnEmptyHost) {
       const core::Status refused = parse_live_source(host, port).status();
       EXPECT_EQ(refused.domain(), Code::InvalidArgument)
           << "'" << host << "', '" << port << "'";
-      EXPECT_NE(refused.message().find("no host"), std::string::npos)
-          << refused.message();
+      EXPECT_EQ(refused.message(),
+                "no host: type the sender's name or IPv4 address");
     }
   }
 }
