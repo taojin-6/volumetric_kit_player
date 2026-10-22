@@ -76,8 +76,9 @@ drawn, for CI's smoke run (DECISIONS.md).
 ### Live
 
 `--connect host[:port]`, in place of the path, plays what a sender serves
-(recon's `fuse_orbbec` with `output.serve`, or its `serve_stream`), on port
-47801 unless one is named. For the lab's sender, over the VPN:
+(recon's `serve_stream`, or its `fuse_orbbec` with `output.serve` in a recon
+whose `fuse_orbbec` serves), on port 47801 unless one is named. For the lab's
+sender, over the VPN:
 
 ```bash
 "$root/build/apps/volumetric_kit_player/volumetric_kit_player" \

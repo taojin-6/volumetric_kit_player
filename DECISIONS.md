@@ -8,8 +8,8 @@ is implemented.
 
 `StreamPlayer::connect`, `--connect host[:port]` and `tests/vp_live_probe`;
 the headers say what each call does. recon's `networking::StreamClient`
-reads what a `StreamServer` sends (fuse_orbbec, serve_stream): the `.vrst`
-chunks, joined at the newest key.
+reads what a `StreamServer` sends: the `.vrst` chunks, joined at the newest
+key.
 
 - **Decode every record, mesh the newest.** The worker decodes each record as
   it arrives, and meshes once the consumer has taken the last mesh: when
