@@ -8,7 +8,6 @@
 ///        sender: a worker thread decodes and meshes its frames on the GPU,
 ///        and hands each mesh to the thread that draws it.
 
-#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -354,15 +353,14 @@ class StreamPlayer {
 
   // The controls, the park, the connection and the worker's outcome, under
   // mutex_; changed_ wakes the worker on each change, and a park at each
-  // step's end, and taken() after each take. quit_ is written under it too,
-  // and read without it by start.
+  // step's end, and taken() after each take.
   mutable std::mutex mutex_;
   std::condition_variable changed_;
   Playback clock_;
   bool loop_ = true;
   bool parked_ = false;  // no step starts
   bool busy_ = false;    // a step is under way
-  std::atomic<bool> quit_{false};
+  bool quit_ = false;
   std::uint64_t last_pts_ns_ = 0;  // the last frame shown
   bool last_by_step_ = false;      // it went by a step
   LiveStatus live_status_;
