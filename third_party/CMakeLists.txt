@@ -12,13 +12,13 @@ include(FetchContent)
 # --- volumetric_kit_core -----------------------------------------------------
 # The device, Status/Result and the GPU test fixtures, declared first, and for
 # the desktop app the config tier, whose Player profile loads its scenario
-# (DECISIONS.md). The pin is core 0.17.0 (ef352a9), which adds that profile; its
-# iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT)
-# and answers glm. gfx's pin (7757c13, 0.12.0) and recon's (b992f12, 0.15.0) are
-# older and yield to it, as the player declares the core first. The floor below
-# is the pin's version (0.17.0), so an older FETCHCONTENT_SOURCE_DIR override is
-# refused. The player installs nothing, so the core's install rules are off too.
-# TODO(P1b): re-pin to C2's merge commit.
+# (DECISIONS.md). The pin is core main at #47's merge (f133d41, 0.17.0), which
+# adds that profile; its iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS
+# release (MoltenVK_ROOT) and answers glm. gfx's pin (7757c13, 0.12.0) and
+# recon's (b992f12, 0.15.0) are older and yield to it, as the player declares
+# the core first. The floor below is the pin's version (0.17.0), so an older
+# FETCHCONTENT_SOURCE_DIR override is refused. The player installs nothing, so
+# the core's install rules are off too.
 set(VKC_WITH_VULKAN ON)
 set(VKC_WITH_CONFIG ${VP_DESKTOP_APP})
 set(VKC_INSTALL OFF)
@@ -28,7 +28,7 @@ endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG ef352a9899a5a9d650aec18fdf1648f6e48bba90)
+  GIT_TAG f133d418dce30159bd002dc360c152bbdec4759a)
 FetchContent_MakeAvailable(volumetric_kit_core)
 set(_vp_core_tiers VULKAN)
 if(VP_DESKTOP_APP)
