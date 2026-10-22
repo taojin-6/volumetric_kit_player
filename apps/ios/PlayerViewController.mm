@@ -5,8 +5,10 @@
 // the CAMetalLayer, a display link ticks the view, every touch phase reaches
 // gfx's ImGuiTouch for the controls panel, three recognizers drive the camera
 // unless the panel holds the finger, and the scene's activation parks and
-// unparks the worker. It plays the first .vrst, by name, in the app's
-// Documents folder, which the Files app and Finder show (Info.plist.in).
+// unparks the worker. The Source button, at the top right, opens iOS's
+// dialog, which chooses a sender by host and port, or the first .vrst in the
+// app's Documents folder, which the Files app and Finder show (Info.plist.in);
+// the choice is kept for the next launch.
 
 #import "PlayerViewController.h"
 
@@ -15,18 +17,24 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include <glm/vec2.hpp>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/player/player_view.hpp"
+#include "volumetric_kit/player/scenario.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
 namespace vkc = volumetric_kit::core;
+namespace cfg = volumetric_kit::core::config;
 namespace vg = volumetric_kit::gfx;
 namespace vkp = volumetric_kit::player;
 
@@ -35,49 +43,71 @@ namespace {
 // How long a resign-active waits for the worker's step under way.
 constexpr std::chrono::seconds kParkWait{1};
 
-// The first .vrst, by name, in Documents; nil when there is none, and then
-// a note is left there, as the Files app may hide an empty app folder
-// (DECISIONS.md).
-NSString* FirstStream() {
+// The last choice, in the standard user defaults (DECISIONS.md): whether it
+// was a sender, and the sender's host and port as parse_live_source took
+// them, the port empty for the sender's default. The host and port stay for
+// the dialog when a file is chosen.
+NSString* const kLiveKey = @"live";
+NSString* const kHostKey = @"live.host";
+NSString* const kPortKey = @"live.port";
+
+// `text`, empty for nil.
+std::string Utf8(NSString* text) { return text != nil ? text.UTF8String : ""; }
+
+// The first .vrst in Documents, by name in Finder's order
+// (localizedStandardCompare:). With none, a note is left there, as the Files
+// app may hide an empty app folder (DECISIONS.md).
+std::optional<cfg::Source> DocumentsStream() {
   NSFileManager* files = NSFileManager.defaultManager;
   NSString* documents = NSSearchPathForDirectoriesInDomains(
                             NSDocumentDirectory, NSUserDomainMask, YES)
                             .firstObject;
-  NSArray<NSString*>* names = [files contentsOfDirectoryAtPath:documents
-                                                         error:nil];
-  names = [names sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
-  for (NSString* name in names) {
-    if ([name.pathExtension caseInsensitiveCompare:@"vrst"] == NSOrderedSame) {
-      return [documents stringByAppendingPathComponent:name];
+  NSArray<NSString*>* listed = [files contentsOfDirectoryAtPath:documents
+                                                          error:nil];
+  std::vector<std::string> names;
+  for (NSString* name in
+       [listed sortedArrayUsingSelector:@selector(localizedStandardCompare:)]) {
+    names.emplace_back(name.UTF8String);
+  }
+  std::optional<cfg::Source> found =
+      vkp::folder_source(documents.UTF8String, names);
+  if (!found) {
+    NSString* note = [documents
+        stringByAppendingPathComponent:@"Copy .vrst streams here.txt"];
+    NSData* text = [@"The player plays the first .vrst here, by name.\n"
+        dataUsingEncoding:NSUTF8StringEncoding];
+    if (![files fileExistsAtPath:note]) {
+      [files createFileAtPath:note contents:text attributes:nil];
     }
   }
-  NSString* note =
-      [documents stringByAppendingPathComponent:@"Copy .vrst streams here.txt"];
-  NSData* text = [@"The player plays the first .vrst here, by name.\n"
-      dataUsingEncoding:NSUTF8StringEncoding];
-  if (![files fileExistsAtPath:note]) {
-    [files createFileAtPath:note contents:text attributes:nil];
-  }
-  return nil;
+  return found;
 }
 
-// The view over the first stream, on `layer`, with fingertip-sized controls.
-// No validation: iOS has no layer to load (DECISIONS.md).
-vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(CAMetalLayer* layer,
-                                                       VkExtent2D pixels) {
-  NSString* path = FirstStream();
-  if (path == nil) {
-    return vkc::Status::not_found(
-        "No .vrst stream to play. Copy one into this app's folder with the "
-        "Files app or Finder, then come back to the app.");
+// What to play: the sender of the last choice, if it was one; else the first
+// .vrst in Documents; else nothing, and the dialog asks.
+vkc::Result<std::optional<cfg::Source>> ChosenSource() {
+  NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+  if ([defaults boolForKey:kLiveKey]) {
+    VKC_ASSIGN(cfg::Source live,
+               vkp::parse_live_source(Utf8([defaults stringForKey:kHostKey]),
+                                      Utf8([defaults stringForKey:kPortKey])));
+    return std::optional<cfg::Source>(std::move(live));
   }
+  return DocumentsStream();
+}
+
+// The view over `source`, on `layer`, with fingertip-sized controls and the
+// Source button. No validation: iOS has no layer to load (DECISIONS.md).
+vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
+    CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source) {
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
-             vkp::StreamPlayer::open(path.UTF8String));
+             vkp::open_source(source));
   VKC_ASSIGN(const vg::windowing::SurfaceSource surface,
              vg::windowing::metal_surface((__bridge const void*)layer));
   vkp::PlayerViewConfig config;
   config.ui_scale = 1.3f;              // 17-pt text, near iOS body text
   config.ui_min_frame_height = 44.0f;  // Apple's least touch target
+  config.source_button = true;
   return vkp::PlayerView::create(surface, pixels, std::move(player), config);
 }
 
@@ -141,16 +171,18 @@ glm::vec2 At(UITouch* touch, UIView* view) {
 
 @implementation PlayerViewController {
   MetalView* _metal;
-  UILabel* _failure;  // the one native view: why nothing plays
+  UILabel* _failure;  // why nothing plays; a tap on it asks what to
   CADisplayLink* _link;
   UIPanGestureRecognizer* _orbit;  // one finger
   UIPanGestureRecognizer* _pan;    // two fingers, with the pinch
   UIPinchGestureRecognizer* _pinch;
   std::unique_ptr<vkp::PlayerView> _view;
   std::unique_ptr<vg::ui::ImGuiTouch> _touch;  // after _view: goes first
-  BOOL _failed;   // the label is up until the next activation
-  BOOL _retried;  // a frame() error rebuilt the view in this activation
-  BOOL _rebuild;  // a park timed out, so the device may be lost
+  BOOL _failed;    // the label is up until the next activation or choice
+  BOOL _retried;   // a frame() error rebuilt the view in this activation
+  BOOL _rebuild;   // a park timed out, so the device may be lost
+  BOOL _appeared;  // on screen, so the dialog can be presented
+  BOOL _askDue;    // nothing to play before then: ask once it is
 }
 
 - (void)loadView {
@@ -165,6 +197,10 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   _failure.textAlignment = NSTextAlignmentCenter;
   _failure.textColor = UIColor.whiteColor;
   _failure.hidden = YES;
+  _failure.userInteractionEnabled = YES;  // with no view, no Source button
+  [_failure addGestureRecognizer:[[UITapGestureRecognizer alloc]
+                                     initWithTarget:self
+                                             action:@selector(ask)]];
   [_metal addSubview:_failure];
   UILayoutGuide* safe = _metal.safeAreaLayoutGuide;
   [NSLayoutConstraint activateConstraints:@[
@@ -200,6 +236,15 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   [self bringUpIfReady];
 }
 
+- (void)viewDidAppear:(BOOL)animated {
+  [super viewDidAppear:animated];
+  _appeared = YES;
+  if (_askDue) {
+    _askDue = NO;
+    [self ask];
+  }
+}
+
 // Bring-up submits GPU work, so only in the foreground and active, with a
 // drawable. Lifecycle callbacks also come on main, so none interleaves.
 - (void)bringUpIfReady {
@@ -218,8 +263,21 @@ glm::vec2 At(UITouch* touch, UIView* view) {
     return;
   }
   const CFTimeInterval start = CACurrentMediaTime();
+  const vkc::Result<std::optional<cfg::Source>> chosen = ChosenSource();
+  if (!chosen.ok()) {
+    [self fail:chosen.status()];
+    return;
+  }
+  if (!chosen.value()) {
+    [self fail:vkc::Status::not_found(
+                   "Nothing to play. Connect to a sender, or copy a .vrst "
+                   "stream into this app's folder with the Files app or "
+                   "Finder, then come back to the app.")];
+    [self askOnScreen];
+    return;
+  }
   vkc::Result<std::unique_ptr<vkp::PlayerView>> made =
-      MakeView((CAMetalLayer*)_metal.layer, pixels);
+      MakeView((CAMetalLayer*)_metal.layer, pixels, **chosen);
   if (!made.ok()) {
     [self fail:made.status()];
     return;
@@ -255,6 +313,8 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   const vkc::Result<bool> presented = _view->frame(pixels);
   if (!presented.ok()) {
     [self drop:presented.status()];
+  } else if (_view->take_source_request()) {
+    [self ask];  // after the UI's frame: no UIKit runs inside it
   }
 }
 
@@ -274,9 +334,111 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   [self dropView];
   _failed = YES;
   NSString* message = @(status.message().c_str());  // UTF-8, unlike %s
-  _failure.text = message;
+  _failure.text =
+      [message stringByAppendingString:@"\n\nTap here to choose what to play."];
   _failure.hidden = NO;
   NSLog(@"volumetric_kit_player: %@", message);
+}
+
+// The dialog over what to play, with the last sender's host and port.
+- (void)ask {
+  NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+  [self askWithHost:[defaults stringForKey:kHostKey]
+               port:[defaults stringForKey:kPortKey]
+             reason:nil];
+}
+
+// The dialog, once the view is on screen: presented before, it would not
+// show.
+- (void)askOnScreen {
+  _askDue = !_appeared;
+  if (_appeared) {
+    [self ask];
+  }
+}
+
+// iOS's own dialog (DECISIONS.md): Host and Port on the system keyboard, then
+// Connect, Play file while Documents holds a .vrst, or Cancel. `reason`, a
+// refusal of the values it is given, is its message. An alert needs no
+// popover anchor on an iPad. One at a time.
+- (void)askWithHost:(NSString*)host
+               port:(NSString*)port
+             reason:(NSString*)reason {
+  if (self.presentedViewController != nil) {
+    return;
+  }
+  UIAlertController* alert =
+      [UIAlertController alertControllerWithTitle:@"Play"
+                                          message:reason
+                                   preferredStyle:UIAlertControllerStyleAlert];
+  [alert addTextFieldWithConfigurationHandler:^(UITextField* field) {
+    field.placeholder = @"Host";
+    field.text = host;
+    field.keyboardType = UIKeyboardTypeURL;
+    field.autocorrectionType = UITextAutocorrectionTypeNo;
+    field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    field.spellCheckingType = UITextSpellCheckingTypeNo;
+    field.clearButtonMode = UITextFieldViewModeWhileEditing;
+  }];
+  [alert addTextFieldWithConfigurationHandler:^(UITextField* field) {
+    field.placeholder = @(vkp::LiveAddress{}.port).stringValue;
+    field.text = port;
+    field.keyboardType = UIKeyboardTypeNumberPad;
+  }];
+  // Weak: the alert holds the actions, and they would hold it.
+  __weak PlayerViewController* weakSelf = self;
+  __weak UIAlertController* weakAlert = alert;
+  UIAlertAction* connect = [UIAlertAction
+      actionWithTitle:@"Connect"
+                style:UIAlertActionStyleDefault
+              handler:^(UIAlertAction*) {
+                [weakSelf connectHost:weakAlert.textFields[0].text
+                                 port:weakAlert.textFields[1].text];
+              }];
+  [alert addAction:connect];
+  if (DocumentsStream()) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Play file"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction*) {
+                                              [weakSelf playFile];
+                                            }]];
+  }
+  [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                            style:UIAlertActionStyleCancel
+                                          handler:nil]];
+  alert.preferredAction = connect;
+  [self presentViewController:alert animated:YES completion:nil];
+}
+
+// Connect: values parse_live_source takes are kept and played; a refusal
+// asks again, with why and with what was typed.
+- (void)connectHost:(NSString*)host port:(NSString*)port {
+  const vkc::Result<cfg::Source> live =
+      vkp::parse_live_source(Utf8(host), Utf8(port));
+  if (!live.ok()) {
+    [self askWithHost:host port:port reason:@(live.status().message().c_str())];
+    return;
+  }
+  NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+  [defaults setBool:YES forKey:kLiveKey];
+  [defaults setObject:@(live->host.c_str()) forKey:kHostKey];
+  [defaults setObject:live->port != 0 ? @(live->port).stringValue : @""
+               forKey:kPortKey];
+  [self rebuild];
+}
+
+- (void)playFile {
+  [NSUserDefaults.standardUserDefaults setBool:NO forKey:kLiveKey];
+  [self rebuild];
+}
+
+// The view anew on the choice just kept, as after a timed-out park. connect
+// does no I/O, so main never waits on the network.
+- (void)rebuild {
+  _failed = NO;
+  _retried = NO;
+  [self dropView];
+  [self bringUpIfReady];
 }
 
 - (void)dropView {

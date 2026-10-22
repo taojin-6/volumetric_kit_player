@@ -14,12 +14,14 @@ add_library(
   volumetric_kit/player/playback.cpp
   volumetric_kit/player/playback_stats.cpp
   volumetric_kit/player/player_view.cpp
+  volumetric_kit/player/scenario.cpp
   volumetric_kit/player/stream_player.cpp)
 add_library(volumetric_kit::player ALIAS player)
 target_include_directories(player PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(
   player
-  PUBLIC volumetric_kit::recon_codec
+  PUBLIC volumetric_kit::core_config
+         volumetric_kit::recon_codec
          volumetric_kit::recon_mesh
          volumetric_kit::recon_networking
          volumetric_kit::recon_stream
