@@ -38,7 +38,9 @@ chunks, joined at the newest key.
   file loop's wait for the consumer would let latency grow without bound and
   stop draining the socket, which hides lag from the sender's drop rule
   (newest key wins). The consumer check stays: a superseded mesh keeps its
-  ring slot, and a minimized window takes none.
+  ring slot, and a minimized window takes none. With a frame in hand, the
+  worker waits for the take (`taken()`) rather than on the socket, 10 ms at
+  a time, so it meshes at once on the take; records queue meanwhile.
 - **Live steps never wait.** A step is GPU work alone (the build, a decode,
   an extract), and live, one that would wait while parked does not begin:
   the worker drops the record in hand and closes the connection within a

@@ -29,9 +29,10 @@
 // shows that GOP from its key; P-frames before a connection's first key are
 // skipped, though counted, with status() OK; every record published while a
 // mesh waits for the consumer is decoded, and the newest is shown with the
-// records since; records slower than their decode are meshed once nothing
-// newer has come, and records faster still show a newer frame every 100 ms
-// or so; a consumer that takes nothing for 1.5 s leaves status() OK, and its
+// records since; a take with a frame in hand has it meshed at once; records
+// slower than their decode are meshed once nothing newer has come, and
+// records faster still show a newer frame every 100 ms or so; a consumer
+// that takes nothing for 1.5 s leaves status() OK, and its
 // next take is followed by the newest frame, while PlaybackStats fed as the
 // view feeds it reads no spike in the records a second; a server that goes
 // away is a retry with its reason, a new one on its port, at another voxel
@@ -1524,6 +1525,55 @@ TEST_F(LivePlayerTest, ARecordIsMeshedOnceNothingNewerHasCome) {
   std::nth_element(waits.begin(), waits.begin() + waits.size() / 2,
                    waits.end());
   EXPECT_LT(waits[waits.size() / 2], 50.0) << "ms, the median";
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A frame meshed and left untaken, then the next record decoded behind it:
+// the take, at a seeded point in the worker's 10 ms slice, wakes it at once,
+// so beyond its own mesh the newest is published within 2 ms of the take, by
+// the median of nine.
+TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  std::mt19937 random(20261022);
+  std::uniform_int_distribution<int> delay(20, 30);
+  std::uint64_t n = 0;
+  // The stream's next record, looped and restamped, sent once the one
+  // before has come: whether it came.
+  const auto send = [&] {
+    const stream::RecordInfo info =
+        restamped(recording_.infos[n % kFrames], n / kFrames);
+    const Bytes& payload = recording_.payloads[n % kFrames];
+    ++n;
+    return server->publish(info, payload.data(), payload.size()).ok() &&
+           eventually([&] { return player->live_status().seq == info.seq; });
+  };
+  std::vector<double> waits;  // ms, from each take to the next publish
+  for (int sample = 0; sample < 9; ++sample) {
+    ASSERT_TRUE(send()) << "sample " << sample;  // meshed, left untaken
+    std::this_thread::sleep_for(std::chrono::milliseconds(delay(random)));
+    ASSERT_TRUE(send()) << "sample " << sample;  // decoded, in hand
+    std::this_thread::sleep_for(std::chrono::milliseconds(delay(random)));
+    const SteadyClock::time_point taken_at = SteadyClock::now();
+    ASSERT_TRUE(take(kArrival).has_value());
+    const std::optional<FrameStamp> newest = take(kArrival);
+    ASSERT_TRUE(newest.has_value()) << "sample " << sample;
+    double wait =
+        std::chrono::duration<double, std::milli>(newest->published - taken_at)
+            .count();
+    for (const core::StageRow& row : newest->stages.rows()) {
+      if (std::string(row.name) == "mesh") {
+        wait -= row.cpu_ms;
+      }
+    }
+    waits.push_back(wait);
+  }
+  std::nth_element(waits.begin(), waits.begin() + waits.size() / 2,
+                   waits.end());
+  EXPECT_LT(waits[waits.size() / 2], 2.0) << "ms, the median";
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 

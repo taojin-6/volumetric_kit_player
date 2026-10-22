@@ -19,9 +19,9 @@ namespace networking = recon::networking;
 namespace stream = recon::stream;
 using Clock = Playback::Clock;
 
-// Live: the longest one receive waits, so quit and a park are seen within it;
-// the least time between two meshes while records keep coming; and the wait
-// before a connection is made again.
+// Live: the longest one receive, or one wait for the consumer's take, lasts,
+// so quit and a park are seen within it; the least time between two meshes
+// while records keep coming; and the wait before a connection is made again.
 constexpr std::chrono::milliseconds kSlice{10};
 constexpr std::chrono::milliseconds kMeshEvery{100};
 constexpr std::chrono::seconds kRetry{1};
@@ -424,18 +424,25 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
   std::optional<Clock::time_point> published;  // the last, on this connection
   stream::Record record;
   for (;;) {
+    // Free: the consumer took the last mesh, so the newest frame may be
+    // meshed. Never bypassed: a superseded mesh keeps its ring slot. With a
+    // frame in hand, the take (taken()) is waited for here, a slice at a
+    // time, and the socket read without a wait: records queue meanwhile.
+    bool free = false;
     {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::unique_lock<std::mutex> lock(mutex_);
+      if (pending) {
+        free = changed_.wait_for(lock, kSlice, [this] {
+          return quit_ || parked_ ||
+                 exchange_->release_and_may_publish(*extractor_);
+        });
+      }
       if (quit_ || parked_) {
         return {};
       }
     }
-    // The consumer took the last mesh, so the newest frame may be meshed.
-    // Never bypassed: a superseded mesh keeps its ring slot.
-    const bool free =
-        pending && exchange_->release_and_may_publish(*extractor_);
     const core::Result<bool> got = client.next(
-        free ? std::chrono::milliseconds{0} : kSlice, &record, &payload);
+        pending ? std::chrono::milliseconds{0} : kSlice, &record, &payload);
     if (!got.ok()) {
       *ended = got.status();
       return {};

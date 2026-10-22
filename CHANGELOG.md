@@ -66,7 +66,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   longer redraws the same frame at 120 Hz.
 - A consumer of `StreamPlayer` calls `taken()` from the commit of each
   mesh it takes; the worker sleeps until then rather than waking every
-  2 ms, as it did while a window was minimized.
+  2 ms, as it did while a window was minimized. Live, a frame waiting on
+  that take is meshed at once, rather than at the next 10 ms socket wait.
 
 ### Fixed
 
