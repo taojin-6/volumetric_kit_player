@@ -4,23 +4,33 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
-## 2026-10-22 — The iOS app plays a scenario from its Documents folder
+## 2026-10-22 — The iOS app chooses what to play on screen
 
-`player::folder_source` and `open_source`; README.md says how to give the
-app one.
+`PlayerViewConfig::source_button`, `PlayerView::take_source_request`,
+`player::parse_live_source`, `folder_source` and `open_source`; README.md
+says how to use it.
 
-- **A `player.json` there, before the first `.vrst`,** loaded by the core's
-  `load(path, Application::Player)` and played through `open_source`, the
-  desktop app's call too, so the library links the core's config tier on
-  every platform. Why: one format and one loader on both platforms, and no
-  new UI: a file copied in with Finder or devicectl, where an address prompt
-  would need text entry, a place to keep the address and checks of its own.
-- **A `player.json` the core refuses or cannot read is the error shown,**
-  never passed over for a `.vrst`. Why: a fallback would play a file while
-  the owner waits for the sender.
-- **Its `window` and `run` sections are checked, and then ignored:** the
-  window is the desktop's. The view fills the screen, plays until the app
-  is closed, and runs without validation (below).
+- **The panel's Source button opens iOS's own dialog** (`UIAlertController`):
+  Host and Port on the system keyboard, then Connect, Play file while
+  Documents holds a `.vrst`, or Cancel; a refusal shows why and keeps what
+  was typed. Why: the owner asked for the sender's address on screen, not in
+  a file; ImGui has no touch keyboard on iOS, and the system keyboard would
+  cover an ImGui field in the panel at the bottom.
+- **Source is opt-in, alone on the panel's first row,** the file's and the
+  live player's. A tap only records a request, which the shell takes after
+  `frame()`. Why: the desktop takes a scenario; a phone's row of playback
+  buttons has no room for another; and no UIKit runs inside the ImGui frame.
+- **One parser for the typed fields, `parse_live_source`,** over
+  `parse_live_address`, into the source `open_source` plays, the desktop
+  app's call too, so the library links the core's config tier on every
+  platform. An empty port is port 0, the sender's default, as in a scenario;
+  a host with a ':' points at the Port field. Why: the port's range and the
+  default port each keep one home.
+- **The choice is remembered** in `NSUserDefaults`: the sender's host and
+  port as the parser took them, or the file. At launch the app plays the
+  remembered sender, else the first `.vrst`, else asks; while nothing plays,
+  a tap on the label asks. Why: the lab's sender is typed once, and with no
+  view there is no panel to hold Source.
 - **The listing stays in Objective-C,** sorted as Finder sorts it
   (`localizedStandardCompare:`), and `folder_source` takes the names in that
   order. Why: no C++ collation matches Finder's, and the choice is still
@@ -184,12 +194,13 @@ the sizes.
   label says why until the next activation. Why: a park that timed out may
   have let the step under way submit from the background (below), and a
   rebuild is the only recovery from a lost device.
-- **What it plays is in the app's Documents folder** (2026-10-22), which
-  `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` show in
-  Finder and the Files app; each build of the view looks again, and with
-  nothing to play it leaves a note file there, as the Files app may hide an
-  empty app folder. Why: the smallest way onto a device with no picker; a
-  document picker and open-in wait for a need.
+- **A file is the first `.vrst`, by name, in the app's Documents folder**
+  (a sender is chosen on screen, 2026-10-22), which `UIFileSharingEnabled`
+  and `LSSupportsOpeningDocumentsInPlace` show in Finder and the Files app;
+  each build of the view looks again, and with none it leaves a note file
+  there, as the Files app may hide an empty app folder. Why: the smallest
+  way onto a device with no picker; a document picker and open-in wait for a
+  need.
 - **The `increased-memory-limit` entitlement:** past the jetsam limit iOS
   kills the app with no `Status`, while a stream too big for the device's
   Vulkan budget is refused with one. **The device family is a build

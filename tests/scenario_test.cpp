@@ -4,12 +4,11 @@
 // What a Player scenario plays, on the host. open_source: a file source opens
 // its stream, a missing one is StreamPlayer::open's refusal, and a live source
 // connects with no I/O, on the sender's default port for 0 and on its own
-// otherwise. folder_source, over a folder of the test's own: its scenario wins
-// over a .vrst wherever it is in the names; one the core refuses or cannot
-// read is the error, never passed over for a .vrst; with none, the first
-// .vrst in the names' order, in any case; with neither, nothing, which no
-// refusal reads as; and the scenario's relative path resolves against the
-// folder.
+// otherwise. parse_live_source, the iOS dialog's fields: the host and the port
+// trimmed; an empty port the sender's default, through open_source; and
+// refused, an empty host, a host with a ':', pointing at the Port field, and a
+// port parse_live_address refuses, with its message. folder_source: the first
+// .vrst in the names' order, in any case, in the folder; with none, nothing.
 
 #include "volumetric_kit/player/scenario.hpp"
 
@@ -17,7 +16,6 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -33,25 +31,15 @@ namespace {
 namespace core = volumetric_kit::core;
 namespace cfg = volumetric_kit::core::config;
 using volumetric_kit::player::folder_source;
-using volumetric_kit::player::kFolderScenario;
 using volumetric_kit::player::LiveAddress;
 using volumetric_kit::player::LiveState;
 using volumetric_kit::player::open_source;
+using volumetric_kit::player::parse_live_address;
+using volumetric_kit::player::parse_live_source;
 using volumetric_kit::player::StreamPlayer;
 using vp_test::Scratch;
 using Code = core::Status::Code;
 using Names = std::vector<std::string>;
-
-// A Player scenario: the envelope, and a stream source of `fields`.
-std::string scenario(const std::string& fields) {
-  return R"({"version":1,"operation":"view","source":{"kind":"stream",)" +
-         fields + "}}";
-}
-
-// `text` in the file at `path`.
-void write_file(const std::string& path, const std::string& text) {
-  std::ofstream(path) << text;
-}
 
 // A stream source of the file at `path`, as the core loads one.
 cfg::Source file_source(const std::string& path) {
@@ -109,57 +97,84 @@ TEST(OpenSource, ALiveSourceConnectsOnItsPortOrTheSendersDefault) {
   }
 }
 
-TEST(FolderSource, ItsScenarioWinsOverAStream) {
-  const Scratch scratch;
-  write_file(scratch.file(kFolderScenario),
-             scenario(R"("host":"lab.invalid","port":1)"));
-  ASSERT_TRUE(
-      vp_test::write_undecodable_stream(scratch.file("a.vrst"), 3).ok());
-  for (const Names& names :
-       {Names{"a.vrst", kFolderScenario}, Names{kFolderScenario, "a.vrst"}}) {
-    const core::Result<std::optional<cfg::Source>> source =
-        folder_source(scratch.path(), names);
-    ASSERT_TRUE(source.ok()) << source.status().message();
-    ASSERT_TRUE(source->has_value());
-    EXPECT_EQ((*source)->host, "lab.invalid");
-    EXPECT_EQ((*source)->port, 1u);
-    EXPECT_TRUE((*source)->path.empty()) << (*source)->path;
-  }
-}
-
-TEST(FolderSource, AScenarioItCannotUseIsTheErrorNotAStream) {
-  const Scratch scratch;
-  ASSERT_TRUE(
-      vp_test::write_undecodable_stream(scratch.file("a.vrst"), 3).ok());
-  const std::string path = scratch.file(kFolderScenario);
-  const Names names = {"a.vrst", kFolderScenario};
-  // The core's refusal, whole.
-  const auto expect_refused = [&](const char* what) {
-    const core::Result<cfg::Config> loaded =
-        cfg::load(path, cfg::Application::Player);
-    ASSERT_FALSE(loaded.ok()) << what;
-    const core::Result<std::optional<cfg::Source>> source =
-        folder_source(scratch.path(), names);
-    ASSERT_FALSE(source.ok()) << what;
-    EXPECT_EQ(source.status().domain(), loaded.status().domain()) << what;
-    EXPECT_EQ(source.status().message(), loaded.status().message()) << what;
+TEST(ParseLiveSource, TakesTheHostAndThePortTrimmed) {
+  struct Case {
+    const char* host;
+    const char* port;
+    const char* trimmed;
+    std::uint16_t number;
   };
-  // Listed, but gone since: the core's NotFound, never nothing.
-  expect_refused("gone");
-  for (const char* text :
-       {"{", R"({"version":1,"operation":"view"})",
-        R"({"version":1,"operation":"view","source":{"kind":"stream",)"
-        R"("path":"a.vrst","host":"lab.invalid"}})"}) {
-    write_file(path, text);
-    expect_refused(text);
+  for (const Case& typed :
+       {Case{"lab", "1", "lab", 1},
+        Case{"  lab.invalid ", "65535 ", "lab.invalid", 65535},
+        Case{"\t192.168.21.217\r\n", " 2\n", "192.168.21.217", 2}}) {
+    const core::Result<cfg::Source> source =
+        parse_live_source(typed.host, typed.port);
+    ASSERT_TRUE(source.ok()) << typed.host << ": " << source.status().message();
+    EXPECT_EQ(source->kind, cfg::SourceKind::Stream);
+    EXPECT_EQ(source->host, typed.trimmed);
+    EXPECT_EQ(source->port, typed.number);
+    EXPECT_TRUE(source->path.empty()) << source->path;
   }
-  std::filesystem::remove(path);
-  std::filesystem::create_directory(path);
-  expect_refused("a directory");
 }
 
-TEST(FolderSource, WithNoScenarioTheFirstStreamInTheNamesOrder) {
-  const Scratch scratch;
+// Port 0, which open_source plays on LiveAddress's default; no I/O.
+TEST(ParseLiveSource, AnEmptyPortIsTheSendersDefault) {
+  for (const char* port : {"", "   "}) {
+    const core::Result<cfg::Source> source =
+        parse_live_source("lab.invalid", port);
+    ASSERT_TRUE(source.ok())
+        << "'" << port << "': " << source.status().message();
+    EXPECT_EQ(source->port, 0u);
+    const core::Result<std::unique_ptr<StreamPlayer>> player =
+        open_source(*source);
+    ASSERT_TRUE(player.ok()) << player.status().message();
+    EXPECT_EQ((*player)->live_status().address,
+              to_string(LiveAddress{"lab.invalid"}));
+  }
+}
+
+TEST(ParseLiveSource, RefusesAnEmptyHost) {
+  for (const char* host : {"", "   ", "\t\n"}) {
+    for (const char* port : {"", "5"}) {
+      const core::Status refused = parse_live_source(host, port).status();
+      EXPECT_EQ(refused.domain(), Code::InvalidArgument)
+          << "'" << host << "', '" << port << "'";
+      EXPECT_NE(refused.message().find("no host"), std::string::npos)
+          << refused.message();
+    }
+  }
+}
+
+// "host:port" in the host field points at the Port field, whatever is in it.
+TEST(ParseLiveSource, RefusesAColonInTheHostForThePortField) {
+  for (const char* host : {"lab:5", " lab:5 ", "lab:", ":5"}) {
+    for (const char* port : {"", "5"}) {
+      const core::Status refused = parse_live_source(host, port).status();
+      EXPECT_EQ(refused.domain(), Code::InvalidArgument)
+          << "'" << host << "', '" << port << "'";
+      EXPECT_NE(refused.message().find("Port field"), std::string::npos)
+          << refused.message();
+    }
+  }
+  EXPECT_EQ(parse_live_source(" lab:5 ", "").status().message(),
+            "'lab:5' has a ':': type the port in the Port field");
+}
+
+// parse_live_address's refusal, whole, of the address the fields make.
+TEST(ParseLiveSource, RefusesAPortThatIsNotANumberFrom1To65535) {
+  for (const char* port :
+       {"0", "65536", "x", "-1", "+5", "5 6", "5:6", "99999999999999999999"}) {
+    const core::Status refused = parse_live_source("lab", port).status();
+    EXPECT_EQ(refused.domain(), Code::InvalidArgument) << "'" << port << "'";
+    EXPECT_EQ(
+        refused.message(),
+        parse_live_address(std::string("lab:") + port).status().message());
+  }
+}
+
+TEST(FolderSource, TheFirstStreamInTheNamesOrder) {
+  const std::filesystem::path folder("/Documents");
   struct Case {
     Names names;
     const char* first;
@@ -169,48 +184,23 @@ TEST(FolderSource, WithNoScenarioTheFirstStreamInTheNamesOrder) {
        {Case{{"notes.txt", "Take 2.VRST", "take 10.vrst", "z.vrst"},
              "Take 2.VRST"},
         Case{{"z.vrst", "Take 2.VRST"}, "z.vrst"},
-        Case{{"a.vrst.txt", "player.json.txt", "b.Vrst"}, "b.Vrst"}}) {
-    const core::Result<std::optional<cfg::Source>> source =
-        folder_source(scratch.path(), listed.names);
-    ASSERT_TRUE(source.ok()) << source.status().message();
-    ASSERT_TRUE(source->has_value());
-    EXPECT_EQ((*source)->kind, cfg::SourceKind::Stream);
-    EXPECT_EQ((*source)->path,
-              (std::filesystem::path(scratch.path()) / listed.first).string());
-    EXPECT_TRUE((*source)->host.empty());
+        Case{{"a.vrst.txt", "b.Vrst"}, "b.Vrst"}}) {
+    const std::optional<cfg::Source> source =
+        folder_source(folder.string(), listed.names);
+    ASSERT_TRUE(source.has_value()) << listed.first;
+    EXPECT_EQ(source->kind, cfg::SourceKind::Stream);
+    EXPECT_EQ(source->path, (folder / listed.first).string());
+    EXPECT_TRUE(source->host.empty());
   }
 }
 
-// Not the NotFound of a listed player.json gone since (above).
-TEST(FolderSource, WithNeitherNothing) {
-  const Scratch scratch;
+TEST(FolderSource, WithNoStreamNothing) {
   for (const Names& names :
-       {Names{}, Names{"notes.txt", "a.vrst.txt", "player.json.txt", "vrst"}}) {
-    const core::Result<std::optional<cfg::Source>> source =
-        folder_source(scratch.path(), names);
-    ASSERT_TRUE(source.ok()) << source.status().message();
-    EXPECT_FALSE(source->has_value()) << (*source)->path;
+       {Names{}, Names{"notes.txt", "a.vrst.txt", "vrst", ".vrst.json"}}) {
+    const std::optional<cfg::Source> source =
+        folder_source("/Documents", names);
+    EXPECT_FALSE(source.has_value()) << source->path;
   }
-}
-
-TEST(FolderSource, ItsScenariosRelativePathResolvesAgainstTheFolder) {
-  const Scratch scratch;
-  const std::filesystem::path folder(scratch.path());
-  std::filesystem::create_directory(folder / "takes");
-  const std::string take = (folder / "takes" / "take.vrst").string();
-  ASSERT_TRUE(vp_test::write_undecodable_stream(take, 3).ok());
-  write_file(scratch.file(kFolderScenario),
-             scenario(R"("path":"takes/take.vrst")"));
-  const core::Result<std::optional<cfg::Source>> source =
-      folder_source(scratch.path(), {kFolderScenario});
-  ASSERT_TRUE(source.ok()) << source.status().message();
-  ASSERT_TRUE(source->has_value());
-  EXPECT_EQ((*source)->path,
-            std::filesystem::path(take).lexically_normal().string());
-  const core::Result<std::unique_ptr<StreamPlayer>> player =
-      open_source(**source);
-  ASSERT_TRUE(player.ok()) << player.status().message();
-  EXPECT_EQ((*player)->frame_count(), 3u);
 }
 
 }  // namespace

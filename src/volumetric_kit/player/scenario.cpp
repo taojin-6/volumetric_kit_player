@@ -6,10 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
-#include <string_view>
 #include <utility>
-
-#include "volumetric_kit/core/base/exception_status.hpp"
 
 namespace volumetric_kit::player {
 namespace {
@@ -27,6 +24,16 @@ bool is_stream(const std::string& name) {
                     });
 }
 
+// `text` less the spaces, tabs and line breaks around it.
+std::string_view trimmed(std::string_view text) {
+  constexpr std::string_view kSpaces = " \t\r\n";
+  const std::size_t first = text.find_first_not_of(kSpaces);
+  if (first == std::string_view::npos) {
+    return {};
+  }
+  return text.substr(first, text.find_last_not_of(kSpaces) - first + 1);
+}
+
 }  // namespace
 
 core::Result<std::unique_ptr<StreamPlayer>> open_source(
@@ -42,28 +49,41 @@ core::Result<std::unique_ptr<StreamPlayer>> open_source(
   return StreamPlayer::connect(std::move(address));
 }
 
-core::Result<std::optional<cfg::Source>> folder_source(
-    const std::string& directory, const std::vector<std::string>& names) {
-  try {
-    const std::filesystem::path folder(directory);
-    if (std::find(names.begin(), names.end(), kFolderScenario) != names.end()) {
-      VKC_ASSIGN(cfg::Config scenario,
-                 cfg::load((folder / kFolderScenario).string(),
-                           cfg::Application::Player));
-      return std::move(scenario.source);
-    }
-    for (const std::string& name : names) {
-      if (is_stream(name)) {
-        cfg::Source source;
-        source.kind = cfg::SourceKind::Stream;
-        source.path = (folder / name).string();
-        return source;
-      }
-    }
-    return std::nullopt;
-  } catch (...) {
-    return core::exception_status("folder_source", core::Status::Code::IoError);
+core::Result<cfg::Source> parse_live_source(std::string_view host,
+                                            std::string_view port) {
+  host = trimmed(host);
+  port = trimmed(port);
+  if (host.empty()) {
+    return core::Status::invalid_argument(
+        "no host: type the sender's name or IPv4 address");
   }
+  if (host.find(':') != std::string_view::npos) {
+    return core::Status::invalid_argument(
+        "'" + std::string(host) +
+        "' has a ':': type the port in the Port field");
+  }
+  cfg::Source source;
+  source.kind = cfg::SourceKind::Stream;
+  source.host = std::string(host);
+  if (!port.empty()) {
+    VKC_ASSIGN(const LiveAddress address,
+               parse_live_address(source.host + ":" + std::string(port)));
+    source.port = address.port;
+  }
+  return source;
+}
+
+std::optional<cfg::Source> folder_source(
+    const std::string& directory, const std::vector<std::string>& names) {
+  for (const std::string& name : names) {
+    if (is_stream(name)) {
+      cfg::Source source;
+      source.kind = cfg::SourceKind::Stream;
+      source.path = (std::filesystem::path(directory) / name).string();
+      return source;
+    }
+  }
+  return std::nullopt;
 }
 
 }  // namespace volumetric_kit::player

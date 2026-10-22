@@ -106,10 +106,9 @@ second.
 
 ## iOS
 
-The iOS app, for iPhone and iPad (arm64, iOS 16 or newer), plays what its
-Documents folder holds: a scenario named `player.json`, or else the first
-`.vrst`, by name. It needs Xcode and MoltenVK's iOS release, named by
-`MoltenVK_ROOT` as the core's
+The iOS app, for iPhone and iPad (arm64, iOS 16 or newer), plays a sender's
+live stream or a `.vrst` from its Documents folder. It needs Xcode and
+MoltenVK's iOS release, named by `MoltenVK_ROOT` as the core's
 [README](https://github.com/taojin-6/volumetric_kit_core#prerequisites) says.
 Unsigned, as CI builds it:
 
@@ -135,9 +134,23 @@ The app's entitlement `com.apple.developer.kernel.increased-memory-limit`
 needs that capability on its App ID; `codesign -d --entitlements - <app>`
 shows whether the signed app has it.
 
-To give it something to play, launch it once, then copy a `player.json` or a
-`.vrst` into its folder: in the Files app under On My iPhone (or iPad) ›
-Player, in Finder under the device's Files tab, or with devicectl:
+Source, at the top of the panel, opens iOS's dialog: Connect plays the
+sender at Host and Port, on the sender's default port when Port is empty,
+and Play file, offered while the app's folder holds a `.vrst`, plays the
+first one, by name. What the dialog refuses it shows with why, keeping what
+was typed. The app remembers the choice: at launch it connects to the last
+sender, if that was the choice, or else plays the first `.vrst`, or else
+asks. For the lab's sender (above), put the phone on the VPN or the
+sender's network. On the sender's network, not over the VPN, the first
+connection asks for local network access; once refused, Settings › Privacy &
+Security › Local Network allows it. A sender the app cannot reach is the
+status line's reason, retried about every second until Source chooses
+another. While nothing plays, a label says why, and a tap on it opens the
+dialog.
+
+To give it a file, launch it once, then copy a `.vrst` into its folder: in
+the Files app under On My iPhone (or iPad) › Player, in Finder under the
+device's Files tab, or with devicectl:
 
 ```bash
 xcrun devicectl device copy to --device <device id> \
@@ -145,19 +158,10 @@ xcrun devicectl device copy to --device <device id> \
   --source <file> --destination Documents/<name>
 ```
 
-A `player.json` is a scenario as the desktop app takes, in the core's
-[CONFIG.md](https://github.com/taojin-6/volumetric_kit_core/blob/main/CONFIG.md)
-format; a relative `source.path` is in the folder. For the lab's sender,
-copy in a live one (above) as `player.json`, with the phone on the VPN or
-the sender's network. On the sender's network, not over the VPN, the first
-connection asks for local network access; once refused, Settings › Privacy &
-Security › Local Network allows it. The app looks each time it builds its
-view: at launch, and on coming back to the foreground with nothing playing.
-Until it finds something to play, or while the core refuses its
-`player.json`, it says why. To switch what it plays, close it in the app
-switcher and launch it again. A file plays with loop on.
-A tap works the panel and the stats' header, one finger orbits the camera,
-two pan it, and a pinch zooms.
+Unless a sender is the choice, the app looks each time it builds its view:
+at launch, on a choice, and on coming back to the foreground with nothing
+playing. A file plays with loop on. A tap works the panel and the stats'
+header, one finger orbits the camera, two pan it, and a pinch zooms.
 
 It logs the view's bring-up time, each park's wait and any failure, which
 Console.app shows. The owner checks the app on a device by hand
