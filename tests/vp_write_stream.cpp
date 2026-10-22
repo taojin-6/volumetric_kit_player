@@ -5,9 +5,10 @@
 // <dir>, with recon's MeshIntegrator, Encoder and StreamWriter, on the first
 // device that meets recon's requirements: once a ctest run for the tests
 // (CMakeLists.txt), and for CI's smoke run of the window
-// (.github/workflows/ci.yml). With no device it exits as the core's test
-// policy asks: a skip, or a failure under VKC_REQUIRE_VULKAN_DEVICE. A tool,
-// not a test.
+// (.github/workflows/ci.yml). It applies the core's test policy as a main()
+// of its own (vulkan_policy.hpp): with no device a skip, or a failure under
+// VKC_REQUIRE_VULKAN_DEVICE, and under VKC_TEST_VALIDATION any error the
+// layer reports fails it.
 
 #include <cmath>
 #include <cstdint>
@@ -155,6 +156,7 @@ core::Status write_stream(core::Device& device, core::Allocator& allocator,
 core::Status write(const core::Instance& instance,
                    const core::PhysicalDeviceInfo& gpu,
                    const std::filesystem::path& dir) {
+  VKC_TRY(core::test::check_layer_loaded(instance));
   VKC_ASSIGN(core::Device device,
              core::Device::create(instance, gpu, recon::device_requirements()));
   VKC_ASSIGN(core::Allocator allocator,
@@ -175,14 +177,11 @@ core::Status write(const core::Instance& instance,
                       2 * kVoxel);
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
-  if (argc != 2) {
-    std::fputs("usage: vp_write_stream <dir>\n", stderr);
-    return 2;
-  }
-  const core::Result<core::Instance> instance = core::Instance::create({});
+// The streams into `dir`, everything made on the device destroyed before this
+// returns, while main's capture still counts what the layer reports.
+int run(const char* dir) {
+  const core::Result<core::Instance> instance =
+      core::Instance::create(core::test::instance_config());
   if (!instance.ok()) {
     return core::test::no_device_exit_code(instance.status().message());
   }
@@ -191,7 +190,7 @@ int main(int argc, char** argv) {
   if (!gpu.ok()) {
     return core::test::no_device_exit_code(gpu.status().message());
   }
-  const core::Status written = write(*instance, *gpu, argv[1]);
+  const core::Status written = write(*instance, *gpu, dir);
   if (!written.ok()) {
     const std::string_view domain = core::to_string(written.domain());
     std::fprintf(stderr, "vp_write_stream: %.*s: %s\n",
@@ -200,4 +199,16 @@ int main(int argc, char** argv) {
     return 1;
   }
   return 0;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  if (argc != 2) {
+    std::fputs("usage: vp_write_stream <dir>\n", stderr);
+    return 2;
+  }
+  const core::test::ValidationSession validation;
+  const core::test::LogCapture log;
+  return log.exit_code(run(argv[1]));
 }
