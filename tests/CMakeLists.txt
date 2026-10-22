@@ -9,7 +9,7 @@ set(VP_TEST_STREAMS "${CMAKE_CURRENT_BINARY_DIR}/streams")
 add_test(NAME vp_test_streams COMMAND vp_write_stream "${VP_TEST_STREAMS}")
 # The skip code is the core's test::kSkipExitCode.
 set_tests_properties(vp_test_streams PROPERTIES FIXTURES_SETUP vp_streams
-                                                SKIP_RETURN_CODE 77)
+                                                SKIP_RETURN_CODE 77 TIMEOUT 300)
 
 # vp_<name>_test from <name>_test.cpp, linking the given targets. A case that
 # hangs fails after 5 minutes rather than holding a CI job to its limit. With
