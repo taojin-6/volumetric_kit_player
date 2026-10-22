@@ -1505,32 +1505,13 @@ TEST_F(LivePlayerTest, RecordsFasterThanTheirDecodeStillShowNewerFrames) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-TEST_F(LivePlayerTest, AConsumerTakingNothingLeavesStatusOkThenGetsTheNewest) {
-  const std::unique_ptr<networking::StreamServer> server = serve();
-  ASSERT_NE(server, nullptr);
-  const Publisher flow(*server, recording_, kFlow);
-  StreamPlayer* player = start_live(server->port());
-  ASSERT_NE(player, nullptr);
-  ASSERT_TRUE(next_frame().has_value());
-  // Records flow, and the ring has 3 slots: an extract per record would run
-  // out of them.
-  std::this_thread::sleep_for(1500ms);
-  EXPECT_TRUE(player->status().ok()) << player->status().message();
-  const std::uint64_t newest = player->live_status().seq;
-  // The mesh that waited, then the newest decoded since.
-  ASSERT_TRUE(next_frame().has_value());
-  const std::optional<FrameStamp> next = next_frame();
-  ASSERT_TRUE(next.has_value());
-  EXPECT_GE(next->index, newest);
-  EXPECT_GT(next->records, 1u);
-  EXPECT_TRUE(player->status().ok()) << player->status().message();
-}
-
-// The same pause, with each frame taken into PlaybackStats as the view takes
-// it: the frame that waited, then the next, which stands for every record of
-// the pause, come a moment apart, yet the records a second read at most twice
-// the flow's; and a second of frames on, they read again.
-TEST_F(LivePlayerTest, AConsumerPauseLeavesTheRecordsASecondAtTheFlows) {
+// A consumer that takes nothing for 1.5 s while records flow, each frame it
+// takes going into PlaybackStats as the view takes it: status() stays OK, as
+// the ring has 3 slots and an extract per record would run out of them; the
+// frame that waited, then the newest decoded since, which stands for every
+// record of the pause, come a moment apart, yet the records a second read at
+// most twice the flow's; and a second of frames on, they read again.
+TEST_F(LivePlayerTest, AConsumerPauseLeavesStatusOkThenGetsTheNewest) {
   const std::unique_ptr<networking::StreamServer> server = serve();
   ASSERT_NE(server, nullptr);
   const Publisher flow(*server, recording_, kFlow);
@@ -1542,17 +1523,22 @@ TEST_F(LivePlayerTest, AConsumerPauseLeavesTheRecordsASecondAtTheFlows) {
     if (frame) {
       stats.add_frame(*frame, PlaybackStats::Clock::now());
     }
-    return frame.has_value();
+    return frame;
   };
   constexpr double kMost = 2.0 * static_cast<double>(1s / kFlow);
-  ASSERT_TRUE(taken());
+  ASSERT_TRUE(taken().has_value());
   std::this_thread::sleep_for(1500ms);
-  ASSERT_TRUE(taken());  // the frame that waited
-  ASSERT_TRUE(taken());
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+  const std::uint64_t newest = player->live_status().seq;
+  ASSERT_TRUE(taken().has_value());  // the frame that waited
+  const std::optional<FrameStamp> next = taken();
+  ASSERT_TRUE(next.has_value());
+  EXPECT_GE(next->index, newest);
+  EXPECT_GT(next->records, 1u);
   EXPECT_LE(stats.records_per_s(PlaybackStats::Clock::now()), kMost);
   const SteadyClock::time_point until = SteadyClock::now() + 1s;
   while (SteadyClock::now() < until) {
-    ASSERT_TRUE(taken());
+    ASSERT_TRUE(taken().has_value());
   }
   const double records = stats.records_per_s(PlaybackStats::Clock::now());
   EXPECT_GT(records, 0.0);
