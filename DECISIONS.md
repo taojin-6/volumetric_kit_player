@@ -83,9 +83,9 @@ chunks, joined at the newest key.
   the nominal; and a table of the worker's `read`, `decode` and `mesh` (host
   ms, and decode's device ms where its queue can time) and `draw`, gfx's
   `Profiler` around the whole render pass, as Apple GPUs time only at a
-  pass's bounds. Why: a stream's size, its pace
-  and where a frame's time goes, from what recon and gfx already count
-  (`TrackStats`, `StageMetrics`, the `Profiler`).
+  pass's bounds. Why: a stream's size, its pace and where a frame's time
+  goes, from what recon and gfx already count (`TrackStats`, `StageMetrics`,
+  the `Profiler`).
 - **The windows.** The stage means cover the last N frames taken, N the
   nominal frames a second rounded (30 when unknown, at most 240), so a pause
   holds them and a step moves them by one; the rate covers the last second of
@@ -153,13 +153,13 @@ the sizes.
   native scale, `PlayerView::create`, gfx's `ImGuiTouch` on its context, and
   a display link that calls `frame` with the drawable in pixels, at 24 to 60
   Hz: streams are 25 to 30 fps, and a ProMotion iPad would otherwise redraw
-  the same frame at up to 120 Hz. Every touch
-  phase reaches `ImGuiTouch`, a cancelled one as `touch_cancelled` so it
-  presses nothing. One-finger pan orbits, two-finger pan pans and pinch
-  zooms, over the view's height; the pan and the pinch compose, and none
-  begins before the view exists or while `ui_wants_pointer()`. The shell
-  never writes the layer's `drawableSize`, which MoltenVK owns (gfx's
-  `metal_surface`). Why: one view under every shell (below).
+  the same frame at up to 120 Hz. Every touch phase reaches `ImGuiTouch`, a
+  cancelled one as `touch_cancelled` so it presses nothing. One-finger pan
+  orbits, two-finger pan pans and pinch zooms, over the view's height; the
+  pan and the pinch compose, and none begins before the view exists or while
+  `ui_wants_pointer()`. The shell never writes the layer's `drawableSize`,
+  which MoltenVK owns (gfx's `metal_surface`). Why: one view under every
+  shell (below).
 - **The lifecycle:** the view is built only while the scene is in the
   foreground and active, as bring-up submits GPU work. Resign-active stops
   the display link, then parks the worker for up to a second; become-active
