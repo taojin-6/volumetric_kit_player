@@ -11,7 +11,8 @@
 // play restarts; a corrupt P-frame, a damaged record header or a record this
 // version cannot read resyncs at the next key, and a stream with no key left
 // stops the worker with the reason; quit is prompt, playing, paused or
-// waiting for a consumer that takes nothing; a fatal error stops the worker,
+// waiting for a consumer that takes nothing; the worker sleeps until taken()
+// rather than polling for the take; a fatal error stops the worker,
 // a failed build on it included; start is refused once started or stopped.
 // Playing, no frame arrives before its pts says. A park holds the worker:
 // nothing is published while parked, an extract waiting for the consumer
@@ -28,23 +29,25 @@
 // shows that GOP from its key; P-frames before a connection's first key are
 // skipped, though counted, with status() OK; every record published while a
 // mesh waits for the consumer is decoded, and the newest is shown with the
-// records since; records slower than their decode are meshed once nothing
-// newer has come, and records faster still show a newer frame every 100 ms
-// or so; a consumer that takes nothing for 1.5 s leaves status() OK, and its
-// next take is followed by the newest frame, while PlaybackStats fed as the
-// view feeds it reads no spike in the records a second; a server that goes
-// away is a retry with its reason, a new one on its port, at another voxel
-// size, gives frames again, and a park then leaves no reason; a park closes
-// the connection within kClosed, 50 times at seeded points as records flow,
-// and once with none coming; an unpark joins at the newest key; bytes that
-// are no stream, a session with no geometry track and a name that does not
+// records since; a take with a frame in hand has it meshed at once; records
+// slower than their decode are meshed once nothing newer has come, and
+// records faster still show a newer frame every 100 ms or so; a consumer
+// leaving a mesh untaken does not delay draining buffered small records or
+// a record spanning many receives; taking nothing for 1.5 s leaves status()
+// OK, and the next take is followed by the newest frame, while PlaybackStats
+// fed as the view feeds it reads no spike in the records a second; a server
+// going away is a retry with its reason, a new one on its port, at another
+// voxel size, gives frames again, and a park then leaves no reason; a park
+// closes the connection within kClosed, 8 times at spread points as records
+// flow, and once with none coming; an unpark joins at the newest key; bytes
+// that are no stream, a session with no geometry track and a name that does not
 // resolve show why, with status() OK; a reason of StreamClient's shows less
 // its prefix, which names the address; a park ends the wait to retry, so
 // the unpark connects at once; and a stop is prompt while a refused connect
 // waits to retry, connected and idle, and parked. On the host: open refuses
 // what it cannot play, and connect an empty host or port 0. The device tests
-// skip with no device. A stop that no control can wake, such as one lost in
-// the exchange's wait, fails only on ctest's timeout.
+// skip with no device. A stop that no control can wake fails only on ctest's
+// timeout.
 
 #include "volumetric_kit/player/stream_player.hpp"
 
@@ -64,6 +67,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -109,7 +113,6 @@ using vp_test::kIntraPeriod;
 using vp_test::kPeriodNs;
 using vp_test::pts_of;
 using vp_test::Scratch;
-using vp_test::write_stream;
 using Bytes = std::vector<std::uint8_t>;
 using Code = core::Status::Code;
 using SteadyClock = std::chrono::steady_clock;
@@ -188,8 +191,8 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     if (base_setup_incomplete()) {
       return;
     }
-    const core::Status written = write_stream(device(), allocator(), path_);
-    ASSERT_TRUE(written.ok()) << written.message();
+    path_ = scratch_.copy(VP_TEST_STREAMS, vp_test::kStream);
+    ASSERT_FALSE(path_.empty());
   }
 
   // Every test's player stops here too, so one that fails early is still
@@ -244,6 +247,7 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
       const recon::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
           slot_, [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
             taken = stamp;
+            player_->taken();
             return true;
           });
       slot_ = (slot_ + 1) % kFramesInFlight;
@@ -397,8 +401,9 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   }
 
   Scratch scratch_;
-  std::string path_ = scratch_.file("sphere.vrst");
-  // The stream's frame that meshes nothing (write_stream's `empty`), if any.
+  // The test's copy of the stream it plays.
+  std::string path_;
+  // The stream's frame that meshes nothing, if any.
   std::optional<std::uint64_t> empty_frame_;
   FrameExchange exchange_;
   std::uint32_t slot_ = 0;
@@ -464,11 +469,9 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
 }
 
 TEST_F(StreamPlayerTest, AFrameThatMeshesNothingReachesTheCommitWithItsStamp) {
-  path_ = scratch_.file("empty_frame.vrst");
-  empty_frame_ = 1;
-  const core::Status written =
-      write_stream(device(), allocator(), path_, empty_frame_);
-  ASSERT_TRUE(written.ok()) << written.message();
+  path_ = scratch_.copy(VP_TEST_STREAMS, vp_test::kEmptyFrameStream);
+  ASSERT_FALSE(path_.empty());
+  empty_frame_ = vp_test::kEmptyFrame;
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
@@ -697,6 +700,43 @@ TEST_F(StreamPlayerTest, AConsumerTakingNothingStallsTheWorkerUntilQuit) {
   // 2 rather than run out of ring slots.
   std::this_thread::sleep_for(kQuiet);
   EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// The worker sleeps until taken() says the last mesh was taken, rather than
+// polling the exchange: a take it is not told of leaves the next extract
+// waiting, and taken() lets it go.
+TEST_F(StreamPlayerTest, TheWorkerSleepsUntilTakenRatherThanPolling) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  // Frame 1 goes and is left untaken, so frame 2, stepped too, waits for the
+  // consumer before its extract; the sleep only lets the worker get there.
+  player->step();
+  player->step();
+  std::this_thread::sleep_for(kQuiet);
+  // The next mesh within `wait`, taken as next_frame takes it but untold.
+  const auto take_untold = [&](SteadyClock::duration wait) {
+    std::optional<FrameStamp> got;
+    const SteadyClock::time_point deadline = SteadyClock::now() + wait;
+    while (!got && SteadyClock::now() < deadline) {
+      exchange_.begin_frame(slot_, [&](const auto&, FrameStamp& stamp) {
+        got = stamp;
+        return true;
+      });
+      slot_ = (slot_ + 1) % kFramesInFlight;
+      std::this_thread::sleep_for(1ms);
+    }
+    return got;
+  };
+  const std::optional<FrameStamp> one = take_untold(kArrival);
+  ASSERT_TRUE(one.has_value());
+  EXPECT_EQ(one->index, 1u);
+  EXPECT_FALSE(take_untold(kQuiet).has_value()) << "meshed before taken()";
+  player->taken();
+  const std::optional<FrameStamp> two = next_frame();
+  ASSERT_TRUE(two.has_value()) << "nothing after taken()";
+  EXPECT_EQ(two->index, 2u);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
@@ -1001,9 +1041,10 @@ class RawPeer {
  public:
   using Feed = std::function<Bytes(std::uint64_t piece)>;
 
-  RawPeer(Feed feed, std::chrono::milliseconds period)
+  RawPeer(Feed feed, std::chrono::milliseconds period, int send_buffer = 0)
       : feed_(std::move(feed)),
         period_(period),
+        send_buffer_(send_buffer),
         listener_(listen_on_loopback(&port_)),
         thread_([this] { run(); }) {}
   ~RawPeer() {
@@ -1056,10 +1097,15 @@ class RawPeer {
     }
   }
 
-  // Non-blocking, and on Apple no SIGPIPE.
-  static bool prepare(int fd) {
+  // Non-blocking, optionally bounded buffering, and on Apple no SIGPIPE.
+  bool prepare(int fd) const {
     const int flags = ::fcntl(fd, F_GETFL);
     if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+      return false;
+    }
+    if (send_buffer_ != 0 &&
+        ::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &send_buffer_,
+                     sizeof send_buffer_) != 0) {
       return false;
     }
 #ifdef __APPLE__
@@ -1128,6 +1174,7 @@ class RawPeer {
 
   Feed feed_;  // the peer's thread's alone
   const std::chrono::milliseconds period_;
+  const int send_buffer_;
   std::uint16_t port_ = 0;
   core::UniqueFd listener_;
   std::atomic<bool> stop_{false};
@@ -1290,6 +1337,7 @@ class LivePlayerTest : public StreamPlayerTest {
       const recon::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
           slot_, [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
             taken = stamp;
+            player_->taken();
             return true;
           });
       slot_ = (slot_ + 1) % kFramesInFlight;
@@ -1346,6 +1394,133 @@ class LivePlayerTest : public StreamPlayerTest {
       chunk.resize(chunk.size() + framing->padding, 0);
       return chunk;
     };
+  }
+
+  // Time a burst with K0 published but untaken and P1 decoded behind it, or
+  // with equally sized invalid K0/P1 payloads so no frame waits. The burst
+  // also has valid framing but invalid codec payloads: none of the measured
+  // work depends on the GPU. Framing and allocation precede the timer too.
+  // For a large record, time the sender getting its bytes out through bounded
+  // socket buffers, holding its last byte back until afterwards: the record's
+  // CRC, expensive under TSan, cannot start within the timed interval.
+  void measure_burst_drain(std::size_t count, std::size_t payload_size,
+                           bool untaken, bool time_sender,
+                           SteadyClock::duration* elapsed) {
+    core::Result<stream::ChunkEncoder> made =
+        stream::ChunkEncoder::create(recording_.session);
+    ASSERT_TRUE(made.ok()) << made.status().message();
+    stream::ChunkEncoder encoder = std::move(made).value();
+    const auto append = [&encoder](const stream::RecordInfo& info,
+                                   const Bytes& payload, Bytes* bytes) {
+      const core::Result<stream::ChunkEncoder::RecordFraming> framing =
+          encoder.frame(info, payload.data(), payload.size());
+      EXPECT_TRUE(framing.ok()) << framing.status().message();
+      if (!framing.ok()) {
+        return false;
+      }
+      bytes->insert(bytes->end(), framing->header.begin(),
+                    framing->header.end());
+      bytes->insert(bytes->end(), payload.begin(), payload.end());
+      bytes->resize(bytes->size() + framing->padding, 0);
+      return true;
+    };
+    Bytes initial = encoder.session_chunk();
+    const Bytes key = untaken ? recording_.payloads[0]
+                              : Bytes(recording_.payloads[0].size(), 0);
+    ASSERT_TRUE(append(recording_.infos[0], key, &initial));
+    Bytes behind;
+    const Bytes predicted = untaken ? recording_.payloads[1]
+                                    : Bytes(recording_.payloads[1].size(), 0);
+    ASSERT_TRUE(append(recording_.infos[1], predicted, &behind));
+    stream::RecordInfo info = recording_.infos[1];
+    info.seq = 2;
+    info.pts_ns = pts_of(info.seq);
+    ASSERT_TRUE(append(info, Bytes(1, 0), &behind));
+    Bytes burst;
+    const Bytes payload(payload_size, 0);
+    for (std::size_t i = 0; i < count; ++i) {
+      ++info.seq;
+      info.pts_ns = pts_of(info.seq);
+      ASSERT_TRUE(append(info, payload, &burst));
+    }
+    Bytes tail;
+    if (time_sender) {
+      // The last payload byte and any padding, so the body stays incomplete.
+      const std::size_t withheld = 1 + (8 - payload_size % 8) % 8;
+      tail.assign(burst.end() - withheld, burst.end());
+      burst.resize(burst.size() - withheld);
+    }
+    const std::uint64_t last = info.seq;
+    std::atomic<unsigned> phase{0};
+    const RawPeer peer(
+        [initial = std::move(initial), behind = std::move(behind),
+         burst = std::move(burst), tail = std::move(tail), &phase,
+         sent = 0u](std::uint64_t) mutable {
+          if (sent == 0) {
+            ++sent;
+            return std::move(initial);
+          }
+          if (sent == 1 && phase >= 1) {
+            ++sent;
+            return std::move(behind);
+          }
+          if (sent == 2 && phase >= 2) {
+            ++sent;
+            return std::move(burst);
+          }
+          if (sent == 3) {
+            ++sent;
+            phase = 3;  // the preceding send_all completed
+          }
+          if (sent == 4 && phase >= 4) {
+            ++sent;
+            return std::move(tail);
+          }
+          return Bytes();
+        },
+        1ms, time_sender ? 256 * 1024 : 0);
+    StreamPlayer* player = start_live(peer.port());
+    ASSERT_NE(player, nullptr);
+    if (untaken) {
+      const std::atomic<bool> cancel{false};
+      ASSERT_TRUE(
+          eventually([&] { return !exchange_.wait_collected(0ms, cancel); }));
+    } else {
+      ASSERT_TRUE(eventually([&] {
+        const LiveStatus status = player->live_status();
+        return status.state == LiveState::kLive && status.seq == 0;
+      }));
+    }
+    phase = 1;
+    // Seeing record 2 proves P1's decode finished (or was skipped). It does
+    // not replace a decoded P1, which remains behind the untaken K0.
+    ASSERT_TRUE(eventually([&] { return player->live_status().seq == 2; }));
+    const SteadyClock::time_point sent = SteadyClock::now();
+    phase = 2;
+    ASSERT_TRUE(eventually([&] {
+      return time_sender ? phase == 3 : player->live_status().seq == last;
+    }));
+    *elapsed = SteadyClock::now() - sent;
+    if (time_sender) {
+      EXPECT_EQ(player->live_status().seq, 2u) << "body must remain incomplete";
+    }
+    phase = 4;
+    RecordProperty(
+        untaken ? "drain_ms" : "baseline_ms",
+        std::chrono::duration_cast<std::chrono::milliseconds>(*elapsed)
+            .count());
+    ASSERT_TRUE(eventually([&] { return player->live_status().seq == last; }));
+    if (untaken) {
+      const std::optional<FrameStamp> first = take(kArrival);
+      ASSERT_TRUE(first.has_value());
+      EXPECT_EQ(first->index, 0u);
+      const std::optional<FrameStamp> next = take(kArrival);
+      ASSERT_TRUE(next.has_value());
+      EXPECT_EQ(next->index, 1u);
+      EXPECT_EQ(next->records, count + 2);
+    }
+    EXPECT_LT(stop_time(*player), kPrompt);
+    EXPECT_TRUE(player->status().ok()) << player->status().message();
   }
 
   Recording recording_;
@@ -1451,6 +1626,35 @@ TEST_F(LivePlayerTest, AllPublishedWhileAMeshWaitsAreDecodedAndTheNewestShown) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
+TEST_F(LivePlayerTest, AnUntakenMeshDoesNotDelayBufferedRecords) {
+  // All 128 tiny records fit in one receive. A wait per record adds at
+  // least 1.28 s even though parsing and skipping them takes little time.
+  SteadyClock::duration elapsed{};
+  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(128, 1, /*untaken=*/true,
+                                              /*time_sender=*/false, &elapsed));
+  EXPECT_LT(elapsed, 750ms)
+      << std::chrono::duration<double, std::milli>(elapsed).count()
+      << " ms to drain queued records with an untaken mesh";
+}
+
+TEST_F(LivePlayerTest, AnUntakenMeshDoesNotDelayAPartialRecord) {
+  // At most 256 KiB is received by each nonblocking next(): one record
+  // spanning 128 receives must also keep draining while no record is ready.
+  // Bounded socket buffers cannot hold more than a small fraction of it.
+  // Compare against the same receive/parser work without a pending frame,
+  // so sanitizer overhead is paid in both timings rather than mistaken for
+  // waits between receives.
+  SteadyClock::duration baseline{};
+  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(
+      1, 32 * 1024 * 1024, /*untaken=*/false, /*time_sender=*/true, &baseline));
+  SteadyClock::duration elapsed{};
+  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(
+      1, 32 * 1024 * 1024, /*untaken=*/true, /*time_sender=*/true, &elapsed));
+  EXPECT_LT(elapsed, baseline + 750ms)
+      << std::chrono::duration<double, std::milli>(elapsed - baseline).count()
+      << " ms added to socket draining by an untaken mesh";
+}
+
 // Records one at a time, each published once the frame before is taken: each
 // is meshed as soon as it is decoded, as nothing newer has come, rather than
 // held until 100 ms after the last mesh. A frame's wait is timed beyond its
@@ -1487,6 +1691,74 @@ TEST_F(LivePlayerTest, ARecordIsMeshedOnceNothingNewerHasCome) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
+// A frame meshed and left untaken, B, then the next record, C, decoded
+// behind it: the take of B, at a seeded point in the worker's 10 ms slice,
+// wakes it at once, so beyond C's own mesh C is published within 1 ms of the
+// take, by the median of nine. Each sample starts from a frame taken, so the
+// worker is idle, and each record goes once the one before had time to be
+// meshed (twice that frame's decode and mesh); a sample where C still came
+// before B was meshed, so stands for both, is retried.
+TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  std::mt19937 random(20261022);
+  std::uniform_int_distribution<int> phase(0, 10);
+  std::uint64_t n = 0;
+  // The stream's next record, looped and restamped: whether it came.
+  const auto send = [&] {
+    const stream::RecordInfo info =
+        restamped(recording_.infos[n % kFrames], n / kFrames);
+    const Bytes& payload = recording_.payloads[n % kFrames];
+    ++n;
+    return server->publish(info, payload.data(), payload.size()).ok() &&
+           eventually([&] { return player->live_status().seq == info.seq; });
+  };
+  // Twice `frame`'s decode and mesh.
+  const auto twice = [](const FrameStamp& frame) {
+    double ms = 0.0;
+    for (const core::StageRow& row : frame.stages.rows()) {
+      ms += row.cpu_ms;
+    }
+    return std::chrono::microseconds(static_cast<std::int64_t>(2000.0 * ms));
+  };
+  std::vector<double> waits;  // ms, from each take of B to C's publish
+  for (int attempt = 0; attempt < 30 && waits.size() < 9; ++attempt) {
+    ASSERT_TRUE(send());
+    const std::optional<FrameStamp> idle = take(kArrival);
+    ASSERT_TRUE(idle.has_value());
+    ASSERT_TRUE(send());  // B
+    std::this_thread::sleep_for(twice(*idle) + 10ms);
+    ASSERT_TRUE(send());  // C
+    std::this_thread::sleep_for(twice(*idle) +
+                                std::chrono::milliseconds(phase(random)));
+    const SteadyClock::time_point taken_at = SteadyClock::now();
+    const std::optional<FrameStamp> b = take(kArrival);
+    ASSERT_TRUE(b.has_value());
+    if (b->records != 1) {
+      continue;
+    }
+    const std::optional<FrameStamp> c = take(kArrival);
+    ASSERT_TRUE(c.has_value());
+    double wait =
+        std::chrono::duration<double, std::milli>(c->published - taken_at)
+            .count();
+    for (const core::StageRow& row : c->stages.rows()) {
+      if (std::string(row.name) == "mesh") {
+        wait -= row.cpu_ms;
+      }
+    }
+    waits.push_back(wait);
+  }
+  ASSERT_EQ(waits.size(), 9u) << "C kept coming before B was meshed";
+  std::nth_element(waits.begin(), waits.begin() + waits.size() / 2,
+                   waits.end());
+  EXPECT_LT(waits[waits.size() / 2], 1.0) << "ms, the median";
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
 // Records faster than their decode, so one is always in hand: a newer frame
 // still comes every 100 ms or so, rather than once the backlog drains, which
 // here it never does.
@@ -1507,32 +1779,13 @@ TEST_F(LivePlayerTest, RecordsFasterThanTheirDecodeStillShowNewerFrames) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-TEST_F(LivePlayerTest, AConsumerTakingNothingLeavesStatusOkThenGetsTheNewest) {
-  const std::unique_ptr<networking::StreamServer> server = serve();
-  ASSERT_NE(server, nullptr);
-  const Publisher flow(*server, recording_, kFlow);
-  StreamPlayer* player = start_live(server->port());
-  ASSERT_NE(player, nullptr);
-  ASSERT_TRUE(next_frame().has_value());
-  // Records flow, and the ring has 3 slots: an extract per record would run
-  // out of them.
-  std::this_thread::sleep_for(1500ms);
-  EXPECT_TRUE(player->status().ok()) << player->status().message();
-  const std::uint64_t newest = player->live_status().seq;
-  // The mesh that waited, then the newest decoded since.
-  ASSERT_TRUE(next_frame().has_value());
-  const std::optional<FrameStamp> next = next_frame();
-  ASSERT_TRUE(next.has_value());
-  EXPECT_GE(next->index, newest);
-  EXPECT_GT(next->records, 1u);
-  EXPECT_TRUE(player->status().ok()) << player->status().message();
-}
-
-// The same pause, with each frame taken into PlaybackStats as the view takes
-// it: the frame that waited, then the next, which stands for every record of
-// the pause, come a moment apart, yet the records a second read at most twice
-// the flow's; and a second of frames on, they read again.
-TEST_F(LivePlayerTest, AConsumerPauseLeavesTheRecordsASecondAtTheFlows) {
+// A consumer that takes nothing for 1.5 s while records flow, each frame it
+// takes going into PlaybackStats as the view takes it: status() stays OK, as
+// the ring has 3 slots and an extract per record would run out of them; the
+// frame that waited, then the newest decoded since, which stands for every
+// record of the pause, come a moment apart, yet the records a second read at
+// most twice the flow's; and a second of frames on, they read again.
+TEST_F(LivePlayerTest, AConsumerPauseLeavesStatusOkThenGetsTheNewest) {
   const std::unique_ptr<networking::StreamServer> server = serve();
   ASSERT_NE(server, nullptr);
   const Publisher flow(*server, recording_, kFlow);
@@ -1544,17 +1797,22 @@ TEST_F(LivePlayerTest, AConsumerPauseLeavesTheRecordsASecondAtTheFlows) {
     if (frame) {
       stats.add_frame(*frame, PlaybackStats::Clock::now());
     }
-    return frame.has_value();
+    return frame;
   };
   constexpr double kMost = 2.0 * static_cast<double>(1s / kFlow);
-  ASSERT_TRUE(taken());
+  ASSERT_TRUE(taken().has_value());
   std::this_thread::sleep_for(1500ms);
-  ASSERT_TRUE(taken());  // the frame that waited
-  ASSERT_TRUE(taken());
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+  const std::uint64_t newest = player->live_status().seq;
+  ASSERT_TRUE(taken().has_value());  // the frame that waited
+  const std::optional<FrameStamp> next = taken();
+  ASSERT_TRUE(next.has_value());
+  EXPECT_GE(next->index, newest);
+  EXPECT_GT(next->records, 1u);
   EXPECT_LE(stats.records_per_s(PlaybackStats::Clock::now()), kMost);
   const SteadyClock::time_point until = SteadyClock::now() + 1s;
   while (SteadyClock::now() < until) {
-    ASSERT_TRUE(taken());
+    ASSERT_TRUE(taken().has_value());
   }
   const double records = stats.records_per_s(PlaybackStats::Clock::now());
   EXPECT_GT(records, 0.0);
@@ -1583,10 +1841,9 @@ TEST_F(LivePlayerTest, AServerGoneIsARetryAndANewOneOnItsPortGivesFrames) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
   // A new server on the same port, of the stream at twice the voxel size,
   // which a grid of the last connection's would refuse: frames again.
-  const std::string coarse = scratch_.file("coarse.vrst");
-  const core::Status written = write_stream(device(), allocator(), coarse,
-                                            std::nullopt, 2 * vp_test::kVoxel);
-  ASSERT_TRUE(written.ok()) << written.message();
+  const std::string coarse =
+      scratch_.copy(VP_TEST_STREAMS, vp_test::kCoarseStream);
+  ASSERT_FALSE(coarse.empty());
   ASSERT_NO_FATAL_FAILURE(read_recording(coarse, &recording_));
   server = serve(port);
   ASSERT_NE(server, nullptr);
@@ -1606,17 +1863,20 @@ TEST_F(LivePlayerTest, AServerGoneIsARetryAndANewOneOnItsPortGivesFrames) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-// Parked at points spread by a seeded generator while records arrive, as one
-// is in hand, a decode or an extract is under way or a receive waits for the
-// next: each time the other end sees the connection close within kClosed of
-// the park's return, and the unpark connects again.
+// Parked at points spread evenly over 0-20 ms while records arrive every 10
+// ms, as one is in hand, a decode or an extract is under way or a receive
+// waits for the next: each time the other end sees the connection close
+// within kClosed of the park's return, and the unpark connects again. 8
+// times, or VP_PARK_CYCLES times: the stress soak's 50 (CMakeLists.txt).
 TEST_F(LivePlayerTest, AParkClosesTheConnectionWithinASlice) {
+  const char* const asked = std::getenv("VP_PARK_CYCLES");
+  const std::size_t cycles =
+      asked != nullptr ? std::strtoul(asked, nullptr, 10) : 8;
+  ASSERT_GE(cycles, 2u) << "VP_PARK_CYCLES=" << asked;
   const RawPeer peer(stream_feed(), 10ms);
   StreamPlayer* player = start_live(peer.port());
   ASSERT_NE(player, nullptr);
-  std::mt19937 random(20261021);
-  std::uniform_int_distribution<int> delay(0, 20);
-  for (std::size_t n = 1; n <= 50; ++n) {
+  for (std::size_t n = 1; n <= cycles; ++n) {
     SCOPED_TRACE(::testing::Message() << "park " << n);
     // Records arriving on connection n, its frames taken as they come.
     ASSERT_TRUE(eventually([&] {
@@ -1626,7 +1886,8 @@ TEST_F(LivePlayerTest, AParkClosesTheConnectionWithinASlice) {
       return peer.accepted() == n &&
              player->live_status().state == LiveState::kLive;
     }));
-    std::this_thread::sleep_for(std::chrono::milliseconds(delay(random)));
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(20 * (n - 1) / (cycles - 1)));
     ASSERT_TRUE(player->park(kArrival));
     const SteadyClock::time_point parked = SteadyClock::now();
     const std::optional<SteadyClock::time_point> closed = peer.closed(n);

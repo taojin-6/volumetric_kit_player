@@ -40,14 +40,14 @@ vkc_require_core(0.17.0 ${_vp_core_tiers})
 # The stream reader, the codec's decode grid, Marching Cubes, the mesh exchange
 # and the live stream's client. Its tests, examples, install and -Werror stay
 # off in a subproject, so its library's core floor (0.2.0) is the one checked.
-# The pin is recon main at #260's merge (b6fa928): networking::StreamClient and
-# StreamServer, beside #256's empty mesh payload at MeshExchange's commit,
-# #255's volume::kDefaultBucketSize / kDefaultMaxChain and #253's
-# codec::make_decode_grid and decode_growing.
+# The pin adds StreamClient::next's progress output (51ef686) to #260's merge
+# (b6fa928): networking::StreamClient and StreamServer, beside #256's empty mesh
+# payload at MeshExchange's commit, #255's volume::kDefaultBucketSize /
+# kDefaultMaxChain and #253's codec::make_decode_grid and decode_growing.
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG b6fa928f544e4283b7db3b7f776b32b8aefdc987)
+  GIT_TAG 51ef686e72b0a0793c6bc23100e37267ee41b6a1)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------

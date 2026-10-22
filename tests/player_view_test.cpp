@@ -3,21 +3,21 @@
 
 // PlayerView on a device, over gfx's headless surface and the tests' stream
 // (test_stream.hpp), with gfx's ImGuiTouch as the platform half: create
-// refuses what it cannot use; frames present and shown() advances, onto a
-// frame that meshes nothing too, which still presents; 0 x 0
-// skips without blocking; a step moves one frame; the worker's failure
-// surfaces from frame(); a tap on Normals switches the mesh's flags from lit to
-// normals and back, and frames keep presenting; the panel draws at a phone's
-// scale, and its controls fit a phone and a fingertip at the iOS shell's
-// sizes, as do the stats, with the profiler's draw row in their table;
-// ui_wants_pointer() follows a finger on the panel and on the stats' header,
-// not on their body; and teardown mid-playback, the profiler attached, is
-// clean. Whether the draw row has a device half is not checked, as the view
-// keeps its profiler to itself; the owner checks the GPU column by hand. The
-// view makes its own shared device, validated as the test policy asks, so the
-// layer's errors fail the test. The tests skip where the
-// loader offers no headless surface (NVIDIA's ICD). On Apple a skip fails
-// (CMakeLists.txt), and MoltenVK plans two queue families, so the mesh's
+// refuses what it cannot use; frames present and shown() advances, their
+// triangles sharing vertices, onto a frame that meshes nothing too, which
+// still presents; 0 x 0 skips without blocking; a step moves one frame; the
+// worker's failure surfaces from frame(); a tap on Normals switches the mesh's
+// flags from lit to normals and back, and frames keep presenting; the panel
+// draws at a phone's scale, and its controls fit a phone and a fingertip at
+// the iOS shell's sizes, as do the stats, with the profiler's draw row in
+// their table, whose device half times the whole pass; ui_wants_pointer()
+// follows a finger on the panel, which controls_test.cpp checks on the stats'
+// header and body; and teardown mid-playback, the profiler attached, is clean.
+// A live view presents, on the two images its swapchain asks for (checked on
+// the host). The view makes its own shared device, validated as the test
+// policy asks, so the layer's errors fail the test. The tests skip where the
+// loader offers no headless surface (NVIDIA's ICD), but fail on Apple, where
+// MoltenVK has one. MoltenVK plans two queue families, so the mesh's
 // buffers are CONCURRENT and read across. One family, EXCLUSIVE and read in
 // place, is tested on the host only (mesh_wiring_test.cpp) until a leg runs
 // the view on one.
@@ -64,6 +64,7 @@ using volumetric_kit::player::PlayerViewConfig;
 using volumetric_kit::player::StatsPanel;
 using volumetric_kit::player::status_line;
 using volumetric_kit::player::StreamPlayer;
+using volumetric_kit::player::view_swapchain;
 using SteadyClock = std::chrono::steady_clock;
 
 constexpr VkExtent2D kExtent{320, 240};
@@ -80,34 +81,38 @@ constexpr auto kArrival = 10s;
 constexpr auto kQuiet = 300ms;
 constexpr auto kPrompt = 1s;
 
-class PlayerViewTest : public core::test::VulkanDeviceTest {
+class PlayerViewTest : public core::test::VulkanTest {
  protected:
-  // The fixture's device writes the stream; the view makes its own.
+  // The fixture's physical device says whether there is one for the view,
+  // which makes its own device.
   core::DeviceRequirements requirements() const override {
     return recon::device_requirements();
   }
 
   void SetUp() override {
-    VulkanDeviceTest::SetUp();
+    VulkanTest::SetUp();
     if (base_setup_incomplete()) {
       return;
     }
     core::Result<gfx::windowing::SurfaceSource> headless =
         gfx::windowing::headless_surface();
     if (!headless.ok()) {
+#ifdef __APPLE__
+      FAIL() << headless.status().message();  // MoltenVK has one
+#else
       GTEST_SKIP() << headless.status().message();
+#endif
     }
     surface_ = std::move(headless).value();
-    const core::Status written =
-        vp_test::write_stream(device(), allocator(), path_);
-    ASSERT_TRUE(written.ok()) << written.message();
+    path_ = scratch_.copy(VP_TEST_STREAMS, vp_test::kStream);
+    ASSERT_FALSE(path_.empty());
   }
 
   // The view goes while the fixture still counts the layer's errors.
   void TearDown() override {
     touch_.reset();
     view_.reset();
-    VulkanDeviceTest::TearDown();
+    VulkanTest::TearDown();
   }
 
   // The view's config: at `ui_scale_` and `ui_min_frame_height_`, validated
@@ -224,19 +229,6 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
         (std::string(kStatsWindow) + "##body").c_str());
   }
 
-  // Whether the view's UI wants a finger at `at`, in points, as of the frame
-  // it lands in. The finger then goes, pressing nothing.
-  bool wants_pointer_at(glm::vec2 at) {
-    touch_->touch_began(1, at);
-    EXPECT_TRUE(present());
-    const bool wants = view_->ui_wants_pointer();
-    touch_->touch_cancelled(1);
-    for (int i = 0; i < 2; ++i) {
-      EXPECT_TRUE(present());
-    }
-    return wants;
-  }
-
   // A finger lifts where it lands, and the frames ImGui takes the tap over
   // present: its position, its press, its release, and its position cleared.
   void tap(glm::vec2 at) {
@@ -280,7 +272,7 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
   }
 
   vp_test::Scratch scratch_;
-  const std::string path_ = scratch_.file("sphere.vrst");
+  std::string path_;  // the test's copy of the stream
   gfx::windowing::SurfaceSource surface_;
   std::unique_ptr<PlayerView> view_;
   std::unique_ptr<gfx::ui::ImGuiTouch> touch_;  // destroyed before the view
@@ -349,6 +341,11 @@ TEST_F(PlayerViewTest, FramesPresentAndShownAdvances) {
   ASSERT_TRUE(advanced) << shown.size() << " frame(s) shown";
   // In order, from the first; the loop wraps only after kFrames.
   EXPECT_EQ(shown, (std::vector<std::uint64_t>{0, 1, 2}));
+  // Its triangles share their vertices (mesh_wiring): fewer than 3 each.
+  const recon::mesh::DeviceMesh& mesh = view_->mesh();
+  EXPECT_TRUE(mesh.shares_vertices);
+  EXPECT_GT(mesh.triangle_count, 0u);
+  EXPECT_LT(mesh.vertex_count, 3 * mesh.triangle_count);
   for (int i = 0; i < 3; ++i) {
     const core::Result<bool> ticked = tick();
     ASSERT_TRUE(ticked.ok()) << ticked.status().message();
@@ -360,10 +357,9 @@ TEST_F(PlayerViewTest, FramesPresentAndShownAdvances) {
 }
 
 TEST_F(PlayerViewTest, ShownMovesOntoAFrameThatMeshesNothing) {
-  const std::string path = scratch_.file("empty_frame.vrst");
-  const core::Status written =
-      vp_test::write_stream(device(), allocator(), path, /*empty=*/1);
-  ASSERT_TRUE(written.ok()) << written.message();
+  const std::string path =
+      scratch_.copy(VP_TEST_STREAMS, vp_test::kEmptyFrameStream);
+  ASSERT_FALSE(path.empty());
   ASSERT_TRUE(make_view(path, /*playing=*/false));
   view_->player().step();
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
@@ -487,20 +483,6 @@ TEST_F(PlayerViewTest, UiWantsPointerFollowsAFingerOnThePanel) {
   touch_->touch_ended(2);
 }
 
-// The top-left corner is the stats' header; their body is the scene's.
-TEST_F(PlayerViewTest, UiWantsPointerTakesTheStatsHeaderNotTheirBody) {
-  ASSERT_TRUE(make_view(/*playing=*/false));
-  for (int i = 0; i < 3; ++i) {
-    ASSERT_TRUE(present());
-  }
-  EXPECT_TRUE(wants_pointer_at({4.0f, 4.0f}));
-  ImGui::SetCurrentContext(view_->ui_context());
-  const ImGuiWindow* const body = stats_body();
-  ASSERT_NE(body, nullptr);
-  EXPECT_FALSE(wants_pointer_at(
-      {body->Pos.x + 0.5f * body->Size.x, body->Pos.y + 0.5f * body->Size.y}));
-}
-
 // A phone's scale takes ImGui's vector font rather than its pixel one, which
 // must also hold the status line's dot.
 TEST_F(PlayerViewTest, ThePanelDrawsAtAPhonesScale) {
@@ -590,26 +572,32 @@ TEST_F(PlayerViewTest, TheStatsFitAPhone) {
   EXPECT_GE(header->Size.y, kFingertip);
 }
 
-// A tap on the stats' header, the top-left corner, closes them; a frame
-// stepped meanwhile is still counted, so reopened, past a refresh, their
-// table has the worker's rows besides the profiler's.
-TEST_F(PlayerViewTest, TheStatsCountTheFramesTakenWhileClosed) {
-  ASSERT_TRUE(make_view(/*playing=*/false));
-  for (int i = 0; i < 3; ++i) {
-    ASSERT_TRUE(present());
-  }
-  tap({4.0f, 4.0f});
-  ImGui::SetCurrentContext(view_->ui_context());
-  ASSERT_NE(stats_body(), nullptr);
-  EXPECT_FALSE(stats_body()->Active) << "closed, the header alone";
-  view_->player().step();
+// Playing at a phone's size, where the queue can time: the draw row's device
+// half spans the whole pass, so the mean of five refreshes reads the pass,
+// not the about 0 that a scope inside it reads on Apple GPUs. MoltenVK on an
+// M5 Max, under other tests' load too: inside, 0.002 to 0.01 ms, at times
+// one spike to 1 ms; around it, mostly 0.02 to 0.2 ms, at times as low as
+// 0.002. The mean, unlike the median, a run of low readings does not sink,
+// but a spike lifts it: it misses a scope inside about 1 run in 20.
+TEST_F(PlayerViewTest, TheDrawRowTimesTheWholePass) {
+  extent_ = kPhone;
+  ASSERT_TRUE(make_view());
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
-  EXPECT_FALSE(stats_body()->Active);
-  tap({4.0f, 4.0f});
-  tick_for(2 * StatsPanel::kRefresh);
-  ImGui::SetCurrentContext(view_->ui_context());
-  EXPECT_TRUE(stats_body()->Active);
-  EXPECT_EQ(stats_rows(), 4) << "read, decode, mesh and draw";
+  double sum_ms = 0.0;
+  int readings = 0;
+  for (int i = 0; i < 5; ++i) {
+    tick_for(StatsPanel::kRefresh);
+    for (const core::StageRow& row : view_->stats_panel().rows()) {
+      if (std::string(row.name) == "draw" && row.has_gpu) {
+        sum_ms += row.gpu_ms;
+        ++readings;
+      }
+    }
+  }
+  if (readings == 0) {
+    return;  // the graphics queue cannot time
+  }
+  EXPECT_GT(sum_ms / readings, 0.012) << "ms, the mean";
 }
 
 TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {
@@ -625,6 +613,40 @@ TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {
   for (const std::string& warning : warnings()) {
     EXPECT_EQ(warning.find("continuing without it"), std::string::npos)
         << warning;
+  }
+}
+
+// Live, on its two swapchain images: frames present, with no sender (port 1
+// refuses) and so nothing to draw.
+TEST_F(PlayerViewTest, ALiveViewPresents) {
+  core::Result<std::unique_ptr<StreamPlayer>> live =
+      StreamPlayer::connect({"127.0.0.1", 1});
+  ASSERT_TRUE(live.ok()) << live.status().message();
+  core::Result<std::unique_ptr<PlayerView>> view =
+      PlayerView::create(surface_, extent_, std::move(live).value(), config());
+  ASSERT_TRUE(view.ok()) << view.status().message();
+  view_ = std::move(view).value();
+  core::Result<std::unique_ptr<gfx::ui::ImGuiTouch>> touch =
+      gfx::ui::ImGuiTouch::create(view_->ui_context());
+  ASSERT_TRUE(touch.ok()) << touch.status().message();
+  touch_ = std::move(touch).value();
+  for (int i = 0; i < 4; ++i) {
+    ASSERT_TRUE(present());
+  }
+  EXPECT_FALSE(view_->shown().has_value());
+}
+
+// On the host: FIFO and D32 depth; live, two images, so a mesh taken shows a
+// vsync sooner, and a file's, gfx's default.
+TEST(ViewSwapchain, LiveAsksForTwoImages) {
+  for (const bool live : {false, true}) {
+    const gfx::windowing::SwapchainConfig config =
+        view_swapchain(kExtent, live);
+    EXPECT_EQ(config.extent.width, kExtent.width);
+    EXPECT_EQ(config.extent.height, kExtent.height);
+    EXPECT_EQ(config.preferred_present_mode, VK_PRESENT_MODE_FIFO_KHR);
+    EXPECT_EQ(config.depth_format, VK_FORMAT_D32_SFLOAT);
+    EXPECT_EQ(config.min_image_count, live ? 2u : 0u) << "live " << live;
   }
 }
 

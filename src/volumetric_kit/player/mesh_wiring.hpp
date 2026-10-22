@@ -19,8 +19,8 @@ namespace volumetric_kit::player {
 
 /// @brief The extractor's config and the exchange's, which must agree.
 struct MeshWiring {
-  /// The extractor's: the draw's usage, both families, and a ring one slot
-  /// deeper than the renderer's frames in flight.
+  /// The extractor's: the draw's usage, both families, a ring one slot
+  /// deeper than the renderer's frames in flight, and shared vertices.
   recon::mesh::MarchingCubesConfig mc;
   /// The exchange's: the renderer's frames in flight, and whether it reads
   /// from another family than the extractor writes on.
