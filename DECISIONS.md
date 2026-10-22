@@ -186,10 +186,10 @@ the sizes.
   rebuild is the only recovery from a lost device.
 - **What it plays is in the app's Documents folder** (2026-10-22), which
   `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` show in
-  Finder and the Files app; each activation looks again, and with nothing to
-  play it leaves a note file there, as the Files app may hide an empty app
-  folder. Why: the smallest way onto a device with no picker; a document
-  picker and open-in wait for a need.
+  Finder and the Files app; each build of the view looks again, and with
+  nothing to play it leaves a note file there, as the Files app may hide an
+  empty app folder. Why: the smallest way onto a device with no picker; a
+  document picker and open-in wait for a need.
 - **The `increased-memory-limit` entitlement:** past the jetsam limit iOS
   kills the app with no `Status`, while a stream too big for the device's
   Vulkan budget is refused with one. **The device family is a build

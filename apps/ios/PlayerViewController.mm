@@ -42,9 +42,9 @@ namespace {
 constexpr std::chrono::seconds kParkWait{1};
 
 // The source Documents holds, its names in Finder's order
-// (localizedStandardCompare:). With neither a scenario nor a stream there, a
-// note is left, as the Files app may hide an empty app folder (DECISIONS.md),
-// and the refusal says what to copy.
+// (localizedStandardCompare:). On folder_source's NotFound, neither a
+// scenario nor a stream there, a note is left, as the Files app may hide an
+// empty app folder (DECISIONS.md), and the refusal says what to copy.
 vkc::Result<cfg::Source> DocumentsSource() {
   NSFileManager* files = NSFileManager.defaultManager;
   NSString* documents = NSSearchPathForDirectoriesInDomains(

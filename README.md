@@ -150,11 +150,13 @@ A `player.json` is a scenario as the desktop app takes, in the core's
 format; a relative `source.path` is in the folder. For the lab's sender,
 copy in a live one (above) as `player.json`, with the phone on the VPN or
 the sender's network; the first live connection asks for local network
-access. Each time the app comes back to the foreground it looks again, and
-until it finds something to play, or while the core refuses its
-`player.json`, it says why. A file plays with loop on. A tap works the panel
-and the stats' header, one finger orbits the camera, two pan it, and a pinch
-zooms.
+access. The app looks each time it builds its view: at launch, and on
+coming back to the foreground with nothing playing. Until it finds something
+to play, or while the core refuses its `player.json`, it says why. To switch
+what it plays, close it in the app switcher and launch it again. A file
+plays with loop on.
+A tap works the panel and the stats' header, one finger orbits the camera,
+two pan it, and a pinch zooms.
 
 It logs the view's bring-up time, each park's wait and any failure, which
 Console.app shows. The owner checks the app on a device by hand
