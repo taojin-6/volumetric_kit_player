@@ -30,11 +30,11 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
   GIT_TAG ef352a9899a5a9d650aec18fdf1648f6e48bba90)
 FetchContent_MakeAvailable(volumetric_kit_core)
+set(_vp_core_tiers VULKAN)
 if(VP_DESKTOP_APP)
-  vkc_require_core(0.17.0 VULKAN CONFIG)
-else()
-  vkc_require_core(0.17.0 VULKAN)
+  list(APPEND _vp_core_tiers CONFIG)
 endif()
+vkc_require_core(0.17.0 ${_vp_core_tiers})
 
 # --- volumetric_kit_recon ----------------------------------------------------
 # The stream reader, the codec's decode grid, Marching Cubes, the mesh exchange
