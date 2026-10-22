@@ -18,10 +18,10 @@ is implemented.
   file or live, as tall as the stats' header beside it, so their body clears
   it. A tap only records a request, which the shell takes after `frame()`.
   Why: the desktop takes a scenario; no UIKit runs inside the ImGui frame;
-  and the controls have no room for it. Their playback row is full with
-  Normals (365 of 375 pt), the status line's row is full beside a 5-digit
-  track's line, and a row of its own would lift the controls into the stats'
-  body on a landscape phone.
+  and the controls have little room for it. In their playback row it would
+  fill 365 of a phone's 375 pt, the status line's row is full beside a
+  5-digit track's line, and a row of its own would lift the controls into
+  the stats' body on a landscape phone.
 - **One parser for the typed fields, `parse_live_source`,** over
   `parse_live_address`, into the source `open_source` plays, the desktop
   app's call too, so the library links the core's config tier on every
