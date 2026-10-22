@@ -148,7 +148,9 @@ the sizes.
 - **A thin Objective-C++ shell, all on main,** making the desktop shell's
   calls: gfx's `metal_surface` over a `CAMetalLayer` view at the screen's
   native scale, `PlayerView::create`, gfx's `ImGuiTouch` on its context, and
-  a display link that calls `frame` with the drawable in pixels. Every touch
+  a display link that calls `frame` with the drawable in pixels, at 24 to 60
+  Hz: streams are 25 to 30 fps, and a ProMotion iPad would otherwise redraw
+  the same frame at up to 120 Hz. Every touch
   phase reaches `ImGuiTouch`, a cancelled one as `touch_cancelled` so it
   presses nothing. One-finger pan orbits, two-finger pan pans and pinch
   zooms, over the view's height; the pan and the pinch compose, and none

@@ -292,6 +292,8 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   LinkProxy* proxy = [[LinkProxy alloc] init];
   proxy.owner = self;
   _link = [CADisplayLink displayLinkWithTarget:proxy selector:@selector(tick:)];
+  // At most 60 Hz (DECISIONS.md).
+  _link.preferredFrameRateRange = CAFrameRateRangeMake(24, 60, 60);
   [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 }
 

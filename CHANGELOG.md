@@ -62,6 +62,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   59 MB. `PlayerView::mesh()` reads the drawn mesh's counts.
 - Live, the swapchain has two images (`view_swapchain`), so a frame shows
   a vsync sooner; a file keeps gfx's default.
+- The iOS app draws at most 60 frames a second, so a ProMotion iPad no
+  longer redraws the same frame at 120 Hz.
 
 ### Fixed
 
