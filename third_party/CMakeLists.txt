@@ -11,14 +11,14 @@ include(FetchContent)
 
 # --- volumetric_kit_core -----------------------------------------------------
 # The device, Status/Result and the GPU test fixtures, declared first, and the
-# config tier, whose Player profile loads a scenario on every platform
-# (DECISIONS.md). The pin is core main at #47's merge (f133d41, 0.17.0), which
-# adds that profile; its iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS
-# release (MoltenVK_ROOT) and answers glm. gfx's pin (7757c13, 0.12.0) and
-# recon's (b992f12, 0.15.0) are older and yield to it, as the player declares
-# the core first. The floor below is the pin's version (0.17.0), so an older
-# FETCHCONTENT_SOURCE_DIR override is refused. The player installs nothing, so
-# the core's install rules are off too.
+# config tier: its Source, which the library's open_source takes on every
+# platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
+# is core main at #47's merge (f133d41, 0.17.0), which adds that profile; its
+# iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT)
+# and answers glm. gfx's pin (7757c13, 0.12.0) and recon's (b992f12, 0.15.0) are
+# older and yield to it, as the player declares the core first. The floor below
+# is the pin's version (0.17.0), so an older FETCHCONTENT_SOURCE_DIR override is
+# refused. The player installs nothing, so the core's install rules are off too.
 set(VKC_WITH_VULKAN ON)
 set(VKC_WITH_CONFIG ON)
 set(VKC_INSTALL OFF)
