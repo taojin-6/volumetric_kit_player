@@ -44,6 +44,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   park closes it. Live, the stats show the bitrate and records a second over
   the last second (`FrameStamp::records`, `record_bytes`, `published`).
   `tests/vp_live_probe` plays one with no window, on a Mac.
+- A normal-coloured view: Normals in the panel, beside Loop and live over the
+  status line, and the desktop's N key colour the mesh by its world-space
+  normals (gfx's `kHybridMeshNormals`) in place of lighting
+  (`PlayerView::normals`, `set_normals` and `mesh_flags`; `draw_controls`
+  takes the view's `normals`).
 
 ### Changed
 

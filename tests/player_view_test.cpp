@@ -6,10 +6,12 @@
 // refuses what it cannot use; frames present and shown() advances, onto a
 // frame that meshes nothing too, which still presents; 0 x 0
 // skips without blocking; a step moves one frame; the worker's failure
-// surfaces from frame(); the panel draws at a phone's scale, and its controls
-// fit a phone and a fingertip at the iOS shell's sizes, as do the stats, with
-// the profiler's draw row in their table; ui_wants_pointer() follows a finger
-// on the panel and on the stats' header, not on their body; and teardown
+// surfaces from frame(); a tap on Normals switches the mesh's flags from lit to
+// normals and back, drawing either way; the panel draws at a phone's scale, and
+// its controls fit a phone and a fingertip at the iOS shell's sizes, as do the
+// stats, with the profiler's draw row in their table; ui_wants_pointer()
+// follows a finger on the panel and on the stats' header, not on their body;
+// and teardown
 // mid-playback, the profiler attached, is clean. Whether the draw row has a
 // device half is not checked, as the view keeps its profiler to itself; the
 // owner checks the GPU column by hand. The view
@@ -441,6 +443,36 @@ TEST_F(PlayerViewTest, TheWorkersFailureSurfacesFromFrame) {
   EXPECT_FALSE(view_->shown().has_value());
 }
 
+// Lit at first; a tap on Normals, the row's last control, colours the mesh by
+// its normals, with frames drawn so; another lights it again, and
+// set_normals does as a tap does. Whether a frame shows the normals' colours
+// is gfx's to test, as the view's swapchain cannot be read back.
+TEST_F(PlayerViewTest, ATapOnNormalsSwitchesTheMeshsFlags) {
+  using gfx::pipelines::kHybridMeshLit;
+  using gfx::pipelines::kHybridMeshNormals;
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  EXPECT_FALSE(view_->normals());
+  EXPECT_EQ(view_->mesh_flags(), kHybridMeshLit);
+  ImGui::SetCurrentContext(view_->ui_context());
+  const ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
+  ASSERT_NE(panel, nullptr);
+  const glm::vec2 normals = vp_test::control_middle(*panel, 3);
+  tap(normals);
+  EXPECT_TRUE(view_->normals());
+  EXPECT_EQ(view_->mesh_flags(), kHybridMeshNormals);
+  const std::uint64_t lit = view_->shown()->index;
+  ASSERT_TRUE(tick_until([&] { return view_->shown()->index != lit; }))
+      << "no frame drawn in normals";
+  tap(normals);
+  EXPECT_FALSE(view_->normals());
+  EXPECT_EQ(view_->mesh_flags(), kHybridMeshLit);
+  view_->set_normals(true);
+  EXPECT_EQ(view_->mesh_flags(), kHybridMeshNormals);
+  EXPECT_TRUE(present());
+  EXPECT_TRUE(view_->player().playing()) << "the taps pressed Normals alone";
+}
+
 TEST_F(PlayerViewTest, UiWantsPointerFollowsAFingerOnThePanel) {
   ASSERT_TRUE(make_view(/*playing=*/false));
   // An auto-sized panel takes its size on its second frame.
@@ -492,9 +524,9 @@ TEST_F(PlayerViewTest, ThePanelDrawsAtAPhonesScale) {
 }
 
 // On the narrowest phone, at the iOS shell's sizes: a fingertip's square at
-// each control's top left lands on it, "Pause" fits its button, and the panel
-// fits across, both its row and the widest status line, a 5-digit track's
-// playing in a loop.
+// each control's top left lands on it, "Pause" and "Normals" fit their
+// buttons, and the panel fits across, both its row and the widest status line,
+// a 5-digit track's playing in a loop.
 TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
   extent_ = kPhone;
   pixels_per_point_ = kPhonePixelsPerPoint;
@@ -515,12 +547,14 @@ TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
   last.index = 99'998;
   EXPECT_LE(text_width(*panel, status_line(last, 99'999, true, true)) + padding,
             widest_panel());
-  EXPECT_GE(
-      vp_test::control_size(*panel, 0).x,
-      text_width(*panel, "Pause") + 2.0f * ImGui::GetStyle().FramePadding.x);
+  const float label_padding = 2.0f * ImGui::GetStyle().FramePadding.x;
+  EXPECT_GE(vp_test::control_size(*panel, 0).x,
+            text_width(*panel, "Pause") + label_padding);
+  EXPECT_GE(vp_test::control_size(*panel, 3).x,
+            text_width(*panel, "Normals") + label_padding);
   const ImGuiID controls[] = {panel->GetID("###play"), panel->GetID("Step"),
-                              panel->GetID("Loop")};
-  for (int i = 0; i < 3; ++i) {
+                              panel->GetID("Loop"), panel->GetID("Normals")};
+  for (int i = 0; i < 4; ++i) {
     const glm::vec2 corner = vp_test::control_top_left(*panel, i);
     for (const float dx : {0.5f, kFingertip - 0.5f}) {
       for (const float dy : {0.5f, kFingertip - 0.5f}) {
@@ -532,6 +566,7 @@ TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
   // The fingers pressed nothing.
   EXPECT_FALSE(view_->player().playing());
   EXPECT_TRUE(view_->player().loop());
+  EXPECT_FALSE(view_->normals());
   EXPECT_FALSE(view_->shown().has_value());
 }
 

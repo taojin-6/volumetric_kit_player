@@ -151,7 +151,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   const gfx::windowing::Frame& frame = *begun;
   // 2. The controls and the stats, as of the last frame drawn.
   overlay_.new_frame();
-  draw_controls(*player_, shown_);
+  draw_controls(*player_, shown_, normals_);
   stats_panel_.draw(stats_, shown_, shown_triangles_,
                     profiler_.metrics().sections, PlaybackStats::Clock::now(),
                     player_->live());
@@ -190,6 +190,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
                                            static_cast<float>(size.height),
                                        kNear, kFar)
                             .view_proj();
+      draws.flags = mesh_flags();
       draws.draws = &draw;
       draws.draw_count = 1;
       mesh_pipeline_.submit(frame.cmd, draws);
@@ -207,6 +208,10 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
     return ended;
   }
   return true;
+}
+
+std::uint32_t PlayerView::mesh_flags() const noexcept {
+  return normals_ ? pipelines::kHybridMeshNormals : pipelines::kHybridMeshLit;
 }
 
 bool PlayerView::ui_wants_pointer() const noexcept {

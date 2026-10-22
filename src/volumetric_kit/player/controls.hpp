@@ -25,26 +25,28 @@ inline constexpr const char* kControlsWindow = "##player_controls";
 /// The stats panel's header window; its body's is derived from it
 /// (gfx::ui::begin_collapsible_panel).
 inline constexpr const char* kStatsWindow = "##player_stats";
-/// The width of the Play/Pause and Step buttons, in font sizes, so each is a
-/// stable target: "Pause" fits at any scale, and a phone's row stays inside
-/// 375 pt.
+/// The width of the Play/Pause, Step and Normals buttons, in font sizes, so
+/// each is a stable target: "Pause" and "Normals" fit at any scale, and a
+/// phone's row stays inside 375 pt.
 inline constexpr float kButtonEms = 4.5f;
 
-/// @brief Draw Play/Pause, Step and Loop in a row, the status line below, at
-///        the bottom centre of the main viewport's work area, so they stay
-///        clear of a notch and a home indicator; a live player's
-///        (StreamPlayer::live), its @ref live_status_line alone. There is no
-///        text field, so touch needs no keyboard.
+/// @brief Draw Play/Pause, Step, Loop and Normals in a row, the status line
+///        below, at the bottom centre of the main viewport's work area, so
+///        they stay clear of a notch and a home indicator; a live player's
+///        (StreamPlayer::live), Normals over its @ref live_status_line. There
+///        is no text field, so touch needs no keyboard.
 ///
 /// @code
 /// overlay.new_frame();
-/// draw_controls(player, shown);
+/// draw_controls(player, shown, normals);
 /// @endcode
-/// @param player  The controls act on it; they are safe from this thread.
-/// @param shown   The last stream frame drawn, for the status line.
+/// @param player   The controls act on it; they are safe from this thread.
+/// @param shown    The last stream frame drawn, for the status line.
+/// @param normals  The view's shading (PlayerView::normals): a press on
+///                 Normals flips it, and the button shows pressed while on.
 /// @pre An ImGui frame is open on the view's context.
-void draw_controls(StreamPlayer& player,
-                   const std::optional<FrameStamp>& shown);
+void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
+                   bool& normals);
 
 /// @brief A live player's status line.
 ///

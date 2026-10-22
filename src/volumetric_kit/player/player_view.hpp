@@ -116,6 +116,16 @@ class PlayerView {
   StreamPlayer& player() noexcept { return *player_; }
   /// @return The camera, for G1's drag verbs (gfx::camera::OrbitCamera).
   gfx::camera::OrbitCamera& camera() noexcept { return camera_; }
+  /// @return Whether the mesh is coloured by its world-space normals rather
+  ///         than lit; false at first. The panel's Normals flips it.
+  bool normals() const noexcept { return normals_; }
+  /// @brief Colour the mesh by its normals, or light it, from the next frame
+  ///        (the desktop's N key).
+  /// @param normals  Whether to colour it by its normals.
+  void set_normals(bool normals) noexcept { normals_ = normals; }
+  /// @return The flags the mesh draws with (gfx::pipelines::HybridMeshFlags):
+  ///         kHybridMeshNormals while @ref normals, else kHybridMeshLit.
+  std::uint32_t mesh_flags() const noexcept;
   /// @return The ImGui context the controls draw in. Bind the window system's
   ///         platform half to it (glfw::ImGuiGlfw, gfx::ui::ImGuiTouch),
   ///         declared after the view so it dies first.
@@ -155,6 +165,7 @@ class PlayerView {
   gfx::ui::ImGuiOverlay overlay_;
   FrameExchange exchange_;
   gfx::camera::OrbitCamera camera_;
+  bool normals_ = false;  // the mesh's shading (mesh_flags)
   std::unique_ptr<StreamPlayer> player_;
   PlaybackStats stats_;  // from player_'s track
   std::optional<FrameStamp> shown_;

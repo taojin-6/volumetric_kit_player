@@ -44,8 +44,8 @@ namespace vkp = volumetric_kit::player;
 // with calib's (its calib_rig.cpp TODO); this wheel accumulator is a knowing
 // copy until then (DECISIONS.md).
 struct Input {
-  vkp::StreamPlayer* player = nullptr;  // once the view holds it
-  double wheel = 0.0;                   // notches since the last tick
+  vkp::PlayerView* view = nullptr;  // once it is made
+  double wheel = 0.0;               // notches since the last tick
 };
 
 Input& input_of(GLFWwindow* window) {
@@ -53,7 +53,7 @@ Input& input_of(GLFWwindow* window) {
 }
 
 // The panel's controls as keys: Space plays or pauses, Right steps, L loops,
-// which a live player ignores. Esc closes the window.
+// which a live player ignores, and N flips Normals. Esc closes the window.
 void on_key(GLFWwindow* window, int key, int /*scancode*/, int action,
             int /*mods*/) {
   if (action != GLFW_PRESS) {
@@ -62,16 +62,19 @@ void on_key(GLFWwindow* window, int key, int /*scancode*/, int action,
   if (key == GLFW_KEY_ESCAPE) {
     glfwSetWindowShouldClose(window, GLFW_TRUE);
   }
-  vkp::StreamPlayer* const player = input_of(window).player;
-  if (player == nullptr) {
+  vkp::PlayerView* const view = input_of(window).view;
+  if (view == nullptr) {
     return;
   }
+  vkp::StreamPlayer& player = view->player();
   if (key == GLFW_KEY_SPACE) {
-    player->playing() ? player->pause() : player->play();
+    player.playing() ? player.pause() : player.play();
   } else if (key == GLFW_KEY_RIGHT) {
-    player->step();
+    player.step();
   } else if (key == GLFW_KEY_L) {
-    player->set_loop(!player->loop());
+    player.set_loop(!player.loop());
+  } else if (key == GLFW_KEY_N) {
+    view->set_normals(!view->normals());
   }
 }
 
@@ -122,7 +125,7 @@ vkc::Status run(const cfg::Config& settings) {
                                      std::move(player), config));
   VKC_ASSIGN(const std::unique_ptr<vg::glfw::ImGuiGlfw> ui,  // goes first
              vg::glfw::ImGuiGlfw::create(w, view->ui_context()));
-  input.player = &view->player();
+  input.view = view.get();
 
   glm::vec2 last = vg::glfw::cursor_in_framebuffer(w);
   // The presents of a stream frame to exit after, for CI's smoke run; 0 plays

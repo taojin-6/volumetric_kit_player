@@ -4,6 +4,24 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-22 — A normal-coloured view, toggled from the panel
+
+`PlayerView::normals`, `set_normals` and `mesh_flags`; the panel's Normals and
+the desktop's N key.
+
+- **gfx's `kHybridMeshNormals` in place of lighting,** so the mesh's own
+  normals show, such as Marching Cubes' facets on a noisy live SDF.
+- **The view holds the choice:** it is the drawing thread's, as the camera
+  is, while `StreamPlayer`'s controls are playback's, safe from any thread;
+  `draw_controls` takes it by reference.
+- **A button shown pressed while on, `kButtonEms` wide,** not a box as Loop's:
+  with its label a box took a phone's row to 402 pt, past 375; the button
+  keeps it at 365.
+- **Live too,** over the status line, its one control: the shading is the
+  view's, so a sender's stream takes it as a file's does.
+- **No scenario field:** the core's Player profile has no render section; a
+  default from the scenario waits for a need.
+
 ## 2026-10-21 — The desktop app takes a scenario
 
 `apps/volumetric_kit_player/main.cpp` and `config/examples/`; README.md says
@@ -54,11 +72,11 @@ chunks, joined at the newest key.
   decoder is kept, as a key resyncs it.
 - **No jitter buffer in v1.** Network jitter shows as judder. Add a bounded
   delay only if the owner sees judder.
-- **The panels live:** the controls are the status line alone, and the keys
-  do nothing. The bitrate and records a second are over the last second, as
-  a live stream has no track mean: the records each frame stands for
-  (`FrameStamp::records`), by when the worker published it rather than when
-  it was taken, as the frame taken after a pause in drawing (a minimized
+- **The panels live:** the controls are Normals over the status line, and the
+  keys but N do nothing. The bitrate and records a second are over the last
+  second, as a live stream has no track mean: the records each frame stands
+  for (`FrameStamp::records`), by when the worker published it rather than
+  when it was taken, as the frame taken after a pause in drawing (a minimized
   window) stands for the whole pause. They and the status line's seq count
   records as they arrive, decoded or not, so they show what the link
   carries. `decode` is the shown record's own, and there is no `read` row,
@@ -229,9 +247,9 @@ the sizes.
 - **The configure fails if GLFW enters the library's link closure,** checked
   once every directory has linked. Why: the library links no window system
   (below); only the app links gfx's GLFW tier.
-- **Keys are shortcuts for the panel:** Space, Right and L call the controls
-  its buttons call; Esc closes. Why: one set of controls, which the panel
-  shows on every platform.
+- **Keys are shortcuts for the panel:** Space, Right, L and N call the
+  controls its buttons call; Esc closes. Why: one set of controls, which the
+  panel shows on every platform.
 - **The wheel accumulator is a knowing copy** of calib's and gfx's examples'
   (a TODO in `main.cpp`). Why: it shares the window's user pointer with the
   keys, and moving it to gfx means gfx owns that pointer, part of the GLFW
