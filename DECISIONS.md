@@ -4,6 +4,43 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-22 — The iOS app chooses what to play on screen
+
+`PlayerViewConfig::source_button`, `draw_source`,
+`PlayerView::take_source_request`, `player::parse_live_source`,
+`folder_source` and `open_source`; README.md says how to use it.
+
+- **The Source button opens iOS's own dialog** (`UIAlertController`). Why:
+  the owner asked for the sender's address on screen, not in a file; ImGui
+  has no touch keyboard on iOS, and the system keyboard would cover an ImGui
+  field in the panel at the bottom.
+- **Source is opt-in, a button of its own at the work area's top right,**
+  file or live, as tall as the stats' header beside it, so their body clears
+  it. A tap only records a request, which the shell takes after `frame()`.
+  Why: the desktop takes a scenario; no UIKit runs inside the ImGui frame;
+  and the controls have little room for it. In their playback row it would
+  fill 365 of a phone's 375 pt, the status line's row is full beside a
+  5-digit track's line, and a row of its own would lift the controls into
+  the stats' body on a landscape phone.
+- **One parser for the typed fields, `parse_live_source`,** over
+  `parse_live_address`, into the source `open_source` plays, the desktop
+  app's call too, so the library links the core's config tier on every
+  platform. An empty port is port 0, the sender's default, as in a scenario;
+  a host with a ':' points at the Port field. Why: the port's range and the
+  default port each keep one home.
+- **The choice is remembered** in `NSUserDefaults`: the sender's host and
+  port as the parser took them, or the file. While nothing plays, a tap on
+  the label asks. Why: the lab's sender is typed once, and with no view
+  there is no Source button.
+- **The listing stays in Objective-C,** sorted as Finder sorts it
+  (`localizedStandardCompare:`), and `folder_source` takes the names in that
+  order. Why: no C++ collation matches Finder's, and the choice is still
+  tested on the host.
+- **`NSLocalNetworkUsageDescription` is the one key live adds.** Why: iOS
+  asks before the first connection to a host on the local network. ATS
+  covers URL loading, not a BSD socket, and nothing is discovered, so there
+  are no Bonjour keys.
+
 ## 2026-10-21 — The desktop app takes a scenario
 
 `apps/volumetric_kit_player/main.cpp` and `config/examples/`; README.md says
@@ -18,8 +55,6 @@ how to run it.
   sender, the window and a count once, in a file.
 - **A `source.port` of 0, or none, keeps `LiveAddress`'s port,** recon's
   `networking::kDefaultPort`. Why: the sender's default has one home.
-- **The iOS app reads none,** as it plays the first `.vrst` in its Documents
-  folder (below), so only the desktop build has the core's config tier.
 - **`vp_live_probe` keeps its `host[:port]`:** a tool for agents, not a
   program a scenario starts.
 
@@ -169,15 +204,16 @@ the sizes.
   unparks it and restarts the link. A park that timed out, or a `frame()`
   error, drops the view and builds a new one, from frame 0: the first at the
   next activation, the second at once, once per activation; after that a
-  label says why until the next activation. Why: a park that timed out may
-  have let the step under way submit from the background (below), and a
-  rebuild is the only recovery from a lost device.
-- **The stream is the first `.vrst`, by name, in the app's Documents
-  folder,** which `UIFileSharingEnabled` and
-  `LSSupportsOpeningDocumentsInPlace` show in Finder and the Files app; each
-  activation looks again, and with none it leaves a note file there, as the
-  Files app may hide an empty app folder. Why: the smallest way onto a
-  device with no picker; a document picker and open-in wait for a need.
+  label says why until the next activation or a choice. Why: a park that
+  timed out may have let the step under way submit from the background
+  (below), and a rebuild is the only recovery from a lost device.
+- **A file is the first `.vrst`, by name, in the app's Documents folder**
+  (a sender is chosen on screen, 2026-10-22), which `UIFileSharingEnabled`
+  and `LSSupportsOpeningDocumentsInPlace` show in Finder and the Files app;
+  each build of the view looks again, and with none it leaves a note file
+  there, as the Files app may hide an empty app folder. Why: the smallest
+  way onto a device with no picker; a document picker and open-in wait for a
+  need.
 - **The `increased-memory-limit` entitlement:** past the jetsam limit iOS
   kills the app with no `Status`, while a stream too big for the device's
   Vulkan budget is refused with one. **The device family is a build

@@ -4,8 +4,8 @@
 #pragma once
 
 /// @file controls_layout.hpp
-/// Where draw_controls lays out its row, for the tests that put a finger on
-/// a control.
+/// Where draw_controls lays out its row, and draw_source its button, for the
+/// tests that put a finger on a control.
 
 #include <glm/vec2.hpp>
 
@@ -39,6 +39,17 @@ inline glm::vec2 control_top_left(const ImGuiWindow& panel, int index) {
 // Its middle, in points.
 inline glm::vec2 control_middle(const ImGuiWindow& panel, int index) {
   return control_top_left(panel, index) + 0.5f * control_size(panel, index);
+}
+
+// The Source button's top left, in points, as the last frame laid out its
+// window (`source`, draw_source): the window's, as it has no padding.
+inline glm::vec2 source_top_left(const ImGuiWindow& source) {
+  return {source.Pos.x, source.Pos.y};
+}
+
+// Its middle, in points: it is sized as Play/Pause.
+inline glm::vec2 source_middle(const ImGuiWindow& source) {
+  return source_top_left(source) + 0.5f * control_size(source, 0);
 }
 
 }  // namespace vp_test

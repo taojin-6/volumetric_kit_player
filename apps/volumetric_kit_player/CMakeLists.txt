@@ -2,8 +2,8 @@
 # Copyright (c) 2026 Tao Jin
 
 # The desktop window: a GLFW shell over the player library (DECISIONS.md), the
-# only target that links gfx's GLFW tier, and the core's config tier for its
-# scenario.
+# only target that links gfx's GLFW tier. The core's config tier reads its
+# command line and loads its scenario.
 if(NOT TARGET volumetric_kit::gfx_glfw)
   message(
     FATAL_ERROR
