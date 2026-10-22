@@ -46,7 +46,9 @@ usage), in the format the core's
 [CONFIG.md](https://github.com/taojin-6/volumetric_kit_core/blob/main/CONFIG.md)
 gives for its `Player` profile. [config/examples](config/examples) has a
 stream file's, [play_file.json](config/examples/play_file.json), and a live
-sender's, [play_live.json](config/examples/play_live.json):
+sender's, [play_live.json](config/examples/play_live.json). Edit
+play_file.json's `source.path` to point at a `.vrst`, or put one at
+`config/examples/data/rafa2.vrst`:
 
 ```bash
 "$root/build/apps/volumetric_kit_player/volumetric_kit_player" \
