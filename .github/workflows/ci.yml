@@ -23,7 +23,11 @@ jobs:
     # through, as gfx's and recon's do: NVIDIA_DRIVER_CAPABILITIES=all makes
     # the toolkit mount the Vulkan ICD. A runner's .env does not reach a job
     # container, so the container sets the build and test levels: 4 is a
-    # 24-core host over a repository's 6 runners. The Mac legs run on the host.
+    # 24-core host over a repository's 6 runners. It also puts the NVIDIA
+    # driver's shader cache in the runner's tool cache, which outlives a job:
+    # the driver's default, $HOME/.cache, is missing from a bare image, and
+    # with no cache every process compiles every pipeline. The Mac legs run on
+    # the host.
     container: ${{ matrix.container && fromJSON(matrix.container) || null }}
     timeout-minutes: 30
     defaults:
@@ -48,21 +52,23 @@ jobs:
           - os: ubuntu-24.04
             runner: vk-linux-gpu
             build_type: Release
-            container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
+            container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4","__GL_SHADER_DISK_CACHE_PATH":"/__w/_tool/nvidia-glcache","__GL_SHADER_DISK_CACHE_SKIP_CLEANUP":"1"}}'
           - os: ubuntu-26.04
             runner: vk-linux-gpu
             build_type: Release
-            container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
+            container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4","__GL_SHADER_DISK_CACHE_PATH":"/__w/_tool/nvidia-glcache","__GL_SHADER_DISK_CACHE_SKIP_CLEANUP":"1"}}'
     steps:
       # The bare image runs us as root and lacks git (checkout needs it) and a
       # toolchain. The NVIDIA ICD needs libXext.so.6 and libEGL.so.1 before it
       # hands the loader an instance; without them every GPU test would skip
       # (gfx's _build.yml). libglfw3-dev is GLFW for the app's window, through
       # gfx's GLFW tier, which links the distro's GLFW and so needs no X11
-      # headers; xvfb is the X server the smoke run draws to.
+      # headers; xvfb is the X server the smoke run draws to. The driver
+      # caches shaders only in a directory that exists.
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
+          mkdir -p "$__GL_SHADER_DISK_CACHE_PATH"
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates git \
             cmake build-essential libglm-dev libvulkan-dev \
@@ -154,10 +160,17 @@ jobs:
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
         # Set on the command, as macOS strips DYLD_* from a step's env when it
-        # starts the system's bash.
+        # starts the system's bash. CI leaves out the `stress` soak, and the
+        # TSan leg skips the view's rerun on MoltenVK's specialized families
+        # (DECISIONS.md, CI).
         run: |
+          skip=""
+          if [ "${{ matrix.tsan }}" = true ]; then
+            skip="-E vp_player_view_on_moltenvk_specialized"
+          fi
+          # ${skip} is unquoted, to split into its arguments.
           DYLD_FALLBACK_LIBRARY_PATH="${VP_LAYER_LIBRARY_PATH:-}" \
-            ctest --test-dir build --output-on-failure \
+            ctest --test-dir build --output-on-failure -LE stress ${skip} \
               --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
       # The iOS app (DECISIONS.md), built unsigned (no team) from the sources
@@ -200,21 +213,20 @@ jobs:
             exit 1
           fi
 
-      # The window's smoke run (DECISIONS.md): the app plays the tests' stream
-      # under Xvfb for 60 presents of a stream frame, as a scenario beside it
-      # says. The loader forces the validation layer on, which a Release
-      # build does not ask for, and logs the insert; with no messenger, the
-      # layer prints its own messages.
+      # The window's smoke run (DECISIONS.md): the app plays the tests'
+      # stream, which the Test step wrote, under Xvfb for 60 presents of a
+      # stream frame, as a scenario says. The loader forces the validation
+      # layer on, which a Release build does not ask for, and logs the
+      # insert; with no messenger, the layer prints its own messages.
       - name: Smoke run of the window (Linux, Xvfb)
         if: runner.os == 'Linux'
         run: |
           set -eo pipefail
-          build/tests/vp_write_stream build/smoke.vrst
           cat > build/smoke.json <<'EOF'
           {
             "version": 1,
             "operation": "view",
-            "source": { "kind": "stream", "path": "smoke.vrst" },
+            "source": { "kind": "stream", "path": "tests/streams/sphere.vrst" },
             "run": { "frames": 60 }
           }
           EOF

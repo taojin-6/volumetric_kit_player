@@ -38,7 +38,7 @@
 // fed as the view feeds it reads no spike in the records a second; a server
 // going away is a retry with its reason, a new one on its port, at another
 // voxel size, gives frames again, and a park then leaves no reason; a park
-// closes the connection within kClosed, 50 times at seeded points as records
+// closes the connection within kClosed, 8 times at spread points as records
 // flow, and once with none coming; an unpark joins at the newest key; bytes
 // that are no stream, a session with no geometry track and a name that does not
 // resolve show why, with status() OK; a reason of StreamClient's shows less
@@ -67,6 +67,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -112,7 +113,6 @@ using vp_test::kIntraPeriod;
 using vp_test::kPeriodNs;
 using vp_test::pts_of;
 using vp_test::Scratch;
-using vp_test::write_stream;
 using Bytes = std::vector<std::uint8_t>;
 using Code = core::Status::Code;
 using SteadyClock = std::chrono::steady_clock;
@@ -191,8 +191,8 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     if (base_setup_incomplete()) {
       return;
     }
-    const core::Status written = write_stream(device(), allocator(), path_);
-    ASSERT_TRUE(written.ok()) << written.message();
+    path_ = scratch_.copy(VP_TEST_STREAMS, vp_test::kStream);
+    ASSERT_FALSE(path_.empty());
   }
 
   // Every test's player stops here too, so one that fails early is still
@@ -401,8 +401,9 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   }
 
   Scratch scratch_;
-  std::string path_ = scratch_.file("sphere.vrst");
-  // The stream's frame that meshes nothing (write_stream's `empty`), if any.
+  // The test's copy of the stream it plays.
+  std::string path_;
+  // The stream's frame that meshes nothing, if any.
   std::optional<std::uint64_t> empty_frame_;
   FrameExchange exchange_;
   std::uint32_t slot_ = 0;
@@ -468,11 +469,9 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
 }
 
 TEST_F(StreamPlayerTest, AFrameThatMeshesNothingReachesTheCommitWithItsStamp) {
-  path_ = scratch_.file("empty_frame.vrst");
-  empty_frame_ = 1;
-  const core::Status written =
-      write_stream(device(), allocator(), path_, empty_frame_);
-  ASSERT_TRUE(written.ok()) << written.message();
+  path_ = scratch_.copy(VP_TEST_STREAMS, vp_test::kEmptyFrameStream);
+  ASSERT_FALSE(path_.empty());
+  empty_frame_ = vp_test::kEmptyFrame;
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
@@ -1780,32 +1779,13 @@ TEST_F(LivePlayerTest, RecordsFasterThanTheirDecodeStillShowNewerFrames) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-TEST_F(LivePlayerTest, AConsumerTakingNothingLeavesStatusOkThenGetsTheNewest) {
-  const std::unique_ptr<networking::StreamServer> server = serve();
-  ASSERT_NE(server, nullptr);
-  const Publisher flow(*server, recording_, kFlow);
-  StreamPlayer* player = start_live(server->port());
-  ASSERT_NE(player, nullptr);
-  ASSERT_TRUE(next_frame().has_value());
-  // Records flow, and the ring has 3 slots: an extract per record would run
-  // out of them.
-  std::this_thread::sleep_for(1500ms);
-  EXPECT_TRUE(player->status().ok()) << player->status().message();
-  const std::uint64_t newest = player->live_status().seq;
-  // The mesh that waited, then the newest decoded since.
-  ASSERT_TRUE(next_frame().has_value());
-  const std::optional<FrameStamp> next = next_frame();
-  ASSERT_TRUE(next.has_value());
-  EXPECT_GE(next->index, newest);
-  EXPECT_GT(next->records, 1u);
-  EXPECT_TRUE(player->status().ok()) << player->status().message();
-}
-
-// The same pause, with each frame taken into PlaybackStats as the view takes
-// it: the frame that waited, then the next, which stands for every record of
-// the pause, come a moment apart, yet the records a second read at most twice
-// the flow's; and a second of frames on, they read again.
-TEST_F(LivePlayerTest, AConsumerPauseLeavesTheRecordsASecondAtTheFlows) {
+// A consumer that takes nothing for 1.5 s while records flow, each frame it
+// takes going into PlaybackStats as the view takes it: status() stays OK, as
+// the ring has 3 slots and an extract per record would run out of them; the
+// frame that waited, then the newest decoded since, which stands for every
+// record of the pause, come a moment apart, yet the records a second read at
+// most twice the flow's; and a second of frames on, they read again.
+TEST_F(LivePlayerTest, AConsumerPauseLeavesStatusOkThenGetsTheNewest) {
   const std::unique_ptr<networking::StreamServer> server = serve();
   ASSERT_NE(server, nullptr);
   const Publisher flow(*server, recording_, kFlow);
@@ -1817,17 +1797,22 @@ TEST_F(LivePlayerTest, AConsumerPauseLeavesTheRecordsASecondAtTheFlows) {
     if (frame) {
       stats.add_frame(*frame, PlaybackStats::Clock::now());
     }
-    return frame.has_value();
+    return frame;
   };
   constexpr double kMost = 2.0 * static_cast<double>(1s / kFlow);
-  ASSERT_TRUE(taken());
+  ASSERT_TRUE(taken().has_value());
   std::this_thread::sleep_for(1500ms);
-  ASSERT_TRUE(taken());  // the frame that waited
-  ASSERT_TRUE(taken());
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+  const std::uint64_t newest = player->live_status().seq;
+  ASSERT_TRUE(taken().has_value());  // the frame that waited
+  const std::optional<FrameStamp> next = taken();
+  ASSERT_TRUE(next.has_value());
+  EXPECT_GE(next->index, newest);
+  EXPECT_GT(next->records, 1u);
   EXPECT_LE(stats.records_per_s(PlaybackStats::Clock::now()), kMost);
   const SteadyClock::time_point until = SteadyClock::now() + 1s;
   while (SteadyClock::now() < until) {
-    ASSERT_TRUE(taken());
+    ASSERT_TRUE(taken().has_value());
   }
   const double records = stats.records_per_s(PlaybackStats::Clock::now());
   EXPECT_GT(records, 0.0);
@@ -1856,10 +1841,9 @@ TEST_F(LivePlayerTest, AServerGoneIsARetryAndANewOneOnItsPortGivesFrames) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
   // A new server on the same port, of the stream at twice the voxel size,
   // which a grid of the last connection's would refuse: frames again.
-  const std::string coarse = scratch_.file("coarse.vrst");
-  const core::Status written = write_stream(device(), allocator(), coarse,
-                                            std::nullopt, 2 * vp_test::kVoxel);
-  ASSERT_TRUE(written.ok()) << written.message();
+  const std::string coarse =
+      scratch_.copy(VP_TEST_STREAMS, vp_test::kCoarseStream);
+  ASSERT_FALSE(coarse.empty());
   ASSERT_NO_FATAL_FAILURE(read_recording(coarse, &recording_));
   server = serve(port);
   ASSERT_NE(server, nullptr);
@@ -1879,17 +1863,20 @@ TEST_F(LivePlayerTest, AServerGoneIsARetryAndANewOneOnItsPortGivesFrames) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-// Parked at points spread by a seeded generator while records arrive, as one
-// is in hand, a decode or an extract is under way or a receive waits for the
-// next: each time the other end sees the connection close within kClosed of
-// the park's return, and the unpark connects again.
+// Parked at points spread evenly over 0-20 ms while records arrive every 10
+// ms, as one is in hand, a decode or an extract is under way or a receive
+// waits for the next: each time the other end sees the connection close
+// within kClosed of the park's return, and the unpark connects again. 8
+// times, or VP_PARK_CYCLES times: the stress soak's 50 (CMakeLists.txt).
 TEST_F(LivePlayerTest, AParkClosesTheConnectionWithinASlice) {
+  const char* const asked = std::getenv("VP_PARK_CYCLES");
+  const std::size_t cycles =
+      asked != nullptr ? std::strtoul(asked, nullptr, 10) : 8;
+  ASSERT_GE(cycles, 2u) << "VP_PARK_CYCLES=" << asked;
   const RawPeer peer(stream_feed(), 10ms);
   StreamPlayer* player = start_live(peer.port());
   ASSERT_NE(player, nullptr);
-  std::mt19937 random(20261021);
-  std::uniform_int_distribution<int> delay(0, 20);
-  for (std::size_t n = 1; n <= 50; ++n) {
+  for (std::size_t n = 1; n <= cycles; ++n) {
     SCOPED_TRACE(::testing::Message() << "park " << n);
     // Records arriving on connection n, its frames taken as they come.
     ASSERT_TRUE(eventually([&] {
@@ -1899,7 +1886,8 @@ TEST_F(LivePlayerTest, AParkClosesTheConnectionWithinASlice) {
       return peer.accepted() == n &&
              player->live_status().state == LiveState::kLive;
     }));
-    std::this_thread::sleep_for(std::chrono::milliseconds(delay(random)));
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(20 * (n - 1) / (cycles - 1)));
     ASSERT_TRUE(player->park(kArrival));
     const SteadyClock::time_point parked = SteadyClock::now();
     const std::optional<SteadyClock::time_point> closed = peer.closed(n);

@@ -333,7 +333,12 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   instrumented too, which the core's `VKC_SANITIZE` (carried to every target
   that links the core) does not reach. A report fails its test. MoltenVK and
   the validation layer are not instrumented; no report points into them, so
-  there is no suppressions file.
+  there is no suppressions file. The leg skips the view's rerun on
+  MoltenVK's specialized queue families, which are no threading variable.
+- **CI leaves out the `stress` label** (`-LE stress`): the live park test
+  at 50 cycles, which a plain `ctest` runs too and `ctest -L stress` selects.
+  Why: each cycle is a timing check on a shared host, and 8 spread over the
+  same 0-20 ms reach the same states.
 - **Left out until a need shows:** Debug on Linux, as the GPU hosts are
   shared with gfx and recon; AddressSanitizer and UBSan; a dependency cache,
   which would save about 30 s a job on the Mac and could go stale after a

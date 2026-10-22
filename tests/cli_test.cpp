@@ -233,22 +233,13 @@ void expect_refused(const Outcome& run, const std::string& domain,
   EXPECT_EQ(std::count(run.err.begin(), run.err.end(), '\n'), 1) << run.err;
 }
 
+// The core's config_test has parse_args's rules; these show only that the app
+// passes on its refusal: of no argument, of --config with no path, and of the
+// command line before the scenario.
 TEST(CliTest, ACommandLineTheCoreRefusesExits2WithTheUsage) {
-  const Scratch scratch;
-  const std::string path = scratch.file("play.json");
   for (const std::vector<std::string>& args :
        std::vector<std::vector<std::string>>{
-           {},
-           {"--fast"},
-           {"--config"},
-           {"--config", "--help"},
-           {"--config", path, "--config", path},
-           {"--config", path, "-v"},
-           {path},
-           // The command line before the scenario.
-           {"stream.vrst"},
-           {"--frames", "60", "stream.vrst"},
-           {"--connect", "lab"}}) {
+           {}, {"--config"}, {"--frames", "60", "stream.vrst"}}) {
     expect_usage(args);
   }
 }
