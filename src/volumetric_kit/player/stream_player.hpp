@@ -196,7 +196,8 @@ class StreamPlayer {
   ///
   /// Once started, the worker builds, then connects. It decodes every record
   /// of the session's first geometry track, and meshes the newest once the
-  /// consumer has taken the last mesh, never waiting for the consumer. A
+  /// consumer has taken the last mesh. It drains available input before
+  /// waiting for a take, which wakes it immediately. A
   /// connection that ends or cannot be made is never an error:
   /// the worker shows why (@ref live_status), and about a second later
   /// connects again, with a new grid, until stopped. Play, pause, step and

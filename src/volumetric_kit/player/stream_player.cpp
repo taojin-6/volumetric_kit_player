@@ -424,25 +424,18 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
   std::optional<Clock::time_point> published;  // the last, on this connection
   stream::Record record;
   for (;;) {
-    // Free: the consumer took the last mesh, so the newest frame may be
-    // meshed. Never bypassed: a superseded mesh keeps its ring slot. With a
-    // frame in hand, the take (taken()) is waited for here, a slice at a
-    // time, and the socket read without a wait: records queue meanwhile.
-    bool free = false;
     {
-      std::unique_lock<std::mutex> lock(mutex_);
-      if (pending) {
-        free = changed_.wait_for(lock, kSlice, [this] {
-          return quit_ || parked_ ||
-                 exchange_->release_and_may_publish(*extractor_);
-        });
-      }
+      std::lock_guard<std::mutex> lock(mutex_);
       if (quit_ || parked_) {
         return {};
       }
     }
-    const core::Result<bool> got = client.next(
-        pending ? std::chrono::milliseconds{0} : kSlice, &record, &payload);
+    // Drain before waiting for a take. Even without a whole record, a
+    // partial receive is progress: another nonblocking read may advance it.
+    bool progressed = false;
+    const core::Result<bool> got =
+        client.next(pending ? std::chrono::milliseconds{0} : kSlice, &record,
+                    &payload, &progressed);
     if (!got.ok()) {
       *ended = got.status();
       return {};
@@ -483,11 +476,30 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
       // has decoded: a sender this version cannot decode shows as live, with
       // no picture.
     }
+    // Free: the consumer took the last mesh, so the newest frame may be
+    // meshed. Never bypassed: a superseded mesh keeps its ring slot. Wait
+    // for taken() only after input is drained, so queued records and partial
+    // receives do not each pay a slice while a mesh is left untaken.
+    bool free = false;
+    if (pending) {
+      std::unique_lock<std::mutex> lock(mutex_);
+      if (progressed) {
+        free = exchange_->release_and_may_publish(*extractor_);
+      } else {
+        free = changed_.wait_for(lock, kSlice, [this] {
+          return quit_ || parked_ ||
+                 exchange_->release_and_may_publish(*extractor_);
+        });
+      }
+      if (quit_ || parked_) {
+        return {};
+      }
+    }
     // The newest: once nothing more has come, at once for the connection's
     // first frame, or every kMeshEvery while records keep coming
     // (DECISIONS.md).
-    if (free &&
-        (!*got || !published || Clock::now() - *published >= kMeshEvery)) {
+    if (free && (!progressed || !published ||
+                 Clock::now() - *published >= kMeshEvery)) {
       const Step step(*this, Step::kNoWait);  // the extract
       if (!step) {
         return {};

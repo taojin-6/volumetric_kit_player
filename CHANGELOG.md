@@ -71,6 +71,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Live input drains before the worker waits for a consumer to take a mesh,
+  including records spanning multiple receives, so an untaken mesh does not
+  add a 10 ms delay to every queued record or partial receive.
 - `PlayerView::shown()` and the status line move onto a frame that meshes
   nothing, rather than staying on the frame before (recon #256).
 - The `cmake-format` hook runs on Python 3.14, locally and in CI: it cannot

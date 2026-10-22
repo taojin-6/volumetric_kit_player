@@ -32,14 +32,15 @@
 // records since; a take with a frame in hand has it meshed at once; records
 // slower than their decode are meshed once nothing newer has come, and
 // records faster still show a newer frame every 100 ms or so; a consumer
-// that takes nothing for 1.5 s leaves status() OK, and its
-// next take is followed by the newest frame, while PlaybackStats fed as the
-// view feeds it reads no spike in the records a second; a server that goes
-// away is a retry with its reason, a new one on its port, at another voxel
-// size, gives frames again, and a park then leaves no reason; a park closes
-// the connection within kClosed, 50 times at seeded points as records flow,
-// and once with none coming; an unpark joins at the newest key; bytes that
-// are no stream, a session with no geometry track and a name that does not
+// leaving a mesh untaken does not delay draining buffered small records or
+// a record spanning many receives; taking nothing for 1.5 s leaves status()
+// OK, and the next take is followed by the newest frame, while PlaybackStats
+// fed as the view feeds it reads no spike in the records a second; a server
+// going away is a retry with its reason, a new one on its port, at another
+// voxel size, gives frames again, and a park then leaves no reason; a park
+// closes the connection within kClosed, 50 times at seeded points as records
+// flow, and once with none coming; an unpark joins at the newest key; bytes
+// that are no stream, a session with no geometry track and a name that does not
 // resolve show why, with status() OK; a reason of StreamClient's shows less
 // its prefix, which names the address; a park ends the wait to retry, so
 // the unpark connects at once; and a stop is prompt while a refused connect
@@ -1389,6 +1390,95 @@ class LivePlayerTest : public StreamPlayerTest {
     };
   }
 
+  // With K0 published but untaken, and P1 decoded behind it, drain a burst
+  // within less than the time a 10 ms wait before each record/receive would
+  // take. The burst has valid framing but invalid codec payloads, so none
+  // of the measured work depends on the GPU. Framing and allocation happen
+  // before the timer starts too.
+  void expect_burst_drained_while_untaken(std::size_t count,
+                                          std::size_t payload_size) {
+    core::Result<stream::ChunkEncoder> made =
+        stream::ChunkEncoder::create(recording_.session);
+    ASSERT_TRUE(made.ok()) << made.status().message();
+    stream::ChunkEncoder encoder = std::move(made).value();
+    const auto append = [&encoder](const stream::RecordInfo& info,
+                                   const Bytes& payload, Bytes* bytes) {
+      const core::Result<stream::ChunkEncoder::RecordFraming> framing =
+          encoder.frame(info, payload.data(), payload.size());
+      EXPECT_TRUE(framing.ok()) << framing.status().message();
+      if (!framing.ok()) {
+        return false;
+      }
+      bytes->insert(bytes->end(), framing->header.begin(),
+                    framing->header.end());
+      bytes->insert(bytes->end(), payload.begin(), payload.end());
+      bytes->resize(bytes->size() + framing->padding, 0);
+      return true;
+    };
+    Bytes initial = encoder.session_chunk();
+    ASSERT_TRUE(append(recording_.infos[0], recording_.payloads[0], &initial));
+    Bytes behind;
+    ASSERT_TRUE(append(recording_.infos[1], recording_.payloads[1], &behind));
+    stream::RecordInfo info = recording_.infos[1];
+    info.seq = 2;
+    info.pts_ns = pts_of(info.seq);
+    ASSERT_TRUE(append(info, Bytes(1, 0), &behind));
+    Bytes burst;
+    const Bytes payload(payload_size, 0);
+    for (std::size_t i = 0; i < count; ++i) {
+      ++info.seq;
+      info.pts_ns = pts_of(info.seq);
+      ASSERT_TRUE(append(info, payload, &burst));
+    }
+    const std::uint64_t last = info.seq;
+    std::atomic<unsigned> phase{0};
+    const RawPeer peer(
+        [initial = std::move(initial), behind = std::move(behind),
+         burst = std::move(burst), &phase, sent = 0u](std::uint64_t) mutable {
+          if (sent == 0) {
+            ++sent;
+            return std::move(initial);
+          }
+          if (sent == 1 && phase >= 1) {
+            ++sent;
+            return std::move(behind);
+          }
+          if (sent == 2 && phase >= 2) {
+            ++sent;
+            return std::move(burst);
+          }
+          return Bytes();
+        },
+        1ms);
+    StreamPlayer* player = start_live(peer.port());
+    ASSERT_NE(player, nullptr);
+    const std::atomic<bool> cancel{false};
+    ASSERT_TRUE(
+        eventually([&] { return !exchange_.wait_collected(0ms, cancel); }));
+    phase = 1;
+    // Seeing record 2 proves P1's decode finished. The invalid record does
+    // not replace P1, which remains in hand behind the untaken K0.
+    ASSERT_TRUE(eventually([&] { return player->live_status().seq == 2; }));
+    const SteadyClock::time_point sent = SteadyClock::now();
+    phase = 2;
+    ASSERT_TRUE(eventually([&] { return player->live_status().seq == last; }));
+    const auto elapsed = SteadyClock::now() - sent;
+    RecordProperty(
+        "drain_ms",
+        std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+    EXPECT_LT(elapsed, 750ms)
+        << std::chrono::duration<double, std::milli>(elapsed).count()
+        << " ms to drain queued input with an untaken mesh";
+    const std::optional<FrameStamp> first = take(kArrival);
+    ASSERT_TRUE(first.has_value());
+    EXPECT_EQ(first->index, 0u);
+    const std::optional<FrameStamp> next = take(kArrival);
+    ASSERT_TRUE(next.has_value());
+    EXPECT_EQ(next->index, 1u);
+    EXPECT_EQ(next->records, count + 2);
+    EXPECT_TRUE(player->status().ok()) << player->status().message();
+  }
+
   Recording recording_;
 };
 
@@ -1490,6 +1580,18 @@ TEST_F(LivePlayerTest, AllPublishedWhileAMeshWaitsAreDecodedAndTheNewestShown) {
   }
   EXPECT_EQ(frames[0].record_bytes + frames[1].record_bytes, bytes);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(LivePlayerTest, AnUntakenMeshDoesNotDelayBufferedRecords) {
+  // All 128 tiny records fit in one receive. A wait per record adds at
+  // least 1.28 s even though parsing and skipping them takes little time.
+  expect_burst_drained_while_untaken(128, 1);
+}
+
+TEST_F(LivePlayerTest, AnUntakenMeshDoesNotDelayAPartialRecord) {
+  // At most 256 KiB is received by each nonblocking next(): one record
+  // spanning 128 receives must also keep draining while no record is ready.
+  expect_burst_drained_while_untaken(1, 32 * 1024 * 1024);
 }
 
 // Records one at a time, each published once the frame before is taken: each
