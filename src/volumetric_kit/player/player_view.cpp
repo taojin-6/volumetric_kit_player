@@ -109,6 +109,7 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   view->app_.set_profiler(&view->profiler_);
   view->camera_.set_target({0.0f, 0.85f, 0.0f});
   view->camera_.set_distance(3.0f);
+  view->source_button_ = config.source_button;
   VKC_TRY(view->player_->start(view->recon_device_, view->recon_allocator_,
                                wiring.mc, view->exchange_));
   return view;
@@ -151,7 +152,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   const gfx::windowing::Frame& frame = *begun;
   // 2. The controls and the stats, as of the last frame drawn.
   overlay_.new_frame();
-  draw_controls(*player_, shown_);
+  draw_controls(*player_, shown_, source_button_ ? &source_request_ : nullptr);
   stats_panel_.draw(stats_, shown_, shown_triangles_,
                     profiler_.metrics().sections, PlaybackStats::Clock::now(),
                     player_->live());

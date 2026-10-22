@@ -27,18 +27,33 @@ inline glm::vec2 control_size(const ImGuiWindow& panel, int index) {
   return {index < 2 ? button : height, height};
 }
 
-// Its top left, in points.
-inline glm::vec2 control_top_left(const ImGuiWindow& panel, int index) {
+// Its top left, in points; with the Source button drawn (`source`), on the
+// row below Source's.
+inline glm::vec2 control_top_left(const ImGuiWindow& panel, int index,
+                                  bool source = false) {
   const ImGuiStyle& style = ImGui::GetStyle();
   const float button = control_size(panel, 0).x;
+  const float above =
+      source ? control_size(panel, 0).y + style.ItemSpacing.y : 0.0f;
   return {panel.Pos.x + style.WindowPadding.x +
               static_cast<float>(index) * (button + style.ItemSpacing.x),
-          panel.Pos.y + style.WindowPadding.y};
+          panel.Pos.y + style.WindowPadding.y + above};
 }
 
 // Its middle, in points.
-inline glm::vec2 control_middle(const ImGuiWindow& panel, int index) {
-  return control_top_left(panel, index) + 0.5f * control_size(panel, index);
+inline glm::vec2 control_middle(const ImGuiWindow& panel, int index,
+                                bool source = false) {
+  return control_top_left(panel, index, source) +
+         0.5f * control_size(panel, index);
+}
+
+// The Source button's top left and middle, in points: alone on the panel's
+// first row, sized as Play/Pause.
+inline glm::vec2 source_top_left(const ImGuiWindow& panel) {
+  return control_top_left(panel, 0);
+}
+inline glm::vec2 source_middle(const ImGuiWindow& panel) {
+  return control_middle(panel, 0);
 }
 
 }  // namespace vp_test

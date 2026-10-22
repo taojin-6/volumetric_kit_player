@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -40,6 +41,10 @@ struct PlayerViewConfig {
   /// header's (gfx::ui::ImGuiOverlayConfig::min_frame_height). 0 on desktop,
   /// 44 on iOS.
   float ui_min_frame_height = 0.0f;
+  /// The controls' Source button, which asks the shell for something else
+  /// to play (PlayerView::take_source_request): on iOS; the desktop takes a
+  /// scenario instead.
+  bool source_button = false;
   /// The Khronos validation layer on the shared instance, where it loads (a
   /// logged warning where it does not). The desktop shell sets it from its
   /// scenario's window.validation, and always in Debug; iOS has no layer
@@ -116,6 +121,13 @@ class PlayerView {
   StreamPlayer& player() noexcept { return *player_; }
   /// @return The camera, for G1's drag verbs (gfx::camera::OrbitCamera).
   gfx::camera::OrbitCamera& camera() noexcept { return camera_; }
+  /// @return Whether the Source button (PlayerViewConfig::source_button) was
+  ///         pressed since the last call: true once per press. The shell
+  ///         takes it after @ref frame, so it asks what to play outside the
+  ///         UI's frame.
+  bool take_source_request() noexcept {
+    return std::exchange(source_request_, false);
+  }
   /// @return The ImGui context the controls draw in. Bind the window system's
   ///         platform half to it (glfw::ImGuiGlfw, gfx::ui::ImGuiTouch),
   ///         declared after the view so it dies first.
@@ -155,6 +167,8 @@ class PlayerView {
   gfx::ui::ImGuiOverlay overlay_;
   FrameExchange exchange_;
   gfx::camera::OrbitCamera camera_;
+  bool source_button_ = false;   // the panel draws Source
+  bool source_request_ = false;  // pressed since take_source_request
   std::unique_ptr<StreamPlayer> player_;
   PlaybackStats stats_;  // from player_'s track
   std::optional<FrameStamp> shown_;

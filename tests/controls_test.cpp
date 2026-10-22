@@ -7,7 +7,9 @@
 // CPU-only ImGui context fed by gfx's ImGuiTouch, over a stream opened but not
 // started. A tap on Play/Pause flips playing(), Step pauses, Loop toggles, a
 // finger on the controls is ImGui's, and they keep clear of the safe area; a
-// live player's, never started, are its status line alone. The stats sit at the
+// live player's, never started, are its status line alone. The Source button
+// is drawn only when asked for, on a row of its own above, the file's and the
+// live player's, and a tap on it is one press. The stats sit at the
 // work area's top left; a finger on their header is ImGui's and on their body
 // the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
@@ -282,19 +284,50 @@ class ControlsTest : public ::testing::Test {
                     std::chrono::duration<double>(seconds_));
   }
 
-  // One frame, 1/60 s after the last, with the controls and the stats in it.
+  // One frame, 1/60 s after the last, with the controls, Source while
+  // `source_shown_`, and the stats in it; a press on Source is counted and
+  // cleared.
   void frame() {
     seconds_ += 1.0 / 60.0;
     touch_->new_frame(display(seconds_, safe_area_));
     ImGui::NewFrame();
-    draw_controls(*player_, std::nullopt);
+    draw_controls(*player_, std::nullopt,
+                  source_shown_ ? &source_pressed_ : nullptr);
+    if (source_pressed_) {
+      ++source_presses_;
+      source_pressed_ = false;
+    }
     panel_.draw(*stats_, shown_, triangles_, render_, now(), player_->live());
     ImGui::Render();
+  }
+
+  // Source drawn from the next frame; the panel takes its size on its second.
+  void show_source() {
+    source_shown_ = true;
+    frame();
+    frame();
+  }
+
+  // The ImGui item under a finger at `at` in the frame it lands in; 0 for
+  // none. It then goes, pressing nothing.
+  ImGuiID item_under(glm::vec2 at) {
+    touch_->touch_began(1, at);
+    frame();
+    const ImGuiID item = ImGui::GetCurrentContext()->HoveredId;
+    touch_->touch_cancelled(1);
+    frame();
+    frame();
+    return item;
   }
 
   // The controls, as the last frame laid them out; SetUp found them.
   const ImGuiWindow& panel() const {
     return *ImGui::FindWindowByName(kControlsWindow);
+  }
+
+  // The ID of the panel's control that `label` names.
+  static ImGuiID id_of(const char* label) {
+    return ImGui::FindWindowByName(kControlsWindow)->GetID(label);
   }
 
   // The stats' header, as the last frame laid it out; SetUp found it.
@@ -359,6 +392,9 @@ class ControlsTest : public ::testing::Test {
   std::optional<FrameStamp> shown_;
   std::uint32_t triangles_ = 0;
   std::vector<core::StageRow> render_;
+  bool source_shown_ = false;
+  bool source_pressed_ = false;
+  int source_presses_ = 0;
   ui::EdgeInsets safe_area_;
   ImGuiContext* context_ = nullptr;
   std::unique_ptr<ui::ImGuiTouch> touch_;  // reset before the context
@@ -408,6 +444,52 @@ TEST_F(ControlsTest, ALivePlayersControlsAreItsStatusLineAlone) {
           ->CalcTextSizeA(line, FLT_MAX, 0.0f, "connecting to 127.0.0.1:47801")
           .x;
   EXPECT_NEAR(window.ContentSize.x, width, 1.0f);
+}
+
+// Unasked for, the panel's first row is Play/Pause's.
+TEST_F(ControlsTest, SourceIsHiddenUnlessAskedFor) {
+  EXPECT_EQ(item_under(vp_test::source_middle(panel())), id_of("###play"));
+  show_source();
+  EXPECT_EQ(item_under(vp_test::source_middle(panel())), id_of("Source"));
+  EXPECT_EQ(source_presses_, 0) << "the fingers pressed nothing";
+}
+
+// Source on its own row; the row below it works as before.
+TEST_F(ControlsTest, ATapOnSourceIsOnePressAndTheRowIsBelowIt) {
+  const float file_height = panel().ContentSize.y;
+  show_source();
+  EXPECT_NEAR(panel().ContentSize.y,
+              file_height + vp_test::control_size(panel(), 0).y +
+                  ImGui::GetStyle().ItemSpacing.y,
+              1.0f);
+  tap(vp_test::source_middle(panel()));
+  EXPECT_EQ(source_presses_, 1);
+  for (int i = 0; i < 10; ++i) {
+    frame();
+  }
+  EXPECT_EQ(source_presses_, 1) << "one tap, one press";
+  EXPECT_TRUE(player_->playing());
+  tap(vp_test::control_middle(panel(), 0, /*source=*/true));
+  EXPECT_FALSE(player_->playing());
+  tap(vp_test::control_middle(panel(), 2, /*source=*/true));
+  EXPECT_FALSE(player_->loop());
+  EXPECT_EQ(source_presses_, 1);
+}
+
+// A live player's: Source, then the status line.
+TEST_F(ControlsTest, ALivePlayersSourceIsAboveItsStatusLine) {
+  core::Result<std::unique_ptr<StreamPlayer>> live =
+      StreamPlayer::connect({"127.0.0.1", 1});  // never started: no I/O
+  ASSERT_TRUE(live.ok()) << live.status().message();
+  player_ = std::move(live).value();
+  show_source();
+  const ImGuiWindow& window = panel();
+  EXPECT_NEAR(window.ContentSize.y,
+              vp_test::control_size(window, 0).y +
+                  ImGui::GetStyle().ItemSpacing.y + window.FontRefSize,
+              1.0f);
+  tap(vp_test::source_middle(window));
+  EXPECT_EQ(source_presses_, 1);
 }
 
 TEST_F(ControlsTest, AFingerOnThePanelIsImGuis) {

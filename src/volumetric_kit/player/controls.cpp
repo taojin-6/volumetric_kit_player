@@ -30,10 +30,13 @@ std::string rate_text(double fps) {
   return text;
 }
 
+// A button's size: kButtonEms font sizes wide, a frame tall.
+ImVec2 button_size() { return {kButtonEms * ImGui::GetFontSize(), 0.0f}; }
+
 // A file's controls: Play/Pause, Step and Loop, then the status line.
 void draw_file_controls(StreamPlayer& player,
                         const std::optional<FrameStamp>& shown) {
-  const ImVec2 button(kButtonEms * ImGui::GetFontSize(), 0.0f);
+  const ImVec2 button = button_size();
   // One ID for both labels, so a press that flips the label completes.
   if (ImGui::Button(player.playing() ? "Pause###play" : "Play###play",
                     button)) {
@@ -58,8 +61,8 @@ void draw_file_controls(StreamPlayer& player,
 
 }  // namespace
 
-void draw_controls(StreamPlayer& player,
-                   const std::optional<FrameStamp>& shown) {
+void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
+                   bool* source) {
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(
       ImVec2(viewport->WorkPos.x + 0.5f * viewport->WorkSize.x,
@@ -70,6 +73,9 @@ void draw_controls(StreamPlayer& player,
       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
       ImGuiWindowFlags_NoFocusOnAppearing;
   if (ImGui::Begin(kControlsWindow, nullptr, kFlags)) {
+    if (source != nullptr && ImGui::Button("Source", button_size())) {
+      *source = true;
+    }
     if (player.live()) {
       ImGui::TextUnformatted(
           live_status_line(player.live_status(), Playback::Clock::now())

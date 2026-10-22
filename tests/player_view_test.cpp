@@ -7,8 +7,9 @@
 // frame that meshes nothing too, which still presents; 0 x 0
 // skips without blocking; a step moves one frame; the worker's failure
 // surfaces from frame(); the panel draws at a phone's scale, and its controls
-// fit a phone and a fingertip at the iOS shell's sizes, as do the stats, with
-// the profiler's draw row in their table; ui_wants_pointer() follows a finger
+// fit a phone and a fingertip at the iOS shell's sizes, Source included, as
+// do the stats, with the profiler's draw row in their table; Source is off by
+// default, and a tap on it is one request; ui_wants_pointer() follows a finger
 // on the panel and on the stats' header, not on their body; and teardown
 // mid-playback, the profiler attached, is clean. Whether the draw row has a
 // device half is not checked, as the view keeps its profiler to itself; the
@@ -111,12 +112,13 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
     VulkanDeviceTest::TearDown();
   }
 
-  // The view's config: at `ui_scale_` and `ui_min_frame_height_`, validated
-  // as the test policy asks.
+  // The view's config: at `ui_scale_` and `ui_min_frame_height_`, with
+  // Source while `source_button_`, validated as the test policy asks.
   PlayerViewConfig config() const {
     PlayerViewConfig config;
     config.ui_scale = ui_scale_;
     config.ui_min_frame_height = ui_min_frame_height_;
+    config.source_button = source_button_;
     config.validation = active_validation() != core::test::Validation::Off;
     return config;
   }
@@ -299,6 +301,7 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
   float pixels_per_point_ = 1.0f;
   float ui_scale_ = 1.0f;
   float ui_min_frame_height_ = 0.0f;
+  bool source_button_ = PlayerViewConfig{}.source_button;
 };
 
 TEST_F(PlayerViewTest, CreateRefusesWhatItCannotUse) {
@@ -491,15 +494,16 @@ TEST_F(PlayerViewTest, ThePanelDrawsAtAPhonesScale) {
   EXPECT_TRUE(fonts[0]->IsGlyphInFont(0x00B7));
 }
 
-// On the narrowest phone, at the iOS shell's sizes: a fingertip's square at
-// each control's top left lands on it, "Pause" fits its button, and the panel
-// fits across, both its row and the widest status line, a 5-digit track's
-// playing in a loop.
+// On the narrowest phone, at the iOS shell's sizes, Source included: a
+// fingertip's square at each control's top left lands on it, "Pause" and
+// "Source" fit their buttons, and the panel fits across, both its row and the
+// widest status line, a 5-digit track's playing in a loop.
 TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
   extent_ = kPhone;
   pixels_per_point_ = kPhonePixelsPerPoint;
   ui_scale_ = kPhoneScale;
   ui_min_frame_height_ = kFingertip;
+  source_button_ = true;
   ASSERT_TRUE(make_view(/*playing=*/false));
   for (int i = 0; i < 3; ++i) {
     ASSERT_TRUE(present());
@@ -515,24 +519,73 @@ TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
   last.index = 99'998;
   EXPECT_LE(text_width(*panel, status_line(last, 99'999, true, true)) + padding,
             widest_panel());
-  EXPECT_GE(
-      vp_test::control_size(*panel, 0).x,
-      text_width(*panel, "Pause") + 2.0f * ImGui::GetStyle().FramePadding.x);
-  const ImGuiID controls[] = {panel->GetID("###play"), panel->GetID("Step"),
-                              panel->GetID("Loop")};
-  for (int i = 0; i < 3; ++i) {
-    const glm::vec2 corner = vp_test::control_top_left(*panel, i);
+  for (const char* label : {"Pause", "Source"}) {
+    EXPECT_GE(
+        vp_test::control_size(*panel, 0).x,
+        text_width(*panel, label) + 2.0f * ImGui::GetStyle().FramePadding.x)
+        << label;
+  }
+  struct Target {
+    const char* label;
+    glm::vec2 corner;
+  };
+  const Target targets[] = {
+      {"Source", vp_test::source_top_left(*panel)},
+      {"###play", vp_test::control_top_left(*panel, 0, /*source=*/true)},
+      {"Step", vp_test::control_top_left(*panel, 1, /*source=*/true)},
+      {"Loop", vp_test::control_top_left(*panel, 2, /*source=*/true)}};
+  for (const Target& target : targets) {
+    const ImGuiID id = panel->GetID(target.label);
     for (const float dx : {0.5f, kFingertip - 0.5f}) {
       for (const float dy : {0.5f, kFingertip - 0.5f}) {
-        EXPECT_EQ(item_under(corner + glm::vec2(dx, dy)), controls[i])
-            << "control " << i << " at +" << dx << ", +" << dy;
+        EXPECT_EQ(item_under(target.corner + glm::vec2(dx, dy)), id)
+            << target.label << " at +" << dx << ", +" << dy;
       }
     }
   }
   // The fingers pressed nothing.
   EXPECT_FALSE(view_->player().playing());
   EXPECT_TRUE(view_->player().loop());
+  EXPECT_FALSE(view_->take_source_request());
   EXPECT_FALSE(view_->shown().has_value());
+}
+
+// As the desktop's: no Source, so the panel's first row is Play/Pause's, and
+// a tap there plays and asks for nothing.
+TEST_F(PlayerViewTest, SourceIsOffByDefault) {
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(present());
+  }
+  ImGui::SetCurrentContext(view_->ui_context());
+  ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
+  ASSERT_NE(panel, nullptr);
+  EXPECT_EQ(item_under(vp_test::source_middle(*panel)),
+            panel->GetID("###play"));
+  tap(vp_test::source_middle(*panel));
+  EXPECT_TRUE(view_->player().playing());
+  EXPECT_FALSE(view_->take_source_request());
+}
+
+// As the iOS shell's: a tap on Source is one request, taken once.
+TEST_F(PlayerViewTest, ATapOnSourceIsOneRequest) {
+  source_button_ = true;
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(present());
+  }
+  EXPECT_FALSE(view_->take_source_request());
+  ImGui::SetCurrentContext(view_->ui_context());
+  const ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
+  ASSERT_NE(panel, nullptr);
+  tap(vp_test::source_middle(*panel));
+  EXPECT_TRUE(view_->take_source_request());
+  EXPECT_FALSE(view_->take_source_request()) << "taken";
+  for (int i = 0; i < 5; ++i) {
+    ASSERT_TRUE(present());
+  }
+  EXPECT_FALSE(view_->take_source_request()) << "one tap, one request";
+  EXPECT_FALSE(view_->player().playing());
 }
 
 // On the narrowest phone, at the iOS shell's sizes, playing, past a refresh
