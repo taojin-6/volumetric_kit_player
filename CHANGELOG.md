@@ -61,6 +61,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`vp_write_stream <dir>`), rather than encoded again by every device test.
 - The live park test parks 8 times; its 50-cycle soak is the `stress` ctest
   `vp_live_park_soak`, which CI leaves out.
+- CI's NVIDIA legs keep the driver's shader cache, in the runner's tool
+  cache, rather than compile every pipeline in every test process.
 
 ### Fixed
 
