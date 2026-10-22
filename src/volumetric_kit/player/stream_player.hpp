@@ -131,8 +131,8 @@ using FrameExchange = recon::mesh::MeshExchange<FrameStamp>;
 /// **The worker** first builds the decoder and the extractor. Then, per record
 /// of a file's track, it reads it, `codec::decode_growing` it into a grid
 /// `codec::make_decode_grid` built from the first frame, waits until it is due
-/// (@ref Playback) and until the consumer has taken the last mesh, then
-/// extracts it with Marching Cubes and publishes it. The mesh lives in the
+/// (@ref Playback) and until the consumer has taken the last mesh (@ref taken),
+/// then extracts it with Marching Cubes and publishes it. The mesh lives in the
 /// extractor's ring slot, so the next frame decodes while it is drawn. A
 /// damaged record, or one this version cannot read, is skipped, and playback
 /// resumes at the next key record. At the track's end it plays the track again
@@ -145,11 +145,12 @@ using FrameExchange = recon::mesh::MeshExchange<FrameStamp>;
 /// (@ref connect).
 ///
 /// **Threads.** The controls (@ref play, @ref pause, @ref step,
-/// @ref set_loop), their reads, @ref park and @ref unpark lock the mutex the
-/// worker waits under, so they are safe from any thread and each change wakes
-/// the worker; @ref start, @ref stop and the destructor run on one thread at a
-/// time. Only the worker touches the decoder, the grid and the extractor; the
-/// caller touches only the consumer side of the exchange.
+/// @ref set_loop), their reads, @ref park, @ref unpark and @ref taken lock the
+/// mutex the worker waits under, so they are safe from any thread, and each
+/// change and each @ref taken wakes the worker; @ref start, @ref stop and the
+/// destructor run on one thread at a time. Only the worker touches the
+/// decoder, the grid and the extractor; the caller touches only the consumer
+/// side of the exchange.
 ///
 /// **Teardown**, on every path out, so nothing the GPU may still read is
 /// freed early: @ref stop, wait until the consumer's queue is idle, and
@@ -170,6 +171,7 @@ using FrameExchange = recon::mesh::MeshExchange<FrameStamp>;
 /// while (player->status().ok() && !closed) {
 ///   exchange.begin_frame(slot, [&](const auto&, FrameStamp& stamp) {
 ///     shown = stamp;
+///     player->taken();
 ///     return true;
 ///   });
 ///   // ... draw exchange.live() ...
@@ -273,6 +275,12 @@ class StreamPlayer {
   ///        grid. A no-op when not parked.
   void unpark();
 
+  /// @brief Tell the worker the consumer has taken a mesh: call it from the
+  ///        commit of each FrameExchange::begin_frame that takes one. The
+  ///        worker sleeps until then before it meshes the next frame, rather
+  ///        than polling the exchange.
+  void taken();
+
   /// @brief Stop the worker, playing or paused, and join it. Idempotent.
   void stop();
   /// @return OK, or the fatal error that stopped the worker.
@@ -346,8 +354,8 @@ class StreamPlayer {
 
   // The controls, the park, the connection and the worker's outcome, under
   // mutex_; changed_ wakes the worker on each change, and a park at each
-  // step's end. quit_ is written under it too, and also read without it by
-  // the exchange's wait.
+  // step's end, and taken() after each take. quit_ is written under it too,
+  // and read without it by start.
   mutable std::mutex mutex_;
   std::condition_variable changed_;
   Playback clock_;

@@ -156,6 +156,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
     stats_.add_frame(stamp, PlaybackStats::Clock::now());
     shown_triangles_ = mesh.triangle_count;
     shown_ = std::move(stamp);
+    player_->taken();
     return true;
   });
   const core::Status drawn = drawable(exchange_);

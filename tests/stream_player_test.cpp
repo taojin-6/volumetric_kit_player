@@ -11,7 +11,8 @@
 // play restarts; a corrupt P-frame, a damaged record header or a record this
 // version cannot read resyncs at the next key, and a stream with no key left
 // stops the worker with the reason; quit is prompt, playing, paused or
-// waiting for a consumer that takes nothing; a fatal error stops the worker,
+// waiting for a consumer that takes nothing; the worker sleeps until taken()
+// rather than polling for the take; a fatal error stops the worker,
 // a failed build on it included; start is refused once started or stopped.
 // Playing, no frame arrives before its pts says. A park holds the worker:
 // nothing is published while parked, an extract waiting for the consumer
@@ -43,8 +44,8 @@
 // the unpark connects at once; and a stop is prompt while a refused connect
 // waits to retry, connected and idle, and parked. On the host: open refuses
 // what it cannot play, and connect an empty host or port 0. The device tests
-// skip with no device. A stop that no control can wake, such as one lost in
-// the exchange's wait, fails only on ctest's timeout.
+// skip with no device. A stop that no control can wake fails only on ctest's
+// timeout.
 
 #include "volumetric_kit/player/stream_player.hpp"
 
@@ -244,6 +245,7 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
       const recon::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
           slot_, [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
             taken = stamp;
+            player_->taken();
             return true;
           });
       slot_ = (slot_ + 1) % kFramesInFlight;
@@ -697,6 +699,43 @@ TEST_F(StreamPlayerTest, AConsumerTakingNothingStallsTheWorkerUntilQuit) {
   // 2 rather than run out of ring slots.
   std::this_thread::sleep_for(kQuiet);
   EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// The worker sleeps until taken() says the last mesh was taken, rather than
+// polling the exchange: a take it is not told of leaves the next extract
+// waiting, and taken() lets it go.
+TEST_F(StreamPlayerTest, TheWorkerSleepsUntilTakenRatherThanPolling) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  // Frame 1 goes and is left untaken, so frame 2, stepped too, waits for the
+  // consumer before its extract; the sleep only lets the worker get there.
+  player->step();
+  player->step();
+  std::this_thread::sleep_for(kQuiet);
+  // The next mesh within `wait`, taken as next_frame takes it but untold.
+  const auto take_untold = [&](SteadyClock::duration wait) {
+    std::optional<FrameStamp> got;
+    const SteadyClock::time_point deadline = SteadyClock::now() + wait;
+    while (!got && SteadyClock::now() < deadline) {
+      exchange_.begin_frame(slot_, [&](const auto&, FrameStamp& stamp) {
+        got = stamp;
+        return true;
+      });
+      slot_ = (slot_ + 1) % kFramesInFlight;
+      std::this_thread::sleep_for(1ms);
+    }
+    return got;
+  };
+  const std::optional<FrameStamp> one = take_untold(kArrival);
+  ASSERT_TRUE(one.has_value());
+  EXPECT_EQ(one->index, 1u);
+  EXPECT_FALSE(take_untold(kQuiet).has_value()) << "meshed before taken()";
+  player->taken();
+  const std::optional<FrameStamp> two = next_frame();
+  ASSERT_TRUE(two.has_value()) << "nothing after taken()";
+  EXPECT_EQ(two->index, 2u);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
@@ -1290,6 +1329,7 @@ class LivePlayerTest : public StreamPlayerTest {
       const recon::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
           slot_, [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
             taken = stamp;
+            player_->taken();
             return true;
           });
       slot_ = (slot_ + 1) % kFramesInFlight;

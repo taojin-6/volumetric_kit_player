@@ -19,9 +19,6 @@ namespace networking = recon::networking;
 namespace stream = recon::stream;
 using Clock = Playback::Clock;
 
-// How long one wait for the consumer to take a mesh lasts before the worker
-// waits again; quit ends it at once.
-constexpr std::chrono::seconds kCollectWait{1};
 // Live: the longest one receive waits, so quit and a park are seen within it;
 // the least time between two meshes while records keep coming; and the wait
 // before a connection is made again.
@@ -278,6 +275,10 @@ bool StreamPlayer::park(std::chrono::milliseconds timeout) {
 
 void StreamPlayer::unpark() {
   control([this] { parked_ = false; });
+}
+
+void StreamPlayer::taken() {
+  control([] {});
 }
 
 void StreamPlayer::stop() {
@@ -547,8 +548,12 @@ bool StreamPlayer::wait_due(std::uint64_t pts_ns) {
 }
 
 core::Result<bool> StreamPlayer::publish(FrameStamp stamp) {
-  while (!exchange_->release_and_may_publish(*extractor_)) {
-    exchange_->wait_collected(kCollectWait, quit_);
+  {
+    // Asleep until taken() or another control wakes it.
+    std::unique_lock<std::mutex> lock(mutex_);
+    changed_.wait(lock, [this] {
+      return quit_ || exchange_->release_and_may_publish(*extractor_);
+    });
     if (quit_) {
       return false;
     }

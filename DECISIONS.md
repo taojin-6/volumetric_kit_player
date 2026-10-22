@@ -286,6 +286,10 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   slot the consumer's `frames_in_flight + 1` do not cover. A consumer that
   stops drawing, such as a minimized window, so stops playback, and the clock
   re-anchors on the late frame.
+- **The consumer says it took a mesh** (`StreamPlayer::taken`), and until
+  then the worker sleeps on its condition variable. Why: recon's
+  `wait_collected` polls every 2 ms, so a minimized window kept the worker
+  waking 500 times a second.
 - **Resync rests on the decoder.** A damaged record is skipped, and the
   decoder refuses each P-frame whose reference was skipped (`NotFound`: it
   checks the reference's hash), so playback resumes at the next key record

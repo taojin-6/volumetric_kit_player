@@ -64,6 +64,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a vsync sooner; a file keeps gfx's default.
 - The iOS app draws at most 60 frames a second, so a ProMotion iPad no
   longer redraws the same frame at 120 Hz.
+- A consumer of `StreamPlayer` calls `taken()` from the commit of each
+  mesh it takes; the worker sleeps until then rather than waking every
+  2 ms, as it did while a window was minimized.
 
 ### Fixed
 
