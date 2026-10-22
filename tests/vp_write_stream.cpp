@@ -3,10 +3,9 @@
 
 // vp_write_stream <dir>: writes the tests' streams (test_stream.hpp) into
 // <dir>, with recon's MeshIntegrator, Encoder and StreamWriter, on the first
-// device that meets recon's requirements: once a ctest run for the tests
-// (CMakeLists.txt), and for CI's smoke run of the window
-// (.github/workflows/ci.yml). It applies the core's test policy as a main()
-// of its own (vulkan_policy.hpp): with no device a skip, or a failure under
+// device that meets recon's requirements: the ctest vp_test_streams, once a
+// run (CMakeLists.txt). It applies the core's test policy as a main() of its
+// own (vulkan_policy.hpp): with no device a skip, or a failure under
 // VKC_REQUIRE_VULKAN_DEVICE, and under VKC_TEST_VALIDATION any error the
 // layer reports fails it.
 

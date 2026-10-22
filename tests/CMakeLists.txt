@@ -67,8 +67,7 @@ target_compile_definitions(
   PRIVATE VP_PLAYER_APP="$<TARGET_FILE:volumetric_kit_player>"
           VP_CONFIG_EXAMPLES="${PROJECT_SOURCE_DIR}/config/examples")
 add_dependencies(vp_cli_test volumetric_kit_player)
-# The tests' streams as files, for vp_test_streams above and CI's smoke run of
-# the window (ci.yml): a tool, not a test.
+# The command of vp_test_streams, above.
 add_executable(vp_write_stream vp_write_stream.cpp)
 target_link_libraries(
   vp_write_stream

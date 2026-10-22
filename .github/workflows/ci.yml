@@ -213,21 +213,20 @@ jobs:
             exit 1
           fi
 
-      # The window's smoke run (DECISIONS.md): the app plays the tests' stream
-      # under Xvfb for 60 presents of a stream frame, as a scenario beside it
-      # says. The loader forces the validation layer on, which a Release
-      # build does not ask for, and logs the insert; with no messenger, the
-      # layer prints its own messages.
+      # The window's smoke run (DECISIONS.md): the app plays the tests'
+      # stream, which the Test step wrote, under Xvfb for 60 presents of a
+      # stream frame, as a scenario says. The loader forces the validation
+      # layer on, which a Release build does not ask for, and logs the
+      # insert; with no messenger, the layer prints its own messages.
       - name: Smoke run of the window (Linux, Xvfb)
         if: runner.os == 'Linux'
         run: |
           set -eo pipefail
-          build/tests/vp_write_stream build/streams
           cat > build/smoke.json <<'EOF'
           {
             "version": 1,
             "operation": "view",
-            "source": { "kind": "stream", "path": "streams/sphere.vrst" },
+            "source": { "kind": "stream", "path": "tests/streams/sphere.vrst" },
             "run": { "frames": 60 }
           }
           EOF
