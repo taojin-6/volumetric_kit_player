@@ -4,12 +4,30 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-21 — The desktop app takes a scenario
+
+`apps/volumetric_kit_player/main.cpp` and `config/examples/`; README.md says
+how to run it.
+
+- **`--config PATH` or `--help` alone,** through the core's `parse_args`,
+  `usage` and `load(path, Application::Player)`, as every family desktop
+  program starts. The core owns the format and the profile's fields
+  (its CONFIG.md); a command line or a scenario it refuses exits 2, as
+  recon's examples do. Why: one way to start every program, and a scenario
+  names a stream or a sender, the window and a count once, in a file.
+- **A `source.port` of 0, or none, keeps `LiveAddress`'s port,** recon's
+  `networking::kDefaultPort`. Why: the sender's default has one home.
+- **The iOS app reads none,** as it plays the first `.vrst` in its Documents
+  folder (below), so only the desktop build has the core's config tier.
+- **`vp_live_probe` keeps its `host[:port]`:** a tool for agents, not a
+  program a scenario starts.
+
 ## 2026-10-21 — Live mode: a sender's stream over TCP
 
-`StreamPlayer::connect`, `--connect host[:port]` and `tests/vp_live_probe`;
-the headers say what each call does. recon's `networking::StreamClient`
-reads what a `StreamServer` sends: the `.vrst` chunks, joined at the newest
-key.
+`StreamPlayer::connect`, a scenario's `source.host` and
+`tests/vp_live_probe`; the headers say what each call does. recon's
+`networking::StreamClient` reads what a `StreamServer` sends: the `.vrst`
+chunks, joined at the newest key.
 
 - **Decode every record, mesh the newest.** The worker decodes each record as
   it arrives, and meshes once the consumer has taken the last mesh: when
@@ -204,7 +222,7 @@ the sizes.
 - **`VP_NO_WINDOW` stops the app just before `glfwInit`,** and `cli_test`
   sets it. Why: a refusal that moved past that point then fails the test on
   every OS, rather than open a window (AGENTS.md); and it alone stops a
-  valid `--connect`, which nothing refuses before the window.
+  valid live scenario, which nothing refuses before the window.
 - **The configure fails if GLFW enters the library's link closure,** checked
   once every directory has linked. Why: the library links no window system
   (below); only the app links gfx's GLFW tier.
@@ -215,10 +233,10 @@ the sizes.
   (a TODO in `main.cpp`). Why: it shares the window's user pointer with the
   keys, and moving it to gfx means gfx owns that pointer, part of the GLFW
   input glue that calib's `calib_rig.cpp` TODO plans to move into gfx.
-- **`--frames N` counts presents of a stream frame,** then prints the frame
-  drawn, for CI's smoke run. Why: the worker builds its kernels first, so the
-  window presents before the first mesh arrives, and a count of every present
-  could end before one is drawn.
+- **`run.frames` counts presents of a stream frame,** then the app prints
+  the frame drawn, for CI's smoke run. Why: the worker builds its kernels
+  first, so the window presents before the first mesh arrives, and a count
+  of every present could end before one is drawn.
 
 ## 2026-10-19 — One view for every window system, drawn by gfx
 
@@ -310,12 +328,10 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   step, never a ctest, so no agent opens a window (AGENTS.md); the Mac legs
   never open it, as their runners are daemons with no window server.
 
-## 2026-10-18 — An application over pinned core, recon and gfx; the input is a path
+## 2026-10-18 — An application over pinned core, recon and gfx
 
 - The player is an application, not a library: it installs and exports
   nothing. Its logic is a build-tree-only static library, so the tests link
   what the app runs.
 - It builds on core, recon and gfx, each fetched pinned by commit. The core
   is declared first, so all three share one copy (the core's DECISIONS.md).
-- Like a video player, it takes the path of the stream to play, so it reads
-  no core config.

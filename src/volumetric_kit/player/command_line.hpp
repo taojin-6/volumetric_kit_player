@@ -4,8 +4,8 @@
 #pragma once
 
 /// @file command_line.hpp
-/// @brief What the player's programs (the desktop app, vp_live_probe) and
-///        its addresses share in parsing their text. Player-internal.
+/// @brief What vp_live_probe's command line and the player's addresses share
+///        in parsing their text. Player-internal.
 
 #include <cstdint>
 #include <optional>

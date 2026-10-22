@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "operation": "view",
+  "source": {
+    "kind": "stream",
+    "path": "data/rafa2.vrst"
+  }
+}

@@ -201,18 +201,27 @@ jobs:
           fi
 
       # The window's smoke run (DECISIONS.md): the app plays the tests' stream
-      # under Xvfb for 60 presents of a stream frame. The loader forces the
-      # validation layer on, which a Release build does not ask for, and logs
-      # the insert; with no messenger, the layer prints its own messages.
+      # under Xvfb for 60 presents of a stream frame, as a scenario beside it
+      # says. The loader forces the validation layer on, which a Release
+      # build does not ask for, and logs the insert; with no messenger, the
+      # layer prints its own messages.
       - name: Smoke run of the window (Linux, Xvfb)
         if: runner.os == 'Linux'
         run: |
           set -eo pipefail
           build/tests/vp_write_stream build/smoke.vrst
+          cat > build/smoke.json <<'EOF'
+          {
+            "version": 1,
+            "operation": "view",
+            "source": { "kind": "stream", "path": "smoke.vrst" },
+            "run": { "frames": 60 }
+          }
+          EOF
           VK_LOADER_LAYERS_ENABLE='*validation' VK_LOADER_DEBUG=layer \
             timeout 300 xvfb-run -a \
               build/apps/volumetric_kit_player/volumetric_kit_player \
-              --frames 60 build/smoke.vrst 2>&1 | tee build/smoke.log
+              --config build/smoke.json 2>&1 | tee build/smoke.log
           if ! grep -qE '^volumetric_kit_player: presented 60 frame\(s\), drew stream frame [0-9]+$' \
               build/smoke.log; then
             echo "::error::the window did not present 60 frames of the stream"
