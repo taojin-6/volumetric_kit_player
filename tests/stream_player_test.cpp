@@ -1528,10 +1528,13 @@ TEST_F(LivePlayerTest, ARecordIsMeshedOnceNothingNewerHasCome) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-// A frame meshed and left untaken, then the next record decoded behind it:
-// the take, at a seeded point in the worker's 10 ms slice, wakes it at once,
-// so beyond its own mesh the newest is published within 2 ms of the take, by
-// the median of nine.
+// A frame meshed and left untaken, B, then the next record, C, decoded
+// behind it: the take of B, at a seeded point in the worker's 10 ms slice,
+// wakes it at once, so beyond C's own mesh C is published within 1 ms of the
+// take, by the median of nine. Each sample starts from a frame taken, so the
+// worker is idle, and each record goes once the one before had time to be
+// meshed (twice that frame's decode and mesh); a sample where C still came
+// before B was meshed, so stands for both, is retried.
 TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
   const std::unique_ptr<networking::StreamServer> server = serve();
   ASSERT_NE(server, nullptr);
@@ -1539,10 +1542,9 @@ TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
   ASSERT_NE(player, nullptr);
   ASSERT_TRUE(reaches(LiveState::kConnected));
   std::mt19937 random(20261022);
-  std::uniform_int_distribution<int> delay(20, 30);
+  std::uniform_int_distribution<int> phase(0, 10);
   std::uint64_t n = 0;
-  // The stream's next record, looped and restamped, sent once the one
-  // before has come: whether it came.
+  // The stream's next record, looped and restamped: whether it came.
   const auto send = [&] {
     const stream::RecordInfo info =
         restamped(recording_.infos[n % kFrames], n / kFrames);
@@ -1551,29 +1553,46 @@ TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
     return server->publish(info, payload.data(), payload.size()).ok() &&
            eventually([&] { return player->live_status().seq == info.seq; });
   };
-  std::vector<double> waits;  // ms, from each take to the next publish
-  for (int sample = 0; sample < 9; ++sample) {
-    ASSERT_TRUE(send()) << "sample " << sample;  // meshed, left untaken
-    std::this_thread::sleep_for(std::chrono::milliseconds(delay(random)));
-    ASSERT_TRUE(send()) << "sample " << sample;  // decoded, in hand
-    std::this_thread::sleep_for(std::chrono::milliseconds(delay(random)));
+  // Twice `frame`'s decode and mesh.
+  const auto twice = [](const FrameStamp& frame) {
+    double ms = 0.0;
+    for (const core::StageRow& row : frame.stages.rows()) {
+      ms += row.cpu_ms;
+    }
+    return std::chrono::microseconds(static_cast<std::int64_t>(2000.0 * ms));
+  };
+  std::vector<double> waits;  // ms, from each take of B to C's publish
+  for (int attempt = 0; attempt < 30 && waits.size() < 9; ++attempt) {
+    ASSERT_TRUE(send());
+    const std::optional<FrameStamp> idle = take(kArrival);
+    ASSERT_TRUE(idle.has_value());
+    ASSERT_TRUE(send());  // B
+    std::this_thread::sleep_for(twice(*idle) + 10ms);
+    ASSERT_TRUE(send());  // C
+    std::this_thread::sleep_for(twice(*idle) +
+                                std::chrono::milliseconds(phase(random)));
     const SteadyClock::time_point taken_at = SteadyClock::now();
-    ASSERT_TRUE(take(kArrival).has_value());
-    const std::optional<FrameStamp> newest = take(kArrival);
-    ASSERT_TRUE(newest.has_value()) << "sample " << sample;
+    const std::optional<FrameStamp> b = take(kArrival);
+    ASSERT_TRUE(b.has_value());
+    if (b->records != 1) {
+      continue;
+    }
+    const std::optional<FrameStamp> c = take(kArrival);
+    ASSERT_TRUE(c.has_value());
     double wait =
-        std::chrono::duration<double, std::milli>(newest->published - taken_at)
+        std::chrono::duration<double, std::milli>(c->published - taken_at)
             .count();
-    for (const core::StageRow& row : newest->stages.rows()) {
+    for (const core::StageRow& row : c->stages.rows()) {
       if (std::string(row.name) == "mesh") {
         wait -= row.cpu_ms;
       }
     }
     waits.push_back(wait);
   }
+  ASSERT_EQ(waits.size(), 9u) << "C kept coming before B was meshed";
   std::nth_element(waits.begin(), waits.begin() + waits.size() / 2,
                    waits.end());
-  EXPECT_LT(waits[waits.size() / 2], 2.0) << "ms, the median";
+  EXPECT_LT(waits[waits.size() / 2], 1.0) << "ms, the median";
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
