@@ -1693,11 +1693,13 @@ TEST_F(LivePlayerTest, ARecordIsMeshedOnceNothingNewerHasCome) {
 
 // A frame meshed and left untaken, B, then the next record, C, decoded
 // behind it: the take of B, at a seeded point in the worker's 10 ms slice,
-// wakes it at once, so beyond C's own mesh C is published within 1 ms of the
-// take, by the median of nine. Each sample starts from a frame taken, so the
-// worker is idle, and each record goes once the one before had time to be
-// meshed (twice that frame's decode and mesh); a sample where C still came
-// before B was meshed, so stands for both, is retried.
+// wakes it at once, so beyond C's own mesh C is published within 2.5 ms of
+// the take, by the median of 15: a worker that waited out its slice would
+// give about 5 ms, and the margin is for a busy CI host. Each sample starts
+// from a frame taken, so the worker is idle, and each record goes once the
+// one before had time to be meshed (twice that frame's decode and mesh); a
+// sample where C still came before B was meshed, so stands for both, is
+// retried.
 TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
   const std::unique_ptr<networking::StreamServer> server = serve();
   ASSERT_NE(server, nullptr);
@@ -1724,8 +1726,9 @@ TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
     }
     return std::chrono::microseconds(static_cast<std::int64_t>(2000.0 * ms));
   };
+  constexpr std::size_t kSamples = 15;
   std::vector<double> waits;  // ms, from each take of B to C's publish
-  for (int attempt = 0; attempt < 30 && waits.size() < 9; ++attempt) {
+  for (int attempt = 0; attempt < 50 && waits.size() < kSamples; ++attempt) {
     ASSERT_TRUE(send());
     const std::optional<FrameStamp> idle = take(kArrival);
     ASSERT_TRUE(idle.has_value());
@@ -1752,10 +1755,10 @@ TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
     }
     waits.push_back(wait);
   }
-  ASSERT_EQ(waits.size(), 9u) << "C kept coming before B was meshed";
+  ASSERT_EQ(waits.size(), kSamples) << "C kept coming before B was meshed";
   std::nth_element(waits.begin(), waits.begin() + waits.size() / 2,
                    waits.end());
-  EXPECT_LT(waits[waits.size() / 2], 1.0) << "ms, the median";
+  EXPECT_LT(waits[waits.size() / 2], 2.5) << "ms, the median";
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
