@@ -597,7 +597,7 @@ TEST_F(PlayerViewTest, TheStatsCountTheFramesTakenWhileClosed) {
 // M5 Max, under other tests' load too: inside, 0.002 to 0.01 ms, at times
 // one spike to 1 ms; around it, mostly 0.02 to 0.2 ms, at times as low as
 // 0.002. The mean, unlike the median, a run of low readings does not sink,
-// but a spike lifts it: it misses a scope inside about 1 run in 25.
+// but a spike lifts it: it misses a scope inside about 1 run in 20.
 TEST_F(PlayerViewTest, TheDrawRowTimesTheWholePass) {
   extent_ = kPhone;
   ASSERT_TRUE(make_view());
