@@ -6,22 +6,24 @@ This is the working guide for Codex, Claude Code and other agents.
 ## Project and boundaries
 
 `volumetric_kit_player` is an application: it plays a recorded `.vrst`
-stream like a video player, decoding and meshing each frame on the GPU and
-drawing it in a window. [README.md](README.md) says what is implemented;
-[DECISIONS.md](DECISIONS.md) records why.
+stream like a video player, or a sender's live stream over TCP, decoding and
+meshing each frame on the GPU and drawing it in a window.
+[README.md](README.md) says what is implemented; [DECISIONS.md](DECISIONS.md)
+records why.
 
 - It is assembled from its siblings, each fetched pinned by commit:
   [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core)
   (the device, `Status`/`Result`, the test fixtures),
   [`volumetric_kit_recon`](https://github.com/taojin-6/volumetric_kit_recon)
-  (the stream reader, the codec, Marching Cubes) and
+  (the stream reader and client, the codec, Marching Cubes) and
   [`volumetric_kit_gfx`](https://github.com/taojin-6/volumetric_kit_gfx)
   (the window, the mesh pipeline, the camera). From the primary checkout
   they are `../volumetric_kit_<name>/`.
 - Code another application could use belongs in its owner, as a task in that
   repository. The player keeps only its assembly and its playback.
 - Processing runs on the GPU, on one `VkDevice` that recon and gfx share. The
-  host reads the file's bytes and handles input, with no host fallbacks.
+  host reads the stream's bytes, from a file or a socket, and handles input,
+  with no host fallbacks.
 
 ## Layout and naming
 
@@ -51,11 +53,11 @@ drawing it in a window. [README.md](README.md) says what is implemented;
 
 - Every change carries unit tests for what it changes.
 - **Tests and agents never open a window.** Nothing they run may reach
-  `glfwInit`: a test may run the app only on input it refuses first, with
-  `VP_NO_WINDOW` set, and agents skip gfx's `GlfwNativeWindowTest`. Only
-  CI's Xvfb step on the Linux legs runs the window; the owner checks it by
-  hand. Agents and CI build the iOS app but never run it; the owner runs it
-  on a device.
+  `glfwInit`: a test runs the app only with `VP_NO_WINDOW` set, which stops
+  it even on input nothing refuses (DECISIONS.md); and agents skip gfx's
+  `GlfwNativeWindowTest`. Only CI's Xvfb step on the Linux legs runs the
+  window; the owner checks it by hand. Agents and CI build the iOS app but
+  never run it; the owner runs it on a device.
 - Logic is tested headless: host-only where it can be, otherwise on a device
   through the core's fixtures, which skip without one locally and fail in CI.
 - Run GPU tests under the validation layer: `VKC_TEST_VALIDATION=1`, and on

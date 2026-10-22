@@ -13,10 +13,11 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first
 # (DECISIONS.md). The pin is core main at #42's merge (7757c13, 0.12.0): its iOS
 # module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT) and
-# answers glm. gfx pins the same core (#147); recon's pin (7a1219e) is older and
-# yields to it because the player declares the core first. The floor below is
-# that version, so an older FETCHCONTENT_SOURCE_DIR override is refused. The
-# player installs nothing, so the core's install rules are off too.
+# answers glm. gfx pins the same core (#147); recon's pin (b992f12, 0.15.0) is
+# newer and yields to it too, as the player declares the core first. The floor
+# below is the pin's version (0.12.0), so an older FETCHCONTENT_SOURCE_DIR
+# override is refused. The player installs nothing, so the core's install rules
+# are off too.
 set(VKC_WITH_VULKAN ON)
 set(VKC_INSTALL OFF)
 if(VP_BUILD_TESTS)
@@ -30,15 +31,17 @@ FetchContent_MakeAvailable(volumetric_kit_core)
 vkc_require_core(0.12.0 VULKAN)
 
 # --- volumetric_kit_recon ----------------------------------------------------
-# The stream reader, the codec's decode grid, Marching Cubes and the mesh
-# exchange. Its tests, examples, install and -Werror stay off in a subproject.
-# The pin is recon main at #256's merge (8c8dec2): an empty mesh's payload
-# reaches MeshExchange's commit, beside #255's volume::kDefaultBucketSize /
-# kDefaultMaxChain and #253's codec::make_decode_grid and decode_growing.
+# The stream reader, the codec's decode grid, Marching Cubes, the mesh exchange
+# and the live stream's client. Its tests, examples, install and -Werror stay
+# off in a subproject, so its library's core floor (0.2.0) is the one checked.
+# The pin is recon main at #260's merge (b6fa928): networking::StreamClient and
+# StreamServer, beside #256's empty mesh payload at MeshExchange's commit,
+# #255's volume::kDefaultBucketSize / kDefaultMaxChain and #253's
+# codec::make_decode_grid and decode_growing.
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG 8c8dec2ece8287ac3d05ab843accfb90efa1b05e)
+  GIT_TAG b6fa928f544e4283b7db3b7f776b32b8aefdc987)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------

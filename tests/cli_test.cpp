@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// The desktop app's command line, the app run as a process: usage and a bad
-// --frames exit 2; a missing file and one that is not a .vrst exit 1 with
-// StreamPlayer::open's refusal and nothing else, before glfwInit. No case
-// hands the app a stream it can play, so none reaches GLFW (AGENTS.md). Each
-// runs with VP_NO_WINDOW set, which stops the app just before glfwInit with
-// a reason of its own: a refusal that moved past that point fails here, on
-// every OS, rather than open a window. A run not back within kPrompt, as a
-// window's loop would not be, is killed and fails the test.
+// The desktop app's command line, the app run as a process: usage, a bad
+// --frames, a bad --connect and --connect with a path exit 2; a missing file
+// and one that is not a .vrst exit 1 with StreamPlayer::open's refusal and
+// nothing else, before glfwInit. Each runs with VP_NO_WINDOW set, which stops
+// the app just before glfwInit with a reason of its own (DECISIONS.md); a
+// valid --connect, which nothing refuses, exits 1 with that reason. A run not
+// back within kPrompt, as a window's loop would not be, is killed and fails
+// the test. On the host: parse_count, which --frames and a port take.
 
 #include <gtest/gtest.h>
 #include <poll.h>
@@ -21,18 +21,21 @@
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <string>
 #include <vector>
 
 #include "test_stream.hpp"
+#include "volumetric_kit/player/command_line.hpp"
 
 extern char** environ;
 
 namespace {
 
 using namespace std::chrono_literals;
+using volumetric_kit::player::parse_count;
 using vp_test::Scratch;
 using SteadyClock = std::chrono::steady_clock;
 
@@ -158,6 +161,43 @@ TEST(CliTest, BadFramesExits2) {
   EXPECT_EQ(twice.exit_code, 2) << twice.output;
 }
 
+TEST(CliTest, BadConnectExits2) {
+  const Scratch scratch;
+  const std::string path = scratch.file("missing.vrst");
+  const std::vector<std::vector<std::string>> cases = {
+      {"--connect"},
+      {"--connect", ""},
+      {"--connect", ":5"},
+      {"--connect", "h:0"},
+      {"--connect", "h:65536"},
+      {"--connect", "h:x"},
+      {"--connect", "h:5:6"},
+      {"--connect", "h", "--connect", "g"},
+      {"--connect", "h", path},
+      {path, "--connect", "h"}};
+  for (const std::vector<std::string>& args : cases) {
+    const Outcome run = run_app(args);
+    EXPECT_EQ(run.exit_code, 2) << args.back() << "\n" << run.output;
+    EXPECT_EQ(run.output.rfind("usage: volumetric_kit_player", 0), 0u)
+        << run.output;
+  }
+}
+
+// connect does no I/O, so a valid address passes every refusal and stops at
+// the backstop, whether or not anything serves there.
+TEST(CliTest, AValidConnectReachesTheNoWindowBackstop) {
+  for (const std::vector<std::string>& args :
+       std::vector<std::vector<std::string>>{
+           {"--connect", "127.0.0.1:1"},
+           {"--frames", "60", "--connect", "lab.invalid"}}) {
+    const Outcome run = run_app(args);
+    EXPECT_EQ(run.exit_code, 1) << run.output;
+    EXPECT_EQ(run.output,
+              "volumetric_kit_player: Unsupported: VP_NO_WINDOW is set, so no "
+              "window\n");
+  }
+}
+
 TEST(CliTest, RefusesAMissingFileBeforeGlfw) {
   const Scratch scratch;
   const std::string path = scratch.file("missing.vrst");
@@ -171,6 +211,16 @@ TEST(CliTest, RefusesAFileThatIsNotAStreamBeforeGlfw) {
   std::ofstream(path) << "not a stream, but long enough to have been one if "
                          "it began with the magic\n";
   expect_refused(run_app({path}), "InvalidArgument", path);
+}
+
+TEST(ParseCount, TakesDecimalDigitsAloneFromOne) {
+  EXPECT_EQ(parse_count("1"), 1u);
+  EXPECT_EQ(parse_count("60"), 60u);
+  EXPECT_EQ(parse_count("18446744073709551615"), UINT64_MAX);
+  for (const char* text : {"", "0", "-1", "+5", "five", "5x", " 5", "5 ",
+                           "18446744073709551616"}) {
+    EXPECT_FALSE(parse_count(text).has_value()) << "'" << text << "'";
+  }
 }
 
 }  // namespace

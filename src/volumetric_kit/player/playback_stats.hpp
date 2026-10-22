@@ -8,6 +8,7 @@
 ///        Player-internal.
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <optional>
 #include <vector>
@@ -20,9 +21,11 @@
 namespace volumetric_kit::player {
 
 /// @brief Figures over the frames taken for drawing: the track's mean
-///        bitrate, the rate frames are taken at, and the worker's stage
-///        means. Host-only, with the time passed in, so a test never sleeps.
-///        Not thread-safe: the drawing thread owns it.
+///        bitrate, the rate frames are taken at, the worker's stage means,
+///        and for a live stream, which has no track mean, the bitrate and
+///        the records over the last second. Host-only, with the time passed
+///        in, so a test never sleeps. Not thread-safe: the drawing thread
+///        owns it.
 ///
 /// @code
 /// PlaybackStats stats(player.track_stats(), player.rate());
@@ -62,6 +65,15 @@ class PlaybackStats {
   ///         @p now: (n - 1) over the time from the first to the last; 0
   ///         below 2, or for all taken at once.
   double frames_per_s(Clock::time_point now) const;
+  /// @return The Mbit/s the records brought over the second up to @p now, by
+  ///         when their frames were published (`FrameStamp::published`), not
+  ///         taken: 8 x the `record_bytes` of each frame published in it but
+  ///         the first, over the time from the first's publish to the last's;
+  ///         empty below 2, or for all published at once.
+  std::optional<double> rolling_mbit_per_s(Clock::time_point now) const;
+  /// @return The records a second, as @ref rolling_mbit_per_s: their frames'
+  ///         `records` in place of their bytes; 0 where it is empty.
+  double records_per_s(Clock::time_point now) const;
   /// @return Each row of the newest frame's stamp, in its order, as its mean
   ///         over the window: CPU over every frame in it, GPU over those
   ///         whose row has a device span (`has_gpu` false with none). Empty
@@ -69,10 +81,26 @@ class PlaybackStats {
   std::vector<core::StageRow> stage_means() const;
 
  private:
+  // A frame taken: when, when it was published, and its records' count and
+  // bytes.
+  struct Taken {
+    Clock::time_point at;
+    Clock::time_point published;
+    std::uint64_t records = 0;
+    std::uint64_t bytes = 0;
+  };
+
+  // The sum of `value` over the frames whose `when` is in the second up to
+  // `now`, each but the first, a second from the first's `when` to the
+  // last's; empty below 2, or for all at once.
+  std::optional<double> per_second(Clock::time_point now,
+                                   Clock::time_point Taken::* when,
+                                   double (*value)(const Taken&)) const;
+
   recon::stream::TrackStats track_;
   std::optional<double> nominal_fps_;
-  std::size_t window_ = 0;               // frames the stage means cover
-  std::deque<Clock::time_point> taken_;  // within a second of the newest
+  std::size_t window_ = 0;   // frames the stage means cover
+  std::deque<Taken> taken_;  // within a second of the newest
   std::deque<std::vector<core::StageRow>> stages_;  // the window's, newest last
 };
 

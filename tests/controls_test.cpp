@@ -1,21 +1,23 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// The controls and the stats panel on the host: status_line's and
-// stats_lines' wording, and draw_controls and StatsPanel on a CPU-only ImGui
-// context fed by gfx's ImGuiTouch, over a stream opened but not started. A
-// tap on Play/Pause flips playing(), Step pauses, Loop toggles, a finger on
-// the controls is ImGui's, and they keep clear of the safe area. The stats
-// sit at the work area's top left; a finger on their header is ImGui's and
-// on their body the scene's; a tap on the header closes them, with nothing
-// rebuilt, and another opens them with the frames taken meanwhile; their
-// figures hold for a refresh; and their table is the stage means, then the
-// renderer's rows.
+// The controls and the stats panel on the host: status_line's,
+// live_status_line's and stats_lines' wording, file and live;
+// live_reason; parse_live_address; and draw_controls and StatsPanel on a
+// CPU-only ImGui context fed by gfx's ImGuiTouch, over a stream opened but not
+// started. A tap on Play/Pause flips playing(), Step pauses, Loop toggles, a
+// finger on the controls is ImGui's, and they keep clear of the safe area; a
+// live player's, never started, are its status line alone. The stats sit at the
+// work area's top left; a finger on their header is ImGui's and on their body
+// the scene's; a tap on the header closes them, with nothing rebuilt, and
+// another opens them with the frames taken meanwhile; their figures hold for a
+// refresh; and their table is the stage means, then the renderer's rows.
 
 #include "volumetric_kit/player/controls.hpp"
 
 #include <gtest/gtest.h>
 
+#include <cfloat>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -47,6 +49,12 @@ using volumetric_kit::player::draw_controls;
 using volumetric_kit::player::FrameStamp;
 using volumetric_kit::player::kControlsWindow;
 using volumetric_kit::player::kStatsWindow;
+using volumetric_kit::player::live_reason;
+using volumetric_kit::player::live_status_line;
+using volumetric_kit::player::LiveAddress;
+using volumetric_kit::player::LiveState;
+using volumetric_kit::player::LiveStatus;
+using volumetric_kit::player::parse_live_address;
 using volumetric_kit::player::PlaybackStats;
 using volumetric_kit::player::stats_lines;
 using volumetric_kit::player::StatsPanel;
@@ -88,7 +96,7 @@ stream::TrackStats a_track() {
 
 TEST(StatsLines, SayDashForTheFrameBeforeTheFirst) {
   const PlaybackStats stats(a_track(), {30, 1});
-  EXPECT_EQ(stats_lines(stats, std::nullopt, 0, t0),
+  EXPECT_EQ(stats_lines(stats, std::nullopt, 0, t0, false),
             (Lines{"bitrate 9.8 Mbit/s", "frame - · - kB · - k tris",
                    "rate 0.0 / 30 fps"}));
 }
@@ -100,22 +108,123 @@ TEST(StatsLines, NameTheFramesTypeBytesAndTrianglesAndTheRate) {
     stats.add_frame({}, t0 + milliseconds(40 * i));
   }
   const TimePoint now = t0 + milliseconds(960);
-  EXPECT_EQ(stats_lines(stats, stamp_of(7, 41'234, false), 182'364, now),
+  EXPECT_EQ(stats_lines(stats, stamp_of(7, 41'234, false), 182'364, now, false),
             (Lines{"bitrate 9.8 Mbit/s", "frame P · 41.2 kB · 182 k tris",
                    "rate 25.0 / 30 fps"}));
-  EXPECT_EQ(stats_lines(stats, stamp_of(6, 98'765, true), 0, now)[1],
+  EXPECT_EQ(stats_lines(stats, stamp_of(6, 98'765, true), 0, now, false)[1],
             "frame I · 98.8 kB · 0 k tris");
 }
 
 TEST(StatsLines, LeaveOutWhatIsUnknownAndShowAFractionalRate) {
   EXPECT_EQ(
-      stats_lines(PlaybackStats({}, {0, 1}), std::nullopt, 0, t0),
+      stats_lines(PlaybackStats({}, {0, 1}), std::nullopt, 0, t0, false),
       (Lines{"bitrate - Mbit/s", "frame - · - kB · - k tris", "rate 0.0 fps"}));
+  EXPECT_EQ(stats_lines(PlaybackStats({}, {30000, 1001}), std::nullopt, 0, t0,
+                        false)[2],
+            "rate 0.0 / 29.97 fps");
   EXPECT_EQ(
-      stats_lines(PlaybackStats({}, {30000, 1001}), std::nullopt, 0, t0)[2],
-      "rate 0.0 / 29.97 fps");
-  EXPECT_EQ(stats_lines(PlaybackStats({}, {25, 1}), std::nullopt, 0, t0)[2],
-            "rate 0.0 / 25 fps");
+      stats_lines(PlaybackStats({}, {25, 1}), std::nullopt, 0, t0, false)[2],
+      "rate 0.0 / 25 fps");
+}
+
+// Live, as the view builds them: no track and no rate.
+TEST(StatsLines, LiveTheyShowTheLastSecondsBitrateAndRecords) {
+  PlaybackStats stats({}, {});
+  EXPECT_EQ(stats_lines(stats, std::nullopt, 0, t0, true),
+            (Lines{"bitrate - Mbit/s · last 1 s", "frame - · - kB · - k tris",
+                   "rate 0.0 fps · 0 rec/s"}));
+  // 11 frames 100 ms apart, each taken as it is published after 3 records of
+  // 12.5 kB: 3 Mbit/s, 30 records a second.
+  FrameStamp taken = stamp_of(0, 12'500, false);
+  taken.records = 3;
+  taken.record_bytes = 3 * 12'500;
+  for (int i = 0; i <= 10; ++i) {
+    taken.published = t0 + milliseconds(100 * i);
+    stats.add_frame(taken, taken.published);
+  }
+  EXPECT_EQ(
+      stats_lines(stats, taken, 1'200, t0 + seconds(1), true),
+      (Lines{"bitrate 3.0 Mbit/s · last 1 s", "frame P · 12.5 kB · 1 k tris",
+             "rate 10.0 fps · 30 rec/s"}));
+}
+
+TEST(LiveStatusLine, SaysConnectingThenWhyItReconnects) {
+  LiveStatus status;
+  status.address = "lab:47801";
+  EXPECT_EQ(live_status_line(status, t0), "connecting to lab:47801");
+  status.last_error = "the sender closed the connection";
+  EXPECT_EQ(live_status_line(status, t0),
+            "reconnecting to lab:47801: the sender closed the connection");
+}
+
+// recon's prefix goes, as the line names the address; a message with none,
+// or another address's, is shown whole.
+TEST(LiveReason, DropsStreamClientsPrefixAndKeepsAnyOtherMessageWhole) {
+  const auto reason = [](const char* message) {
+    return live_reason(core::Status::io_error(message), "lab:47801");
+  };
+  EXPECT_EQ(reason("StreamClient: lab:47801: cannot connect: Connection "
+                   "refused"),
+            "cannot connect: Connection refused");
+  EXPECT_EQ(reason("StreamClient: lab:47801: ChunkParser: the stream is not "
+                   "a .vrst file"),
+            "ChunkParser: the stream is not a .vrst file");
+  EXPECT_EQ(reason("StreamClient::connect: an empty host"), "an empty host");
+  for (const char* whole :
+       {"out of memory", "the sender's session has no geometry track",
+        "StreamClient: lab:1: cannot connect: Connection refused",
+        "ChunkParser: the stream is not a .vrst file", "cannot connect: x",
+        "StreamClient: lab:47801"}) {
+    EXPECT_EQ(reason(whole), whole);
+  }
+}
+
+TEST(LiveStatusLine, SaysTheSenderHasNoKeyOnceConnected) {
+  LiveStatus status;
+  status.state = LiveState::kConnected;
+  status.address = "lab:47801";
+  EXPECT_EQ(live_status_line(status, t0),
+            "connected · the sender has no I-frame yet");
+}
+
+TEST(LiveStatusLine, NamesTheNewestSeqAndPastASecondHowLongNothingCame) {
+  LiveStatus status;
+  status.state = LiveState::kLive;
+  status.address = "lab:47801";
+  status.seq = 1234;
+  status.last_record = t0;
+  EXPECT_EQ(live_status_line(status, t0), "live · seq 1234");
+  EXPECT_EQ(live_status_line(status, t0 + seconds(1)), "live · seq 1234");
+  EXPECT_EQ(live_status_line(status, t0 + milliseconds(1001)),
+            "live · seq 1234 · nothing for 1 s");
+  EXPECT_EQ(live_status_line(status, t0 + milliseconds(3500)),
+            "live · seq 1234 · nothing for 3 s");
+}
+
+TEST(ParseLiveAddress, TakesAHostAndAnOptionalPort) {
+  const auto parsed = [](const char* text) {
+    const core::Result<LiveAddress> address = parse_live_address(text);
+    EXPECT_TRUE(address.ok()) << text << ": " << address.status().message();
+    return address.ok() ? to_string(address.value()) : std::string();
+  };
+  EXPECT_EQ(parsed("h"), "h:47801");
+  EXPECT_EQ(parsed("h:1"), "h:1");
+  EXPECT_EQ(parsed("1.2.3.4:47801"), "1.2.3.4:47801");
+  EXPECT_EQ(parsed("h:65535"), "h:65535");
+  EXPECT_EQ(parse_live_address("lab").value().port,
+            volumetric_kit::recon::networking::kDefaultPort);
+}
+
+TEST(ParseLiveAddress, RefusesNoHostAndAPortOutOfRange) {
+  for (const char* text :
+       {"", ":5", "h:0", "h:65536", "h:x", "h:5:6", "h:", "h:+5", "h:5 "}) {
+    const core::Status refused = parse_live_address(text).status();
+    EXPECT_EQ(refused.domain(), core::Status::Code::InvalidArgument)
+        << "'" << text << "'";
+    EXPECT_NE(refused.message().find(std::string("'") + text + "'"),
+              std::string::npos)
+        << refused.message();
+  }
 }
 
 // A 400 x 300-point display at 2 pixels per point, `safe_area` kept clear.
@@ -179,7 +288,7 @@ class ControlsTest : public ::testing::Test {
     touch_->new_frame(display(seconds_, safe_area_));
     ImGui::NewFrame();
     draw_controls(*player_, std::nullopt);
-    panel_.draw(*stats_, shown_, triangles_, render_, now());
+    panel_.draw(*stats_, shown_, triangles_, render_, now(), player_->live());
     ImGui::Render();
   }
 
@@ -277,6 +386,28 @@ TEST_F(ControlsTest, LoopToggles) {
   EXPECT_TRUE(player_->playing());
   tap(control(2));
   EXPECT_TRUE(player_->loop());
+}
+
+// A live player's controls are its status line alone: one line as wide as
+// the line, with no row of buttons above it.
+TEST_F(ControlsTest, ALivePlayersControlsAreItsStatusLineAlone) {
+  const float file_height = panel().ContentSize.y;
+  core::Result<std::unique_ptr<StreamPlayer>> live =
+      StreamPlayer::connect({"127.0.0.1", 47801});  // never started: no I/O
+  ASSERT_TRUE(live.ok()) << live.status().message();
+  player_ = std::move(live).value();
+  frame();
+  frame();
+  const ImGuiWindow& window = panel();
+  const float line = window.FontRefSize;
+  EXPECT_NEAR(window.ContentSize.y, line, 1.0f);
+  EXPECT_GT(file_height, window.ContentSize.y + line) << "the file's row";
+  const float width =
+      ImGui::GetIO()
+          .Fonts->Fonts[0]
+          ->CalcTextSizeA(line, FLT_MAX, 0.0f, "connecting to 127.0.0.1:47801")
+          .x;
+  EXPECT_NEAR(window.ContentSize.x, width, 1.0f);
 }
 
 TEST_F(ControlsTest, AFingerOnThePanelIsImGuis) {

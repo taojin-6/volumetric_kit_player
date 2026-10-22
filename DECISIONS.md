@@ -4,6 +4,50 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-21 — Live mode: a sender's stream over TCP
+
+`StreamPlayer::connect`, `--connect host[:port]` and `tests/vp_live_probe`;
+the headers say what each call does. recon's `networking::StreamClient`
+reads what a `StreamServer` sends: the `.vrst` chunks, joined at the newest
+key.
+
+- **Decode every record, mesh the newest.** The worker decodes each record as
+  it arrives, and meshes once the consumer has taken the last mesh: when
+  nothing more has come, at once for a connection's first frame, or every
+  100 ms while records keep coming, so a join shows a picture at once and
+  its GOP as it drains. Not paced by pts: the sender paces. Why: the
+  file loop's wait for the consumer would let latency grow without bound and
+  stop draining the socket, which hides lag from the sender's drop rule
+  (newest key wins). The consumer check stays: a superseded mesh keeps its
+  ring slot, and a minimized window takes none.
+- **Live steps never wait.** A step is GPU work alone (the build, a decode,
+  an extract), and live, one that would wait while parked does not begin:
+  the worker drops the record in hand and closes the connection within a
+  10 ms slice, and unpark connects again at the newest key. Why: a parked
+  player must hold no connection, and a stalled sender must not make a park
+  time out, which on iOS rebuilds the view.
+- **Network and protocol errors are never fatal.** They set
+  `LiveStatus::last_error`, and the worker connects again about every
+  second, waiting on its condition variable, so stop and park stay prompt.
+  Only a GPU failure reaches `status()`. Why: `PlayerView::frame` turns
+  `status()` into an error, and on iOS that drops the view. Each connection
+  decodes into a new grid, as a sender may change its voxel size; the
+  decoder is kept, as a key resyncs it.
+- **No jitter buffer in v1.** Network jitter shows as judder. Add a bounded
+  delay only if the owner sees judder.
+- **The panels live:** the controls are the status line alone, and the keys
+  do nothing. The bitrate and records a second are over the last second, as
+  a live stream has no track mean: the records each frame stands for
+  (`FrameStamp::records`), by when the worker published it rather than when
+  it was taken, as the frame taken after a pause in drawing (a minimized
+  window) stands for the whole pause. They and the status line's seq count
+  records as they arrive, decoded or not, so they show what the link
+  carries. `decode` is the shown record's own, and there is no `read` row,
+  as the network's wait is no stage.
+- **`vp_live_probe`** plays a live stream on gfx's headless surface and
+  prints the panels' lines once a second: agents check a sender with it on a
+  Mac, with no window. Mac only, as NVIDIA's ICD has no headless surface.
+
 ## 2026-10-20 — A stats panel that a tap on its header closes
 
 `StatsPanel`, `PlaybackStats`, and `FrameStamp`'s `bytes`, `key` and
@@ -159,7 +203,8 @@ the sizes.
   same calls.
 - **`VP_NO_WINDOW` stops the app just before `glfwInit`,** and `cli_test`
   sets it. Why: a refusal that moved past that point then fails the test on
-  every OS, rather than open a window (AGENTS.md).
+  every OS, rather than open a window (AGENTS.md); and it alone stops a
+  valid `--connect`, which nothing refuses before the window.
 - **The configure fails if GLFW enters the library's link closure,** checked
   once every directory has linked. Why: the library links no window system
   (below); only the app links gfx's GLFW tier.

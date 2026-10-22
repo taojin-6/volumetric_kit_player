@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "volumetric_kit/core/base/exception_status.hpp"
+#include "volumetric_kit/player/command_line.hpp"
 #include "volumetric_kit/recon/codec/decode_grid.hpp"
 #include "volumetric_kit/recon/stream/session.hpp"
 
@@ -14,12 +15,19 @@ namespace volumetric_kit::player {
 namespace {
 
 namespace codec = recon::codec;
+namespace networking = recon::networking;
 namespace stream = recon::stream;
 using Clock = Playback::Clock;
 
 // How long one wait for the consumer to take a mesh lasts before the worker
 // waits again; quit ends it at once.
 constexpr std::chrono::seconds kCollectWait{1};
+// Live: the longest one receive waits, so quit and a park are seen within it;
+// the least time between two meshes while records keep coming; and the wait
+// before a connection is made again.
+constexpr std::chrono::milliseconds kSlice{10};
+constexpr std::chrono::milliseconds kMeshEvery{100};
+constexpr std::chrono::seconds kRetry{1};
 
 // A record or frame to skip, rather than an error that stops the worker:
 // damage (InvalidArgument), what this version cannot read (Unsupported), and
@@ -41,17 +49,70 @@ core::Status nothing_shown(core::Status first_skip) {
   return std::move(first_skip).with_context(kWhat);
 }
 
+// The index of `session`'s first geometry track; none without one.
+std::optional<std::uint16_t> first_geometry_track(
+    const stream::Session& session) {
+  for (std::size_t i = 0; i < session.tracks.size(); ++i) {
+    if (session.tracks[i].kind == stream::TrackKind::Geometry) {
+      return static_cast<std::uint16_t>(i);
+    }
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
-// Constructed at a step's start: waits while parked, then marks the worker
-// busy until end() or the destructor. False on quit.
+core::Result<LiveAddress> parse_live_address(std::string_view text) {
+  const std::size_t colon = text.find(':');
+  LiveAddress address;
+  address.host = std::string(text.substr(0, colon));
+  if (address.host.empty()) {
+    return core::Status::invalid_argument("'" + std::string(text) +
+                                          "' names no host");
+  }
+  if (colon == std::string_view::npos) {
+    return address;
+  }
+  const std::optional<std::uint64_t> port = parse_count(text.substr(colon + 1));
+  if (!port || *port > 65535) {
+    return core::Status::invalid_argument(
+        "'" + std::string(text) + "': the port is a number from 1 to 65535");
+  }
+  address.port = static_cast<std::uint16_t>(*port);
+  return address;
+}
+
+std::string to_string(const LiveAddress& address) {
+  return address.host + ":" + std::to_string(address.port);
+}
+
+std::string live_reason(const core::Status& ended, const std::string& address) {
+  std::string_view why = ended.message();
+  for (const std::string& prefix : {"StreamClient: " + address + ": ",
+                                    std::string("StreamClient::connect: ")}) {
+    if (why.substr(0, prefix.size()) == prefix) {
+      why.remove_prefix(prefix.size());
+      break;
+    }
+  }
+  return std::string(why);
+}
+
+// Constructed at a step's start: waits while parked, or with kNoWait does not
+// begin then, and marks the worker busy until end() or the destructor. False
+// on quit, or parked with kNoWait.
 class StreamPlayer::Step {
  public:
-  explicit Step(StreamPlayer& player) : player_(player) {
+  enum Wait { kWhileParked, kNoWait };
+
+  explicit Step(StreamPlayer& player, Wait wait = kWhileParked)
+      : player_(player) {
     std::unique_lock<std::mutex> lock(player_.mutex_);
-    player_.changed_.wait(lock,
-                          [this] { return player_.quit_ || !player_.parked_; });
-    begun_ = !player_.quit_;
+    if (wait == kWhileParked) {
+      player_.changed_.wait(
+          lock, [this] { return player_.quit_ || !player_.parked_; });
+    }
+    begun_ = !player_.quit_ && !player_.parked_;
     player_.busy_ = begun_;
   }
   ~Step() { end(); }
@@ -83,19 +144,30 @@ core::Result<std::unique_ptr<StreamPlayer>> StreamPlayer::open(
   try {
     VKC_ASSIGN(std::unique_ptr<stream::StreamReader> reader,
                stream::StreamReader::open(path));
-    const std::vector<stream::Track>& tracks = reader->session().tracks;
-    std::size_t track = 0;
-    while (track < tracks.size() &&
-           tracks[track].kind != stream::TrackKind::Geometry) {
-      ++track;
-    }
-    if (track == tracks.size() || reader->stats()[track].records == 0) {
+    const std::optional<std::uint16_t> track =
+        first_geometry_track(reader->session());
+    if (!track || reader->stats()[*track].records == 0) {
       return core::Status::not_found(path + ": no geometry to play");
     }
     return std::unique_ptr<StreamPlayer>(
-        new StreamPlayer(std::move(reader), static_cast<std::uint16_t>(track)));
+        new StreamPlayer(std::move(reader), *track));
   } catch (...) {
     return core::exception_status("StreamPlayer::open",
+                                  core::Status::Code::IoError);
+  }
+}
+
+core::Result<std::unique_ptr<StreamPlayer>> StreamPlayer::connect(
+    LiveAddress address) {
+  if (address.host.empty() || address.port == 0) {
+    return core::Status::invalid_argument(
+        "StreamPlayer::connect needs a host and a port from 1: '" +
+        to_string(address) + "'");
+  }
+  try {
+    return std::unique_ptr<StreamPlayer>(new StreamPlayer(std::move(address)));
+  } catch (...) {
+    return core::exception_status("StreamPlayer::connect",
                                   core::Status::Code::IoError);
   }
 }
@@ -107,18 +179,29 @@ StreamPlayer::StreamPlayer(std::unique_ptr<stream::StreamReader> reader,
       clock_(reader_->session().tracks[track].rate.num,
              reader_->session().tracks[track].rate.den) {}
 
+StreamPlayer::StreamPlayer(LiveAddress address)
+    : address_(std::move(address)), clock_(0, 0) {
+  live_status_.address = to_string(address_);
+}
+
 StreamPlayer::~StreamPlayer() { stop(); }
 
 std::uint64_t StreamPlayer::frame_count() const noexcept {
-  return reader_->stats()[track_].records;
+  return live() ? 0 : reader_->stats()[track_].records;
 }
 
 const stream::TrackStats& StreamPlayer::track_stats() const noexcept {
-  return reader_->stats()[track_];
+  static const stream::TrackStats kNone;
+  return live() ? kNone : reader_->stats()[track_];
 }
 
 stream::Rate StreamPlayer::rate() const noexcept {
-  return reader_->session().tracks[track_].rate;
+  return live() ? stream::Rate{} : reader_->session().tracks[track_].rate;
+}
+
+LiveStatus StreamPlayer::live_status() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return live_status_;
 }
 
 core::Status StreamPlayer::start(core::Device& device,
@@ -151,20 +234,29 @@ void StreamPlayer::control(Change&& change) {
   changed_.notify_all();
 }
 
+// Live, the playback controls do nothing: the sender paces.
 void StreamPlayer::play() {
-  control([this] { clock_.play(); });
+  if (!live()) {
+    control([this] { clock_.play(); });
+  }
 }
 
 void StreamPlayer::pause() {
-  control([this] { clock_.pause(); });
+  if (!live()) {
+    control([this] { clock_.pause(); });
+  }
 }
 
 void StreamPlayer::step() {
-  control([this] { clock_.step(); });
+  if (!live()) {
+    control([this] { clock_.step(); });
+  }
 }
 
 void StreamPlayer::set_loop(bool on) {
-  control([this, on] { loop_ = on; });
+  if (!live()) {
+    control([this, on] { loop_ = on; });
+  }
 }
 
 bool StreamPlayer::playing() const {
@@ -180,6 +272,7 @@ bool StreamPlayer::loop() const {
 bool StreamPlayer::park(std::chrono::milliseconds timeout) {
   std::unique_lock<std::mutex> lock(mutex_);
   parked_ = true;
+  changed_.notify_all();  // ends a wait to retry
   return changed_.wait_for(lock, timeout, [this] { return !busy_; });
 }
 
@@ -204,7 +297,7 @@ void StreamPlayer::run() {
   try {
     outcome = build();
     if (outcome.ok()) {
-      outcome = play_track();
+      outcome = live() ? play_live() : play_track();
     }
   } catch (...) {
     outcome = core::exception_status("StreamPlayer worker",
@@ -217,7 +310,7 @@ void StreamPlayer::run() {
 core::Status StreamPlayer::build() {
   const Step step(*this);
   if (!step) {
-    return {};  // quit: play_track returns at its first step
+    return {};  // quit: play_track returns at its first step, play_live at once
   }
   VKC_ASSIGN(codec::Decoder decoder,
              codec::Decoder::create(*device_, *allocator_));
@@ -262,16 +355,8 @@ core::Status StreamPlayer::play_track() {
         const core::StageScope read(stages, "read");
         status = reader_->read(record, &payload);
       }
-      core::StageMetrics decoded;  // recon's rows, for the device's half
       if (status.ok()) {
-        const core::StageScope decode(stages, "decode");
-        if (!grid_.has_value()) {
-          status = make_grid(payload);
-        }
-        if (status.ok()) {
-          status = codec::decode_growing(*decoder_, payload.data(),
-                                         payload.size(), *grid_, &decoded);
-        }
+        status = decode(payload, stages);
       }
       if (!status.ok()) {
         if (!skippable(status)) {
@@ -283,19 +368,14 @@ core::Status StreamPlayer::play_track() {
         stages.clear();
         continue;
       }
-      // "codec decode" alone has a device span; its breakdowns are host time.
-      for (const core::StageRow& row : decoded.rows()) {
-        if (row.has_gpu) {
-          stages.add_gpu("decode", row.gpu_ms);
-        }
-      }
       step.end();
       if (!wait_due(record.info.pts_ns)) {
         return {};
       }
-      VKC_ASSIGN(const bool published,
-                 publish({frame, record.info.pts_ns, record.size,
-                          record.info.key, std::exchange(stages, {})}));
+      VKC_ASSIGN(
+          const bool published,
+          publish({frame, record.info.pts_ns, record.size, record.info.key,
+                   std::exchange(stages, {}), 1, record.size}));
       if (!published) {
         return {};
       }
@@ -310,11 +390,134 @@ core::Status StreamPlayer::play_track() {
   }
 }
 
+core::Status StreamPlayer::play_live() {
+  std::vector<std::uint8_t> payload;
+  while (wait_unparked()) {
+    // A new grid each connection, the decoder kept (DECISIONS.md).
+    grid_.reset();
+    core::Status ended;
+    {
+      core::Result<std::unique_ptr<networking::StreamClient>> client =
+          networking::StreamClient::connect(address_.host, address_.port);
+      if (client.ok()) {
+        VKC_TRY(play_connection(**client, payload, &ended));
+      } else {
+        ended = client.status();
+      }
+    }  // closed at once
+    if (!wait_to_retry(ended)) {
+      break;
+    }
+  }
+  return {};
+}
+
+core::Status StreamPlayer::play_connection(networking::StreamClient& client,
+                                           std::vector<std::uint8_t>& payload,
+                                           core::Status* ended) {
+  std::optional<std::uint16_t> track;  // the session's, once it is in
+  bool pending = false;                // decoded, not yet meshed
+  FrameStamp newest;                   // its stamp
+  std::uint64_t records = 0;           // received since the last publish
+  std::uint64_t record_bytes = 0;
+  std::optional<Clock::time_point> published;  // the last, on this connection
+  stream::Record record;
+  for (;;) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (quit_ || parked_) {
+        return {};
+      }
+    }
+    // The consumer took the last mesh, so the newest frame may be meshed.
+    // Never bypassed: a superseded mesh keeps its ring slot.
+    const bool free =
+        pending && exchange_->release_and_may_publish(*extractor_);
+    const core::Result<bool> got = client.next(
+        free ? std::chrono::milliseconds{0} : kSlice, &record, &payload);
+    if (!got.ok()) {
+      *ended = got.status();
+      return {};
+    }
+    if (!track && client.session() != nullptr) {
+      track = first_geometry_track(*client.session());
+      if (!track) {
+        *ended = core::Status::not_found(
+            "the sender's session has no geometry track");
+        return {};
+      }
+      std::lock_guard<std::mutex> lock(mutex_);
+      live_status_.state = LiveState::kConnected;
+    }
+    if (*got && record.info.track == *track) {
+      ++records;
+      record_bytes += record.size;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        live_status_.state = LiveState::kLive;
+        live_status_.seq = record.info.seq;
+        live_status_.last_record = Clock::now();
+      }
+      const Step step(*this, Step::kNoWait);  // the decode
+      if (!step) {
+        return {};  // quit or parked: the record is dropped
+      }
+      core::StageMetrics stages;
+      const core::Status decoded = decode(payload, stages);
+      if (decoded.ok()) {
+        newest = {record.info.seq, record.info.pts_ns, record.size,
+                  record.info.key, std::move(stages)};
+        pending = true;
+      } else if (!skippable(decoded)) {
+        return decoded;
+      }
+      // TODO: show why records are skipped while none of this connection's
+      // has decoded: a sender this version cannot decode shows as live, with
+      // no picture.
+    }
+    // The newest: once nothing more has come, at once for the connection's
+    // first frame, or every kMeshEvery while records keep coming
+    // (DECISIONS.md).
+    if (free &&
+        (!*got || !published || Clock::now() - *published >= kMeshEvery)) {
+      const Step step(*this, Step::kNoWait);  // the extract
+      if (!step) {
+        return {};
+      }
+      newest.records = std::exchange(records, 0);
+      newest.record_bytes = std::exchange(record_bytes, 0);
+      VKC_TRY(mesh_and_publish(std::move(newest)));
+      pending = false;
+      published = Clock::now();
+    }
+  }
+}
+
 core::Status StreamPlayer::make_grid(const std::vector<std::uint8_t>& payload) {
   VKC_ASSIGN(recon::volume::VoxelBlockGrid grid,
              codec::make_decode_grid(*device_, *allocator_, payload.data(),
                                      payload.size()));
   grid_.emplace(std::move(grid));
+  return {};
+}
+
+core::Status StreamPlayer::decode(const std::vector<std::uint8_t>& payload,
+                                  core::StageMetrics& stages) {
+  core::StageMetrics decoded;  // recon's rows, for the device's half
+  {
+    const core::StageScope decode(stages, "decode");
+    if (!grid_.has_value()) {
+      VKC_TRY(make_grid(payload));
+    }
+    VKC_TRY(codec::decode_growing(*decoder_, payload.data(), payload.size(),
+                                  *grid_, &decoded));
+  }
+  // "codec decode" alone has a device span; its breakdowns are host time.
+  for (const core::StageRow& row : decoded.rows()) {
+    if (row.has_gpu) {
+      stages.add_gpu("decode", row.gpu_ms);
+    }
+  }
   return {};
 }
 
@@ -354,13 +557,19 @@ core::Result<bool> StreamPlayer::publish(FrameStamp stamp) {
   if (!step) {
     return false;
   }
+  VKC_TRY(mesh_and_publish(std::move(stamp)));
+  return true;
+}
+
+core::Status StreamPlayer::mesh_and_publish(FrameStamp stamp) {
   core::Result<recon::mesh::DeviceMesh> mesh = [&] {
     const core::StageScope extract(stamp.stages, "mesh");
     return extractor_->extract_device(*grid_);
   }();
   VKC_TRY(mesh.status());
+  stamp.published = Clock::now();
   exchange_->publish(mesh.value(), std::move(stamp));
-  return true;
+  return {};
 }
 
 bool StreamPlayer::wait_at_end() {
@@ -384,6 +593,23 @@ bool StreamPlayer::wait_at_end() {
     }
     clock_.shown(last_pts_ns_, Clock::now());  // a step: the held frame
   }
+}
+
+bool StreamPlayer::wait_unparked() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  changed_.wait(lock, [this] { return quit_ || !parked_; });
+  return !quit_;
+}
+
+bool StreamPlayer::wait_to_retry(const core::Status& ended) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  live_status_.state = LiveState::kConnecting;
+  live_status_.last_error =
+      ended.ok() ? std::string() : live_reason(ended, live_status_.address);
+  if (!ended.ok()) {
+    changed_.wait_for(lock, kRetry, [this] { return quit_ || parked_; });
+  }
+  return !quit_;
 }
 
 }  // namespace volumetric_kit::player

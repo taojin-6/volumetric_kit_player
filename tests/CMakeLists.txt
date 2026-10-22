@@ -29,8 +29,8 @@ vp_add_test(controls volumetric_kit::player volumetric_kit::recon_tsdf)
 # loader has none (NVIDIA's ICD).
 vp_add_test(player_view volumetric_kit::player
             volumetric_kit::core_test_support volumetric_kit::recon_tsdf)
-# The desktop app's command line, the app run on input it refuses before GLFW
-# (AGENTS.md); host only.
+# The desktop app's command line, the app run with VP_NO_WINDOW set (AGENTS.md);
+# host only.
 vp_add_test(cli volumetric_kit::player volumetric_kit::recon_tsdf)
 target_compile_definitions(
   vp_cli_test PRIVATE VP_PLAYER_APP="$<TARGET_FILE:volumetric_kit_player>")
@@ -43,6 +43,14 @@ target_link_libraries(
   PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_stream
           volumetric_kit::recon_tsdf GTest::gtest)
 vp_target_warnings(vp_write_stream)
+# A sender's live stream played through the view with no window, its status and
+# stats printed once a second, for agents on a Mac (DECISIONS.md): a tool, not a
+# test.
+if(APPLE)
+  add_executable(vp_live_probe vp_live_probe.cpp)
+  target_link_libraries(vp_live_probe PRIVATE volumetric_kit::player)
+  vp_target_warnings(vp_live_probe)
+endif()
 # MoltenVK has a headless surface and several queue families, so on Apple the
 # view's tests cross families rather than skip, on MoltenVK's default families
 # and on its specialized ones, as the core's cross-family tests do: any skip but
