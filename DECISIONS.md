@@ -30,15 +30,20 @@ how to run it.
 `networking::StreamClient` reads what a `StreamServer` sends: the `.vrst`
 chunks, joined at the newest key.
 
-- **Decode every record, mesh the newest.** The worker decodes each record as
-  it arrives, and meshes once the consumer has taken the last mesh: when
+- **Decode every record, mesh the newest.** The worker decodes every record,
+  and meshes once the consumer has taken the last mesh: when
   nothing more has come, at once for a connection's first frame, or every
   100 ms while records keep coming, so a join shows a picture at once and
   its GOP as it drains. Not paced by pts: the sender paces. Why: the
   file loop's wait for the consumer would let latency grow without bound and
   stop draining the socket, which hides lag from the sender's drop rule
   (newest key wins). The consumer check stays: a superseded mesh keeps its
-  ring slot, and a minimized window takes none.
+  ring slot, and a minimized window takes none. With a frame in hand, the
+  worker drains immediately available input before waiting for the take
+  (`taken()`), 10 ms at a time, so it meshes at once on the take without
+  throttling a queued burst. `StreamClient::next` reports progress separately
+  from a whole record: a partial receive must also keep draining. Only a
+  call with no progress permits the wait.
 - **Live steps never wait.** A step is GPU work alone (the build, a decode,
   an extract), and live, one that would wait while parked does not begin:
   the worker drops the record in hand and closes the connection within a
@@ -54,6 +59,10 @@ chunks, joined at the newest key.
   decoder is kept, as a key resyncs it.
 - **No jitter buffer in v1.** Network jitter shows as judder. Add a bounded
   delay only if the owner sees judder.
+- **Two swapchain images live** (`view_swapchain`), FIFO still. Why: with
+  gfx's default, the surface's least + 1, a mesh taken waits behind one more
+  queued image, a vsync longer. A file keeps the default, as its pts paces
+  it.
 - **The panels live:** the controls are the status line alone, and the keys
   do nothing. The bitrate and records a second are over the last second, as
   a live stream has no track mean: the records each frame stands for
@@ -76,9 +85,10 @@ chunks, joined at the newest key.
   with its payload and triangles; the rate frames are taken for drawing, over
   the nominal; and a table of the worker's `read`, `decode` and `mesh` (host
   ms, and decode's device ms where its queue can time) and `draw`, gfx's
-  `Profiler` around the mesh and the overlay. Why: a stream's size, its pace
-  and where a frame's time goes, from what recon and gfx already count
-  (`TrackStats`, `StageMetrics`, the `Profiler`).
+  `Profiler` around the whole render pass, as Apple GPUs time only at a
+  pass's bounds. Why: a stream's size, its pace and where a frame's time
+  goes, from what recon and gfx already count (`TrackStats`, `StageMetrics`,
+  the `Profiler`).
 - **The windows.** The stage means cover the last N frames taken, N the
   nominal frames a second rounded (30 when unknown, at most 240), so a pause
   holds them and a step moves them by one; the rate covers the last second of
@@ -144,13 +154,15 @@ the sizes.
 - **A thin Objective-C++ shell, all on main,** making the desktop shell's
   calls: gfx's `metal_surface` over a `CAMetalLayer` view at the screen's
   native scale, `PlayerView::create`, gfx's `ImGuiTouch` on its context, and
-  a display link that calls `frame` with the drawable in pixels. Every touch
-  phase reaches `ImGuiTouch`, a cancelled one as `touch_cancelled` so it
-  presses nothing. One-finger pan orbits, two-finger pan pans and pinch
-  zooms, over the view's height; the pan and the pinch compose, and none
-  begins before the view exists or while `ui_wants_pointer()`. The shell
-  never writes the layer's `drawableSize`, which MoltenVK owns (gfx's
-  `metal_surface`). Why: one view under every shell (below).
+  a display link that calls `frame` with the drawable in pixels, at 24 to 60
+  Hz: streams are 25 to 30 fps, and a ProMotion iPad would otherwise redraw
+  the same frame at up to 120 Hz. Every touch phase reaches `ImGuiTouch`, a
+  cancelled one as `touch_cancelled` so it presses nothing. One-finger pan
+  orbits, two-finger pan pans and pinch zooms, over the view's height; the
+  pan and the pinch compose, and none begins before the view exists or while
+  `ui_wants_pointer()`. The shell never writes the layer's `drawableSize`,
+  which MoltenVK owns (gfx's `metal_surface`). Why: one view under every
+  shell (below).
 - **The lifecycle:** the view is built only while the scene is in the
   foreground and active, as bring-up submits GPU work. Resign-active stops
   the display link, then parks the worker for up to a second; become-active
@@ -279,6 +291,10 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   slot the consumer's `frames_in_flight + 1` do not cover. A consumer that
   stops drawing, such as a minimized window, so stops playback, and the clock
   re-anchors on the late frame.
+- **The consumer says it took a mesh** (`StreamPlayer::taken`), and until
+  then the worker sleeps on its condition variable. Why: recon's
+  `wait_collected` polls every 2 ms, so a minimized window kept the worker
+  waking 500 times a second.
 - **Resync rests on the decoder.** A damaged record is skipped, and the
   decoder refuses each P-frame whose reference was skipped (`NotFound`: it
   checks the reference's hash), so playback resumes at the next key record

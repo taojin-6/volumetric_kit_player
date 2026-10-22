@@ -2,9 +2,10 @@
 // Copyright (c) 2026 Tao Jin
 
 // mesh_wiring on the host: the draw's usage on the extractor's buffers, a ring
-// one slot deeper than the frames in flight, and the families: one family is
-// EXCLUSIVE and read in place, two are CONCURRENT and read across. And
-// drawable on recon's exchange: a refused mesh fails every frame after it.
+// one slot deeper than the frames in flight, shared vertices, and the
+// families: one family is EXCLUSIVE and read in place, two are CONCURRENT and
+// read across. And drawable on recon's exchange: a refused mesh fails every
+// frame after it.
 
 #include "volumetric_kit/player/mesh_wiring.hpp"
 
@@ -94,6 +95,13 @@ TEST(MeshWiring, TwoFamiliesAreReadAcross) {
   EXPECT_EQ(wiring.exchange.frames_in_flight, 3u);
   EXPECT_EQ(wiring.mc.slot_count, 4u);
   expect_bindable(wiring);
+}
+
+// The draw is indexed, so triangles share their vertices: about a third of
+// the vertices to hold, write and fetch.
+TEST(MeshWiring, VerticesAreShared) {
+  EXPECT_TRUE(mesh_wiring(0, 0, 2).mc.share_vertices);
+  EXPECT_TRUE(mesh_wiring(0, 1, 2).mc.share_vertices);
 }
 
 TEST(MeshWiring, ARefusedMeshFailsEveryLaterFrame) {
