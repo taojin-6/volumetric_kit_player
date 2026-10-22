@@ -8,11 +8,12 @@
 // loads runs: a missing stream and a file that is not one exit 1 with
 // StreamPlayer::open's refusal and nothing else, before glfwInit. Each runs
 // with VP_NO_WINDOW set, which stops the app just before glfwInit with a
-// reason of its own (DECISIONS.md); a stream that opens, and a live scenario,
-// which nothing refuses, exit 1 with that reason. A run not back within
-// kPrompt, as a window's loop would not be, is killed and fails the test. On
-// the host: the scenarios in config/examples/, and parse_count, which
-// vp_live_probe's --frames and a live address's port take.
+// refusal that names what the window would play, its title (DECISIONS.md); a
+// stream that opens, and a live scenario, which nothing refuses, exit 1 with
+// that refusal. A run not back within kPrompt, as a window's loop would not
+// be, is killed and fails the test. On the host: the scenarios in
+// config/examples/, and parse_count, which vp_live_probe's --frames and a
+// live address's port take.
 
 #include <gtest/gtest.h>
 #include <poll.h>
@@ -36,6 +37,7 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/player/command_line.hpp"
+#include "volumetric_kit/player/stream_player.hpp"
 
 extern char** environ;
 
@@ -44,6 +46,7 @@ namespace {
 namespace core = volumetric_kit::core;
 namespace cfg = volumetric_kit::core::config;
 using namespace std::chrono_literals;
+using volumetric_kit::player::LiveAddress;
 using volumetric_kit::player::parse_count;
 using vp_test::Scratch;
 using SteadyClock = std::chrono::steady_clock;
@@ -51,8 +54,13 @@ using SteadyClock = std::chrono::steady_clock;
 constexpr const char* kApp = VP_PLAYER_APP;            // tests/CMakeLists.txt
 constexpr const char* kExamples = VP_CONFIG_EXAMPLES;  // likewise
 constexpr auto kPrompt = 10s;
-constexpr const char* kNoWindow =
-    "volumetric_kit_player: Unsupported: VP_NO_WINDOW is set, so no window\n";
+
+// The backstop's line, for a window titled `title`.
+std::string no_window(const std::string& title) {
+  return "volumetric_kit_player: Unsupported: VP_NO_WINDOW is set, so no "
+         "window for " +
+         title + "\n";
+}
 
 struct Outcome {
   int exit_code = -1;  // -1 unless it exited
@@ -267,21 +275,15 @@ TEST(CliTest, AScenarioTheCoreRefusesExits2WithItsField) {
     std::string text;
     const char* reason;
   };
+  // The core's config_test has its rules; these show only that the app
+  // passes on its refusal, by the field it names.
   const std::vector<Case> cases = {
-      {scenario(R"("path":"s.vrst","host":"lab")"),
-       "source: path and host are mutually exclusive"},
-      {scenario(R"("port":5000)"), "source: path or host is required"},
-      {scenario(R"("host":"lab:5000")"),
-       "source.host: must not contain ':'; the port is source.port"},
-      {scenario(R"("host":"lab","port":65536)"),
-       "source.port: integer is out of range"},
+      {scenario(R"("path":"s.vrst","host":"lab")"), "source:"},
       {scenario(R"("path":"s.vrst")", R"(,"window":{"overlay":true})"),
-       "window.overlay: is not used by this application"},
-      {scenario(R"("path":"s.vrst")", R"(,"run":{"frames":0})"),
-       "run.frames: must be positive"},
+       "window.overlay:"},
       {R"({"version":1,"operation":"view",)"
        R"("source":{"kind":"dataset","path":"room0"}})",
-       "source.kind: is not supported by this application"}};
+       "source.kind:"}};
   for (const Case& refused : cases) {
     write_file(path, refused.text);
     expect_scenario_refused(path, refused.reason);
@@ -323,26 +325,33 @@ TEST(CliTest, AStreamThatOpensReachesTheNoWindowBackstop) {
     const Outcome run = run_app({"--config", path});
     EXPECT_EQ(run.exit_code, 1) << sections << "\n" << run.err;
     EXPECT_EQ(run.out, "");
-    EXPECT_EQ(run.err, kNoWindow);
+    EXPECT_EQ(run.err, no_window(scratch.file("stream.vrst")));
   }
 }
 
 // connect does no I/O, so a valid sender passes every refusal and stops at
-// the backstop, whether or not anything serves there. connect refuses port 0,
-// so a port of 0, or none, reaching it is the sender's default.
+// the backstop, whether or not anything serves there, naming the address it
+// would play: the scenario's port, or for 0 or none the sender's default.
 TEST(CliTest, ALiveScenarioReachesTheNoWindowBackstop) {
   const Scratch scratch;
   const std::string path = scratch.file("play.json");
-  for (const std::string& live :
-       {scenario(R"("host":"127.0.0.1")"),
-        scenario(R"("host":"lab.invalid","port":0)"),
-        scenario(R"("host":"127.0.0.1","port":1)"),
-        scenario(R"("host":"lab.invalid")", R"(,"run":{"frames":60})")}) {
-    write_file(path, live);
+  struct Case {
+    std::string text;
+    std::string address;
+  };
+  const std::vector<Case> cases = {
+      {scenario(R"("host":"127.0.0.1")"), to_string(LiveAddress{"127.0.0.1"})},
+      {scenario(R"("host":"lab.invalid","port":0)"),
+       to_string(LiveAddress{"lab.invalid"})},
+      {scenario(R"("host":"127.0.0.1","port":1)"), "127.0.0.1:1"},
+      {scenario(R"("host":"lab.invalid")", R"(,"run":{"frames":60})"),
+       to_string(LiveAddress{"lab.invalid"})}};
+  for (const Case& live : cases) {
+    write_file(path, live.text);
     const Outcome run = run_app({"--config", path});
-    EXPECT_EQ(run.exit_code, 1) << live << "\n" << run.err;
+    EXPECT_EQ(run.exit_code, 1) << live.text << "\n" << run.err;
     EXPECT_EQ(run.out, "");
-    EXPECT_EQ(run.err, kNoWindow);
+    EXPECT_EQ(run.err, no_window(live.address));
   }
 }
 

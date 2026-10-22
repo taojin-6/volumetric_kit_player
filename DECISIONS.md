@@ -10,11 +10,12 @@ is implemented.
 how to run it.
 
 - **`--config PATH` or `--help` alone,** through the core's `parse_args`,
-  `usage` and `load(path, Application::Player)`, as every family desktop
-  program starts. The core owns the format and the profile's fields
-  (its CONFIG.md); a command line or a scenario it refuses exits 2, as
-  recon's examples do. Why: one way to start every program, and a scenario
-  names a stream or a sender, the window and a count once, in a file.
+  `usage` and `load(path, Application::Player)`, as recon's examples
+  (through its `configured_main`), gfx's and calib's start. The core owns
+  the format and the profile's fields (its CONFIG.md); a command line or a
+  scenario it refuses exits 2, as recon's examples do. Why: one way to start
+  the family's scenario-driven programs, and a scenario names a stream or a
+  sender, the window and a count once, in a file.
 - **A `source.port` of 0, or none, keeps `LiveAddress`'s port,** recon's
   `networking::kDefaultPort`. Why: the sender's default has one home.
 - **The iOS app reads none,** as it plays the first `.vrst` in its Documents
@@ -219,10 +220,12 @@ the sizes.
   feeds the camera, and calls `frame`; a tick that draws nothing waits on
   events for up to 50 ms rather than spinning. Why: every shell makes the
   same calls.
-- **`VP_NO_WINDOW` stops the app just before `glfwInit`,** and `cli_test`
-  sets it. Why: a refusal that moved past that point then fails the test on
-  every OS, rather than open a window (AGENTS.md); and it alone stops a
-  valid live scenario, which nothing refuses before the window.
+- **`VP_NO_WINDOW` stops the app just before `glfwInit`,** naming the
+  window's title, and `cli_test` sets it. Why: a refusal that moved past
+  that point then fails the test on every OS, rather than open a window
+  (AGENTS.md); it alone stops a valid live scenario, which nothing refuses
+  before the window; and the title shows the stream or the address the app
+  would play.
 - **The configure fails if GLFW enters the library's link closure,** checked
   once every directory has linked. Why: the library links no window system
   (below); only the app links gfx's GLFW tier.

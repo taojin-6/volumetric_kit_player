@@ -95,13 +95,14 @@ vkc::Status run(const cfg::Config& settings) {
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
              live ? vkp::StreamPlayer::connect(*live)
                   : vkp::StreamPlayer::open(source.path));
+  const std::string title = live ? vkp::to_string(*live) : source.path;
   if (std::getenv("VP_NO_WINDOW") != nullptr) {  // cli_test's backstop
-    return vkc::Status::unsupported("VP_NO_WINDOW is set, so no window");
+    return vkc::Status::unsupported("VP_NO_WINDOW is set, so no window for " +
+                                    title);
   }
   VKC_ASSIGN(const std::unique_ptr<vg::glfw::Library> library,
              vg::glfw::Library::init());
   Input input;  // outlives the window
-  const std::string title = live ? vkp::to_string(*live) : source.path;
   VKC_ASSIGN(const vg::glfw::Window window,
              vg::glfw::create_window(settings.window.width,
                                      settings.window.height, title.c_str()));
