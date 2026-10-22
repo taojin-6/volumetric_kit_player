@@ -44,6 +44,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   park closes it. Live, the stats show the bitrate and records a second over
   the last second (`FrameStamp::records`, `record_bytes`, `published`).
   `tests/vp_live_probe` plays one with no window, on a Mac.
+- The iOS app plays a scenario, a file's or a live sender's: a `player.json`
+  in its Documents folder, which the core loads as it loads the desktop
+  app's, before the first `.vrst` there (`player::folder_source`). One the
+  core refuses is shown, never passed over. The app asks for local network
+  access before its first live connection (`NSLocalNetworkUsageDescription`).
+- `player::open_source`: the player of a scenario's source, a file's or a
+  sender's, which both apps call.
 
 ### Changed
 
@@ -57,6 +64,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (or `--help`), which the core's `Application::Player` loads (core
   0.17.0); `config/examples/` has a stream file's and a live sender's. A
   command line or a scenario the core refuses exits 2.
+- The library links the core's config tier on every platform, iOS
+  included, rather than the desktop app alone.
 
 ### Fixed
 

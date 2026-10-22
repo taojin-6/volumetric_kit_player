@@ -4,6 +4,32 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-22 — The iOS app plays a scenario from its Documents folder
+
+`player::folder_source` and `open_source`; README.md says how to give the
+app one.
+
+- **A `player.json` there, before the first `.vrst`,** loaded by the core's
+  `load(path, Application::Player)` and played through `open_source`, the
+  desktop app's call too, so the library links the core's config tier on
+  every platform. Why: one format and one loader on both platforms, and no
+  new UI: a file copied in with Finder or devicectl, where an address prompt
+  would need text entry, a place to keep the address and checks of its own.
+- **A `player.json` the core refuses or cannot read is the error shown,**
+  never passed over for a `.vrst`. Why: a fallback would play a file while
+  the owner waits for the sender.
+- **Its `window` and `run` sections are checked, and then ignored:** the
+  window is the desktop's. The view fills the screen, plays until the app
+  is closed, and runs without validation (below).
+- **The listing stays in Objective-C,** sorted as Finder sorts it
+  (`localizedStandardCompare:`), and `folder_source` takes the names in that
+  order. Why: no C++ collation matches Finder's, and the choice is still
+  tested on the host.
+- **`NSLocalNetworkUsageDescription` is the one key live adds.** Why: iOS
+  asks before the first connection to a host on the local network. ATS
+  covers URL loading, not a BSD socket, and nothing is discovered, so there
+  are no Bonjour keys.
+
 ## 2026-10-21 — The desktop app takes a scenario
 
 `apps/volumetric_kit_player/main.cpp` and `config/examples/`; README.md says
@@ -18,8 +44,6 @@ how to run it.
   sender, the window and a count once, in a file.
 - **A `source.port` of 0, or none, keeps `LiveAddress`'s port,** recon's
   `networking::kDefaultPort`. Why: the sender's default has one home.
-- **The iOS app reads none,** as it plays the first `.vrst` in its Documents
-  folder (below), so only the desktop build has the core's config tier.
 - **`vp_live_probe` keeps its `host[:port]`:** a tool for agents, not a
   program a scenario starts.
 
@@ -160,12 +184,12 @@ the sizes.
   label says why until the next activation. Why: a park that timed out may
   have let the step under way submit from the background (below), and a
   rebuild is the only recovery from a lost device.
-- **The stream is the first `.vrst`, by name, in the app's Documents
-  folder,** which `UIFileSharingEnabled` and
-  `LSSupportsOpeningDocumentsInPlace` show in Finder and the Files app; each
-  activation looks again, and with none it leaves a note file there, as the
-  Files app may hide an empty app folder. Why: the smallest way onto a
-  device with no picker; a document picker and open-in wait for a need.
+- **What it plays is in the app's Documents folder** (2026-10-22), which
+  `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` show in
+  Finder and the Files app; each activation looks again, and with nothing to
+  play it leaves a note file there, as the Files app may hide an empty app
+  folder. Why: the smallest way onto a device with no picker; a document
+  picker and open-in wait for a need.
 - **The `increased-memory-limit` entitlement:** past the jetsam limit iOS
   kills the app with no `Status`, while a stream too big for the device's
   Vulkan budget is refused with one. **The device family is a build

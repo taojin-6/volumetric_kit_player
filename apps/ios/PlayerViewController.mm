@@ -5,8 +5,9 @@
 // the CAMetalLayer, a display link ticks the view, every touch phase reaches
 // gfx's ImGuiTouch for the controls panel, three recognizers drive the camera
 // unless the panel holds the finger, and the scene's activation parks and
-// unparks the worker. It plays the first .vrst, by name, in the app's
-// Documents folder, which the Files app and Finder show (Info.plist.in).
+// unparks the worker. It plays what the app's Documents folder holds, which
+// the Files app and Finder show (Info.plist.in): a player.json scenario, or
+// else the first .vrst (player::folder_source).
 
 #import "PlayerViewController.h"
 
@@ -15,18 +16,23 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include <glm/vec2.hpp>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/player/player_view.hpp"
+#include "volumetric_kit/player/scenario.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
 namespace vkc = volumetric_kit::core;
+namespace cfg = volumetric_kit::core::config;
 namespace vg = volumetric_kit::gfx;
 namespace vkp = volumetric_kit::player;
 
@@ -35,44 +41,51 @@ namespace {
 // How long a resign-active waits for the worker's step under way.
 constexpr std::chrono::seconds kParkWait{1};
 
-// The first .vrst, by name, in Documents; nil when there is none, and then
-// a note is left there, as the Files app may hide an empty app folder
-// (DECISIONS.md).
-NSString* FirstStream() {
+// The source Documents holds, its names in Finder's order
+// (localizedStandardCompare:). With neither a scenario nor a stream there, a
+// note is left, as the Files app may hide an empty app folder (DECISIONS.md),
+// and the refusal says what to copy.
+vkc::Result<cfg::Source> DocumentsSource() {
   NSFileManager* files = NSFileManager.defaultManager;
   NSString* documents = NSSearchPathForDirectoriesInDomains(
                             NSDocumentDirectory, NSUserDomainMask, YES)
                             .firstObject;
-  NSArray<NSString*>* names = [files contentsOfDirectoryAtPath:documents
-                                                         error:nil];
-  names = [names sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
-  for (NSString* name in names) {
-    if ([name.pathExtension caseInsensitiveCompare:@"vrst"] == NSOrderedSame) {
-      return [documents stringByAppendingPathComponent:name];
-    }
+  NSArray<NSString*>* listed = [files contentsOfDirectoryAtPath:documents
+                                                          error:nil];
+  std::vector<std::string> names;
+  for (NSString* name in
+       [listed sortedArrayUsingSelector:@selector(localizedStandardCompare:)]) {
+    names.emplace_back(name.UTF8String);
+  }
+  vkc::Result<cfg::Source> source =
+      vkp::folder_source(documents.UTF8String, names);
+  if (source.ok() || source.status().domain() != vkc::Status::Code::NotFound) {
+    return source;
   }
   NSString* note =
       [documents stringByAppendingPathComponent:@"Copy .vrst streams here.txt"];
-  NSData* text = [@"The player plays the first .vrst here, by name.\n"
-      dataUsingEncoding:NSUTF8StringEncoding];
+  NSString* text = [NSString
+      stringWithFormat:@"The player plays %s here, a scenario, if there is "
+                       @"one; else the first .vrst, by name.\n",
+                       vkp::kFolderScenario];
   if (![files fileExistsAtPath:note]) {
-    [files createFileAtPath:note contents:text attributes:nil];
+    [files createFileAtPath:note
+                   contents:[text dataUsingEncoding:NSUTF8StringEncoding]
+                 attributes:nil];
   }
-  return nil;
+  return vkc::Status::not_found(
+      "Nothing to play. Copy a " + std::string(vkp::kFolderScenario) +
+      " scenario or a .vrst stream into this app's folder with the Files app "
+      "or Finder, then come back to the app.");
 }
 
-// The view over the first stream, on `layer`, with fingertip-sized controls.
-// No validation: iOS has no layer to load (DECISIONS.md).
+// The view over what Documents holds, on `layer`, with fingertip-sized
+// controls. No validation: iOS has no layer to load (DECISIONS.md).
 vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(CAMetalLayer* layer,
                                                        VkExtent2D pixels) {
-  NSString* path = FirstStream();
-  if (path == nil) {
-    return vkc::Status::not_found(
-        "No .vrst stream to play. Copy one into this app's folder with the "
-        "Files app or Finder, then come back to the app.");
-  }
+  VKC_ASSIGN(const cfg::Source source, DocumentsSource());
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
-             vkp::StreamPlayer::open(path.UTF8String));
+             vkp::open_source(source));
   VKC_ASSIGN(const vg::windowing::SurfaceSource surface,
              vg::windowing::metal_surface((__bridge const void*)layer));
   vkp::PlayerViewConfig config;

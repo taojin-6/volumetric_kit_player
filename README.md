@@ -98,8 +98,7 @@ The picture joins at the sender's newest I-frame. The panel at the bottom is
 then a status line alone: connecting, live with the newest record's seq and
 how long nothing has come, or reconnecting with why, about every second until
 Esc. The keys that play, pause, step and loop do nothing. The stats show the
-bitrate and the records a second over the last second. The iOS app plays
-files only, for now.
+bitrate and the records a second over the last second.
 
 On a Mac, `"$root/build/tests/vp_live_probe" host[:port] [--frames N]` plays
 a live stream with no window and prints the status and stats lines once a
@@ -107,9 +106,10 @@ second.
 
 ## iOS
 
-The iOS app plays the first `.vrst`, by name, in its Documents folder, for
-iPhone and iPad (arm64, iOS 16 or newer). It needs Xcode and MoltenVK's iOS
-release, named by `MoltenVK_ROOT` as the core's
+The iOS app, for iPhone and iPad (arm64, iOS 16 or newer), plays what its
+Documents folder holds: a scenario named `player.json`, or else the first
+`.vrst`, by name. It needs Xcode and MoltenVK's iOS release, named by
+`MoltenVK_ROOT` as the core's
 [README](https://github.com/taojin-6/volumetric_kit_core#prerequisites) says.
 Unsigned, as CI builds it:
 
@@ -135,12 +135,26 @@ The app's entitlement `com.apple.developer.kernel.increased-memory-limit`
 needs that capability on its App ID; `codesign -d --entitlements - <app>`
 shows whether the signed app has it.
 
-To give it a stream, launch it once, then copy a `.vrst` into its folder: in
-the Files app under On My iPhone (or iPad) › Player, or in Finder under the
-device's Files tab. Each time the app comes back to the foreground it looks
-again, and until it finds one it says so. It plays with loop on. A tap works
-the panel and the stats' header, one finger orbits the camera, two pan it,
-and a pinch zooms.
+To give it something to play, launch it once, then copy a `player.json` or a
+`.vrst` into its folder: in the Files app under On My iPhone (or iPad) ›
+Player, in Finder under the device's Files tab, or with devicectl:
+
+```bash
+xcrun devicectl device copy to --device <device id> \
+  --domain-type appDataContainer --domain-identifier <bundle id> \
+  --source <file> --destination Documents/<name>
+```
+
+A `player.json` is a scenario as the desktop app takes, in the core's
+[CONFIG.md](https://github.com/taojin-6/volumetric_kit_core/blob/main/CONFIG.md)
+format; a relative `source.path` is in the folder. For the lab's sender,
+copy in a live one (above) as `player.json`, with the phone on the VPN or
+the sender's network; the first live connection asks for local network
+access. Each time the app comes back to the foreground it looks again, and
+until it finds something to play, or while the core refuses its
+`player.json`, it says why. A file plays with loop on. A tap works the panel
+and the stats' header, one finger orbits the camera, two pan it, and a pinch
+zooms.
 
 It logs the view's bring-up time, each park's wait and any failure, which
 Console.app shows. The owner checks the app on a device by hand

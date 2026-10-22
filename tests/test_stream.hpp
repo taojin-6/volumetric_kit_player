@@ -73,6 +73,7 @@ class Scratch {
   Scratch(const Scratch&) = delete;
   Scratch& operator=(const Scratch&) = delete;
 
+  std::string path() const { return path_.string(); }
   std::string file(const char* name) const { return (path_ / name).string(); }
 
  private:

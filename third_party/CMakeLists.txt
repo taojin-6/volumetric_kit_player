@@ -10,8 +10,8 @@
 include(FetchContent)
 
 # --- volumetric_kit_core -----------------------------------------------------
-# The device, Status/Result and the GPU test fixtures, declared first, and for
-# the desktop app the config tier, whose Player profile loads its scenario
+# The device, Status/Result and the GPU test fixtures, declared first, and the
+# config tier, whose Player profile loads a scenario on every platform
 # (DECISIONS.md). The pin is core main at #47's merge (f133d41, 0.17.0), which
 # adds that profile; its iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS
 # release (MoltenVK_ROOT) and answers glm. gfx's pin (7757c13, 0.12.0) and
@@ -20,7 +20,7 @@ include(FetchContent)
 # FETCHCONTENT_SOURCE_DIR override is refused. The player installs nothing, so
 # the core's install rules are off too.
 set(VKC_WITH_VULKAN ON)
-set(VKC_WITH_CONFIG ${VP_DESKTOP_APP})
+set(VKC_WITH_CONFIG ON)
 set(VKC_INSTALL OFF)
 if(VP_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
@@ -30,11 +30,7 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
   GIT_TAG f133d418dce30159bd002dc360c152bbdec4759a)
 FetchContent_MakeAvailable(volumetric_kit_core)
-set(_vp_core_tiers VULKAN)
-if(VP_DESKTOP_APP)
-  list(APPEND _vp_core_tiers CONFIG)
-endif()
-vkc_require_core(0.17.0 ${_vp_core_tiers})
+vkc_require_core(0.17.0 VULKAN CONFIG)
 
 # --- volumetric_kit_recon ----------------------------------------------------
 # The stream reader, the codec's decode grid, Marching Cubes, the mesh exchange

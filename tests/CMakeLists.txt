@@ -29,6 +29,9 @@ vp_add_test(controls volumetric_kit::player volumetric_kit::recon_tsdf)
 # loader has none (NVIDIA's ICD).
 vp_add_test(player_view volumetric_kit::player
             volumetric_kit::core_test_support volumetric_kit::recon_tsdf)
+# The player of a scenario's source, and the iOS app's choice of one from its
+# folder: host only.
+vp_add_test(scenario volumetric_kit::player volumetric_kit::recon_tsdf)
 # The desktop app's entry point, the app run with VP_NO_WINDOW set (AGENTS.md),
 # and the scenarios in config/examples/; host only.
 vp_add_test(cli volumetric_kit::player volumetric_kit::recon_tsdf
