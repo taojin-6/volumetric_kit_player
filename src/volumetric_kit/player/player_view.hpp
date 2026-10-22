@@ -24,6 +24,7 @@
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
+#include "volumetric_kit/gfx/windowing/swapchain.hpp"
 #include "volumetric_kit/player/controls.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
@@ -52,6 +53,18 @@ struct PlayerViewConfig {
   bool validation = false;
 };
 
+/// @brief The swapchain @ref PlayerView asks gfx for: FIFO and D32 depth;
+///        live, two images, so a mesh taken shows a vsync sooner, and a
+///        file's, gfx's default (the surface's least + 1).
+///
+/// @code
+/// app_config.swapchain = view_swapchain(extent, player->live());
+/// @endcode
+/// @param extent  The drawable, in pixels.
+/// @param live    Whether the player plays a live stream.
+/// @return The config; gfx clamps its image count to the surface's range.
+gfx::windowing::SwapchainConfig view_swapchain(VkExtent2D extent, bool live);
+
 /// @brief The window side of playback. It holds one device that the worker
 ///        and the renderer share, a FIFO swapchain, and the newest mesh drawn
 ///        with an orbit camera, under the controls and the stats panel
@@ -78,12 +91,12 @@ class PlayerView {
   static constexpr float kFovY = 0.87f;  ///< Vertical field of view, radians.
 
   /// @brief Make the shared device on @p surface (gfx::app::make_shared_device)
-  ///        and adopt it for gfx (FIFO, D32 depth, 2 frames in flight) and for
-  ///        recon. Build the mesh pipeline, the overlay (no imgui.ini) and a
-  ///        gfx::Profiler for the stats' "draw" row, attached to the frame
-  ///        loop. Aim the camera at the first view: target (0, 0.85, 0), 3 m.
-  ///        Then start @p player; its worker builds its kernels, and it plays
-  ///        unless the caller paused it.
+  ///        and adopt it for gfx (@ref view_swapchain, 2 frames in flight)
+  ///        and for recon. Build the mesh pipeline, the overlay (no imgui.ini)
+  ///        and a gfx::Profiler for the stats' "draw" row, attached to the
+  ///        frame loop. Aim the camera at the first view: target (0, 0.85, 0),
+  ///        3 m. Then start @p player; its worker builds its kernels, and it
+  ///        plays unless the caller paused it.
   /// @param surface  The window system's source; its window or layer must
   ///                 outlive the view.
   /// @param extent   The drawable now, in pixels; both sides > 0.
@@ -138,6 +151,11 @@ class PlayerView {
   bool ui_wants_pointer() const noexcept;
   /// @return The last stream frame drawn, for a read-out (the CI smoke).
   const std::optional<FrameStamp>& shown() const noexcept { return shown_; }
+  /// @return Its mesh, in the extractor's ring, for a read-out of its counts;
+  ///         generation 0 before the first.
+  const recon::mesh::DeviceMesh& mesh() const noexcept {
+    return exchange_.live();
+  }
   /// @return The stats panel, for a read-out of its figures (vp_live_probe).
   const StatsPanel& stats_panel() const noexcept { return stats_panel_; }
 

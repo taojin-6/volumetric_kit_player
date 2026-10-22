@@ -19,12 +19,9 @@ namespace networking = recon::networking;
 namespace stream = recon::stream;
 using Clock = Playback::Clock;
 
-// How long one wait for the consumer to take a mesh lasts before the worker
-// waits again; quit ends it at once.
-constexpr std::chrono::seconds kCollectWait{1};
-// Live: the longest one receive waits, so quit and a park are seen within it;
-// the least time between two meshes while records keep coming; and the wait
-// before a connection is made again.
+// Live: the longest one receive, or one wait for the consumer's take, lasts,
+// so quit and a park are seen within it; the least time between two meshes
+// while records keep coming; and the wait before a connection is made again.
 constexpr std::chrono::milliseconds kSlice{10};
 constexpr std::chrono::milliseconds kMeshEvery{100};
 constexpr std::chrono::seconds kRetry{1};
@@ -280,6 +277,10 @@ void StreamPlayer::unpark() {
   control([this] { parked_ = false; });
 }
 
+void StreamPlayer::taken() {
+  control([] {});
+}
+
 void StreamPlayer::stop() {
   control([this] { quit_ = true; });
   if (worker_.joinable()) {
@@ -429,12 +430,12 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
         return {};
       }
     }
-    // The consumer took the last mesh, so the newest frame may be meshed.
-    // Never bypassed: a superseded mesh keeps its ring slot.
-    const bool free =
-        pending && exchange_->release_and_may_publish(*extractor_);
-    const core::Result<bool> got = client.next(
-        free ? std::chrono::milliseconds{0} : kSlice, &record, &payload);
+    // Drain before waiting for a take. Even without a whole record, a
+    // partial receive is progress: another nonblocking read may advance it.
+    bool progressed = false;
+    const core::Result<bool> got =
+        client.next(pending ? std::chrono::milliseconds{0} : kSlice, &record,
+                    &payload, &progressed);
     if (!got.ok()) {
       *ended = got.status();
       return {};
@@ -475,11 +476,30 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
       // has decoded: a sender this version cannot decode shows as live, with
       // no picture.
     }
+    // Free: the consumer took the last mesh, so the newest frame may be
+    // meshed. Never bypassed: a superseded mesh keeps its ring slot. Wait
+    // for taken() only after input is drained, so queued records and partial
+    // receives do not each pay a slice while a mesh is left untaken.
+    bool free = false;
+    if (pending) {
+      std::unique_lock<std::mutex> lock(mutex_);
+      if (progressed) {
+        free = exchange_->release_and_may_publish(*extractor_);
+      } else {
+        free = changed_.wait_for(lock, kSlice, [this] {
+          return quit_ || parked_ ||
+                 exchange_->release_and_may_publish(*extractor_);
+        });
+      }
+      if (quit_ || parked_) {
+        return {};
+      }
+    }
     // The newest: once nothing more has come, at once for the connection's
     // first frame, or every kMeshEvery while records keep coming
     // (DECISIONS.md).
-    if (free &&
-        (!*got || !published || Clock::now() - *published >= kMeshEvery)) {
+    if (free && (!progressed || !published ||
+                 Clock::now() - *published >= kMeshEvery)) {
       const Step step(*this, Step::kNoWait);  // the extract
       if (!step) {
         return {};
@@ -547,8 +567,12 @@ bool StreamPlayer::wait_due(std::uint64_t pts_ns) {
 }
 
 core::Result<bool> StreamPlayer::publish(FrameStamp stamp) {
-  while (!exchange_->release_and_may_publish(*extractor_)) {
-    exchange_->wait_collected(kCollectWait, quit_);
+  {
+    // Asleep until taken() or another control wakes it.
+    std::unique_lock<std::mutex> lock(mutex_);
+    changed_.wait(lock, [this] {
+      return quit_ || exchange_->release_and_may_publish(*extractor_);
+    });
     if (quit_) {
       return false;
     }
