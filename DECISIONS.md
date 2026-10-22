@@ -80,7 +80,8 @@ chunks, joined at the newest key.
   with its payload and triangles; the rate frames are taken for drawing, over
   the nominal; and a table of the worker's `read`, `decode` and `mesh` (host
   ms, and decode's device ms where its queue can time) and `draw`, gfx's
-  `Profiler` around the mesh and the overlay. Why: a stream's size, its pace
+  `Profiler` around the whole render pass, as Apple GPUs time only at a
+  pass's bounds. Why: a stream's size, its pace
   and where a frame's time goes, from what recon and gfx already count
   (`TrackStats`, `StageMetrics`, the `Profiler`).
 - **The windows.** The stage means cover the last N frames taken, N the

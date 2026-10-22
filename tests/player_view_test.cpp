@@ -5,17 +5,14 @@
 // (test_stream.hpp), with gfx's ImGuiTouch as the platform half: create
 // refuses what it cannot use; frames present and shown() advances, their
 // triangles sharing vertices, onto a frame that meshes nothing too, which
-// still presents; 0 x 0
-// skips without blocking; a step moves one frame; the worker's failure
-// surfaces from frame(); the panel draws at a phone's scale, and its controls
-// fit a phone and a fingertip at the iOS shell's sizes, as do the stats, with
-// the profiler's draw row in their table; ui_wants_pointer() follows a finger
-// on the panel and on the stats' header, not on their body; and teardown
+// still presents; 0 x 0 skips without blocking; a step moves one frame; the
+// worker's failure surfaces from frame(); the panel draws at a phone's
+// scale, and its controls fit a phone and a fingertip at the iOS shell's
+// sizes, as do the stats, with the profiler's draw row in their table, whose
+// device half times the whole pass; ui_wants_pointer() follows a finger on
+// the panel and on the stats' header, not on their body; and teardown
 // mid-playback, the profiler attached, is clean. A live view presents, on
-// the two images its swapchain asks for (checked on the host). Whether the
-// draw row has a
-// device half is not checked, as the view keeps its profiler to itself; the
-// owner checks the GPU column by hand. The view
+// the two images its swapchain asks for (checked on the host). The view
 // makes its own shared device, validated as the test policy asks, so the
 // layer's errors fail the test. The tests skip where the
 // loader offers no headless surface (NVIDIA's ICD). On Apple a skip fails
@@ -28,6 +25,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cfloat>
 #include <chrono>
 #include <cmath>
@@ -592,6 +590,31 @@ TEST_F(PlayerViewTest, TheStatsCountTheFramesTakenWhileClosed) {
   ImGui::SetCurrentContext(view_->ui_context());
   EXPECT_TRUE(stats_body()->Active);
   EXPECT_EQ(stats_rows(), 4) << "read, decode, mesh and draw";
+}
+
+// Playing at a phone's size, where the queue can time: the draw row's device
+// half spans the whole pass, so the median of five refreshes reads the pass,
+// not the about 0 that a scope inside it reads on Apple GPUs (MoltenVK on an
+// M5 Max: 0.004 to 0.008 ms inside, 0.015 to 0.1 ms around it).
+TEST_F(PlayerViewTest, TheDrawRowTimesTheWholePass) {
+  extent_ = kPhone;
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  std::vector<double> gpu_ms;
+  for (int i = 0; i < 5; ++i) {
+    tick_for(StatsPanel::kRefresh);
+    for (const core::StageRow& row : view_->stats_panel().rows()) {
+      if (std::string(row.name) == "draw" && row.has_gpu) {
+        gpu_ms.push_back(row.gpu_ms);
+      }
+    }
+  }
+  if (gpu_ms.empty()) {
+    return;  // the graphics queue cannot time
+  }
+  std::nth_element(gpu_ms.begin(), gpu_ms.begin() + gpu_ms.size() / 2,
+                   gpu_ms.end());
+  EXPECT_GT(gpu_ms[gpu_ms.size() / 2], 0.015) << "ms, the median";
 }
 
 TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {

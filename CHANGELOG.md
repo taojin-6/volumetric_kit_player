@@ -71,6 +71,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nothing, rather than staying on the frame before (recon #256).
 - The `cmake-format` hook runs on Python 3.14, locally and in CI: it cannot
   start on 3.15, which Homebrew's pre-commit now uses.
+- The stats' `draw` row times the whole render pass on the device, so on
+  Apple GPUs it reads the pass rather than about 0.
 
 ### Migration
 

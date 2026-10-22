@@ -167,11 +167,12 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   clear.clear_color.float32[1] = 0.05f;
   clear.clear_color.float32[2] = 0.07f;
   clear.clear_color.float32[3] = 1.0f;
-  frame.target->begin(frame.cmd, clear);
   {
     // The stats' "draw" row: CPU is the recording, GPU the device's time
-    // where the graphics queue can time.
+    // where the graphics queue can time. It spans the whole pass, as Apple
+    // GPUs time only at a pass's bounds: inside, it reads about 0.
     const gfx::Profiler::Scope timed = profiler_.gpu_scope(frame.cmd, "draw");
+    frame.target->begin(frame.cmd, clear);
     const recon::mesh::DeviceMesh& mesh = exchange_.live();
     if (mesh.valid() && !mesh.empty()) {
       const pipelines::HybridMeshDraw draw{live_mesh(mesh)};
@@ -189,8 +190,8 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
       mesh_pipeline_.submit(frame.cmd, draws);
     }
     overlay_.render(frame.cmd);
+    frame.target->end(frame.cmd);
   }
-  frame.target->end(frame.cmd);
   // 5. Every path from begin_frame ends the frame.
   const core::Status ended = app_.end_frame(frame);
   VKC_TRY(drawn);
