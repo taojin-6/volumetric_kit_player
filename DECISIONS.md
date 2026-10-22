@@ -318,6 +318,9 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   that links the core) does not reach. A report fails its test. MoltenVK and
   the validation layer are not instrumented; no report points into them, so
   there is no suppressions file.
+- **The `stress` label runs on demand only** (`ctest -L stress`): the live
+  park test at 50 cycles, 16 s on the NVIDIA legs. The suite parks 8 times,
+  at points spread over the same 0-20 ms.
 - **Left out until a need shows:** Debug on Linux, as the GPU hosts are
   shared with gfx and recon; AddressSanitizer and UBSan; a dependency cache,
   which would save about 30 s a job on the Mac and could go stale after a

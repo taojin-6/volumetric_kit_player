@@ -36,6 +36,22 @@ vp_add_test(playback_stats volumetric_kit::player)
 # streams.
 vp_add_test(stream_player STREAMS volumetric_kit::player
             volumetric_kit::core_test_support)
+# Its live park test 50 times rather than 8: a soak, on demand with `ctest -L
+# stress`, which CI leaves out (DECISIONS.md).
+add_test(
+  NAME vp_live_park_soak
+  COMMAND vp_stream_player_test
+          --gtest_filter=LivePlayerTest.AParkClosesTheConnectionWithinASlice)
+set_tests_properties(
+  vp_live_park_soak
+  PROPERTIES ENVIRONMENT
+             VP_PARK_CYCLES=50
+             LABELS
+             stress
+             FIXTURES_REQUIRED
+             vp_streams
+             TIMEOUT
+             300)
 # The mesh wiring, and the controls on a CPU ImGui context: host only.
 vp_add_test(mesh_wiring volumetric_kit::player)
 vp_add_test(controls volumetric_kit::player)

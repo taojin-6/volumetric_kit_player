@@ -59,6 +59,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   command line or a scenario the core refuses exits 2.
 - The tests' streams are written once a ctest run, by `vp_test_streams`
   (`vp_write_stream <dir>`), rather than encoded again by every device test.
+- The live park test parks 8 times; its 50-cycle soak is the `stress` ctest
+  `vp_live_park_soak`, which CI leaves out.
 
 ### Fixed
 

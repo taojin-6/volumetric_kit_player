@@ -154,10 +154,11 @@ jobs:
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
         # Set on the command, as macOS strips DYLD_* from a step's env when it
-        # starts the system's bash.
+        # starts the system's bash. The `stress` soak runs on demand only
+        # (DECISIONS.md, CI).
         run: |
           DYLD_FALLBACK_LIBRARY_PATH="${VP_LAYER_LIBRARY_PATH:-}" \
-            ctest --test-dir build --output-on-failure \
+            ctest --test-dir build --output-on-failure -LE stress \
               --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
       # The iOS app (DECISIONS.md), built unsigned (no team) from the sources

@@ -35,7 +35,7 @@
 // view feeds it reads no spike in the records a second; a server that goes
 // away is a retry with its reason, a new one on its port, at another voxel
 // size, gives frames again, and a park then leaves no reason; a park closes
-// the connection within kClosed, 50 times at seeded points as records flow,
+// the connection within kClosed, 8 times at spread points as records flow,
 // and once with none coming; an unpark joins at the newest key; bytes that
 // are no stream, a session with no geometry track and a name that does not
 // resolve show why, with status() OK; a reason of StreamClient's shows less
@@ -64,6 +64,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -72,7 +73,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <random>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1603,17 +1603,20 @@ TEST_F(LivePlayerTest, AServerGoneIsARetryAndANewOneOnItsPortGivesFrames) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-// Parked at points spread by a seeded generator while records arrive, as one
-// is in hand, a decode or an extract is under way or a receive waits for the
-// next: each time the other end sees the connection close within kClosed of
-// the park's return, and the unpark connects again.
+// Parked at points spread evenly over 0-20 ms while records arrive every 10
+// ms, as one is in hand, a decode or an extract is under way or a receive
+// waits for the next: each time the other end sees the connection close
+// within kClosed of the park's return, and the unpark connects again. 8
+// times, or VP_PARK_CYCLES times: the stress soak's 50 (CMakeLists.txt).
 TEST_F(LivePlayerTest, AParkClosesTheConnectionWithinASlice) {
+  const char* const asked = std::getenv("VP_PARK_CYCLES");
+  const std::size_t cycles =
+      asked != nullptr ? std::strtoul(asked, nullptr, 10) : 8;
+  ASSERT_GE(cycles, 2u) << "VP_PARK_CYCLES=" << asked;
   const RawPeer peer(stream_feed(), 10ms);
   StreamPlayer* player = start_live(peer.port());
   ASSERT_NE(player, nullptr);
-  std::mt19937 random(20261021);
-  std::uniform_int_distribution<int> delay(0, 20);
-  for (std::size_t n = 1; n <= 50; ++n) {
+  for (std::size_t n = 1; n <= cycles; ++n) {
     SCOPED_TRACE(::testing::Message() << "park " << n);
     // Records arriving on connection n, its frames taken as they come.
     ASSERT_TRUE(eventually([&] {
@@ -1623,7 +1626,8 @@ TEST_F(LivePlayerTest, AParkClosesTheConnectionWithinASlice) {
       return peer.accepted() == n &&
              player->live_status().state == LiveState::kLive;
     }));
-    std::this_thread::sleep_for(std::chrono::milliseconds(delay(random)));
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(20 * (n - 1) / (cycles - 1)));
     ASSERT_TRUE(player->park(kArrival));
     const SteadyClock::time_point parked = SteadyClock::now();
     const std::optional<SteadyClock::time_point> closed = peer.closed(n);
