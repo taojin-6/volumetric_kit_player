@@ -149,12 +149,13 @@ A `player.json` is a scenario as the desktop app takes, in the core's
 [CONFIG.md](https://github.com/taojin-6/volumetric_kit_core/blob/main/CONFIG.md)
 format; a relative `source.path` is in the folder. For the lab's sender,
 copy in a live one (above) as `player.json`, with the phone on the VPN or
-the sender's network; the first live connection asks for local network
-access. The app looks each time it builds its view: at launch, and on
-coming back to the foreground with nothing playing. Until it finds something
-to play, or while the core refuses its `player.json`, it says why. To switch
-what it plays, close it in the app switcher and launch it again. A file
-plays with loop on.
+the sender's network. On the sender's network, not over the VPN, the first
+connection asks for local network access; once refused, Settings › Privacy &
+Security › Local Network allows it. The app looks each time it builds its
+view: at launch, and on coming back to the foreground with nothing playing.
+Until it finds something to play, or while the core refuses its
+`player.json`, it says why. To switch what it plays, close it in the app
+switcher and launch it again. A file plays with loop on.
 A tap works the panel and the stats' header, one finger orbits the camera,
 two pan it, and a pinch zooms.
 

@@ -38,7 +38,7 @@
       </array>
     </dict>
   </dict>
-  <!-- The Documents folder, where the app finds its stream, in Finder's
+  <!-- The Documents folder, where the app finds what it plays, in Finder's
        file sharing and in the Files app. -->
   <key>UIFileSharingEnabled</key>
   <true/>

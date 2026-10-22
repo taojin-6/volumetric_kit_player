@@ -48,7 +48,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in its Documents folder, which the core loads as it loads the desktop
   app's, before the first `.vrst` there (`player::folder_source`). One the
   core refuses is shown, never passed over. The app asks for local network
-  access before its first live connection (`NSLocalNetworkUsageDescription`).
+  access before its first connection to a sender on the local network
+  (`NSLocalNetworkUsageDescription`).
 - `player::open_source`: the player of a scenario's source, a file's or a
   sender's, which both apps call.
 
