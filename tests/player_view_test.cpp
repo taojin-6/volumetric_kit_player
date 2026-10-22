@@ -15,8 +15,8 @@
 // owner checks the GPU column by hand. The view
 // makes its own shared device, validated as the test policy asks, so the
 // layer's errors fail the test. The tests skip where the
-// loader offers no headless surface (NVIDIA's ICD). On Apple a skip fails
-// (CMakeLists.txt), and MoltenVK plans two queue families, so the mesh's
+// loader offers no headless surface (NVIDIA's ICD), but fail on Apple, where
+// MoltenVK has one. MoltenVK plans two queue families, so the mesh's
 // buffers are CONCURRENT and read across. One family, EXCLUSIVE and read in
 // place, is tested on the host only (mesh_wiring_test.cpp) until a leg runs
 // the view on one.
@@ -97,7 +97,11 @@ class PlayerViewTest : public core::test::VulkanTest {
     core::Result<gfx::windowing::SurfaceSource> headless =
         gfx::windowing::headless_surface();
     if (!headless.ok()) {
+#ifdef __APPLE__
+      FAIL() << headless.status().message();  // MoltenVK has one
+#else
       GTEST_SKIP() << headless.status().message();
+#endif
     }
     surface_ = std::move(headless).value();
     path_ = scratch_.copy(VP_TEST_STREAMS, vp_test::kStream);

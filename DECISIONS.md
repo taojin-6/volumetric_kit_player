@@ -317,7 +317,8 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   instrumented too, which the core's `VKC_SANITIZE` (carried to every target
   that links the core) does not reach. A report fails its test. MoltenVK and
   the validation layer are not instrumented; no report points into them, so
-  there is no suppressions file.
+  there is no suppressions file. The leg skips the view's rerun on
+  MoltenVK's specialized queue families, which are no threading variable.
 - **The `stress` label runs on demand only** (`ctest -L stress`): the live
   park test at 50 cycles, 16 s on the NVIDIA legs. The suite parks 8 times,
   at points spread over the same 0-20 ms.

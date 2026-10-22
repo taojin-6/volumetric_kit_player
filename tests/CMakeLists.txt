@@ -85,27 +85,23 @@ if(APPLE)
   vp_target_warnings(vp_live_probe)
 endif()
 # MoltenVK has a headless surface and several queue families, so on Apple the
-# view's tests cross families rather than skip, on MoltenVK's default families
-# and on its specialized ones, as the core's cross-family tests do: any skip but
-# the one without a device fails.
+# view's tests cross families rather than skip: on MoltenVK's default families
+# above, and again on its specialized ones, as the core's cross-family tests do,
+# where any skip but the one without a device fails.
 if(APPLE)
-  foreach(specialized 0 1)
-    set(name vp_player_view_on_moltenvk_specialized_${specialized})
-    add_test(
-      NAME ${name}
-      COMMAND
-        "${CMAKE_COMMAND}" -E env
-        MVK_CONFIG_SPECIALIZED_QUEUE_FAMILIES=${specialized}
-        "$<TARGET_FILE:vp_player_view_test>" --gtest_filter=PlayerViewTest.*)
-    set_tests_properties(
-      ${name}
-      PROPERTIES FAIL_REGULAR_EXPRESSION
-                 "\\[  SKIPPED \\]"
-                 SKIP_REGULAR_EXPRESSION
-                 "no Vulkan device for this test"
-                 FIXTURES_REQUIRED
-                 vp_streams
-                 TIMEOUT
-                 300)
-  endforeach()
+  add_test(
+    NAME vp_player_view_on_moltenvk_specialized
+    COMMAND
+      "${CMAKE_COMMAND}" -E env MVK_CONFIG_SPECIALIZED_QUEUE_FAMILIES=1
+      "$<TARGET_FILE:vp_player_view_test>" --gtest_filter=PlayerViewTest.*)
+  set_tests_properties(
+    vp_player_view_on_moltenvk_specialized
+    PROPERTIES FAIL_REGULAR_EXPRESSION
+               "\\[  SKIPPED \\]"
+               SKIP_REGULAR_EXPRESSION
+               "no Vulkan device for this test"
+               FIXTURES_REQUIRED
+               vp_streams
+               TIMEOUT
+               300)
 endif()
