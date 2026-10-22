@@ -185,7 +185,7 @@ class PlayerView {
   gfx::ui::ImGuiOverlay overlay_;
   FrameExchange exchange_;
   gfx::camera::OrbitCamera camera_;
-  bool source_button_ = false;   // the panel draws Source
+  bool source_button_ = false;   // frame() draws Source
   bool source_request_ = false;  // pressed since take_source_request
   std::unique_ptr<StreamPlayer> player_;
   PlaybackStats stats_;  // from player_'s track
