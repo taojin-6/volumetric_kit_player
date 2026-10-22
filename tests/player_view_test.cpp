@@ -25,7 +25,6 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cfloat>
 #include <chrono>
 #include <cmath>
@@ -593,28 +592,30 @@ TEST_F(PlayerViewTest, TheStatsCountTheFramesTakenWhileClosed) {
 }
 
 // Playing at a phone's size, where the queue can time: the draw row's device
-// half spans the whole pass, so the median of five refreshes reads the pass,
-// not the about 0 that a scope inside it reads on Apple GPUs (MoltenVK on an
-// M5 Max: 0.004 to 0.008 ms inside, 0.015 to 0.1 ms around it).
+// half spans the whole pass, so the mean of five refreshes reads the pass,
+// not the about 0 that a scope inside it reads on Apple GPUs. MoltenVK on an
+// M5 Max, under other tests' load too: inside, 0.002 to 0.008 ms, rarely
+// 0.02; around it, mostly 0.02 to 0.2 ms, at times as low as 0.005. The
+// mean, unlike the median, a run of low readings does not sink.
 TEST_F(PlayerViewTest, TheDrawRowTimesTheWholePass) {
   extent_ = kPhone;
   ASSERT_TRUE(make_view());
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
-  std::vector<double> gpu_ms;
+  double sum_ms = 0.0;
+  int readings = 0;
   for (int i = 0; i < 5; ++i) {
     tick_for(StatsPanel::kRefresh);
     for (const core::StageRow& row : view_->stats_panel().rows()) {
       if (std::string(row.name) == "draw" && row.has_gpu) {
-        gpu_ms.push_back(row.gpu_ms);
+        sum_ms += row.gpu_ms;
+        ++readings;
       }
     }
   }
-  if (gpu_ms.empty()) {
+  if (readings == 0) {
     return;  // the graphics queue cannot time
   }
-  std::nth_element(gpu_ms.begin(), gpu_ms.begin() + gpu_ms.size() / 2,
-                   gpu_ms.end());
-  EXPECT_GT(gpu_ms[gpu_ms.size() / 2], 0.015) << "ms, the median";
+  EXPECT_GT(sum_ms / readings, 0.012) << "ms, the mean";
 }
 
 TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {
