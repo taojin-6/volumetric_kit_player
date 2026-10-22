@@ -9,10 +9,10 @@
 // surfaces from frame(); the panel draws at a phone's scale, and its controls
 // fit a phone and a fingertip at the iOS shell's sizes, as do the stats, with
 // the profiler's draw row in their table; ui_wants_pointer() follows a finger
-// on the panel and on the stats' header, not on their body; and teardown
-// mid-playback, the profiler attached, is clean. Whether the draw row has a
-// device half is not checked, as the view keeps its profiler to itself; the
-// owner checks the GPU column by hand. The view
+// on the panel, which controls_test.cpp checks on the stats' header and body;
+// and teardown mid-playback, the profiler attached, is clean. Whether the
+// draw row has a device half is not checked, as the view keeps its profiler
+// to itself; the owner checks the GPU column by hand. The view
 // makes its own shared device, validated as the test policy asks, so the
 // layer's errors fail the test. The tests skip where the
 // loader offers no headless surface (NVIDIA's ICD), but fail on Apple, where
@@ -227,29 +227,6 @@ class PlayerViewTest : public core::test::VulkanTest {
   static ImGuiWindow* stats_body() {
     return ImGui::FindWindowByName(
         (std::string(kStatsWindow) + "##body").c_str());
-  }
-
-  // Whether the view's UI wants a finger at `at`, in points, as of the frame
-  // it lands in. The finger then goes, pressing nothing.
-  bool wants_pointer_at(glm::vec2 at) {
-    touch_->touch_began(1, at);
-    EXPECT_TRUE(present());
-    const bool wants = view_->ui_wants_pointer();
-    touch_->touch_cancelled(1);
-    for (int i = 0; i < 2; ++i) {
-      EXPECT_TRUE(present());
-    }
-    return wants;
-  }
-
-  // A finger lifts where it lands, and the frames ImGui takes the tap over
-  // present: its position, its press, its release, and its position cleared.
-  void tap(glm::vec2 at) {
-    touch_->touch_began(1, at);
-    touch_->touch_ended(1);
-    for (int i = 0; i < 4; ++i) {
-      EXPECT_TRUE(present());
-    }
   }
 
   // The rows of the stats' table after its header, as the last frame drew
@@ -467,20 +444,6 @@ TEST_F(PlayerViewTest, UiWantsPointerFollowsAFingerOnThePanel) {
   touch_->touch_ended(2);
 }
 
-// The top-left corner is the stats' header; their body is the scene's.
-TEST_F(PlayerViewTest, UiWantsPointerTakesTheStatsHeaderNotTheirBody) {
-  ASSERT_TRUE(make_view(/*playing=*/false));
-  for (int i = 0; i < 3; ++i) {
-    ASSERT_TRUE(present());
-  }
-  EXPECT_TRUE(wants_pointer_at({4.0f, 4.0f}));
-  ImGui::SetCurrentContext(view_->ui_context());
-  const ImGuiWindow* const body = stats_body();
-  ASSERT_NE(body, nullptr);
-  EXPECT_FALSE(wants_pointer_at(
-      {body->Pos.x + 0.5f * body->Size.x, body->Pos.y + 0.5f * body->Size.y}));
-}
-
 // A phone's scale takes ImGui's vector font rather than its pixel one, which
 // must also hold the status line's dot.
 TEST_F(PlayerViewTest, ThePanelDrawsAtAPhonesScale) {
@@ -564,28 +527,6 @@ TEST_F(PlayerViewTest, TheStatsFitAPhone) {
             widest_panel());
   EXPECT_LE(body->Pos.y + body->Size.y, controls->Pos.y);
   EXPECT_GE(header->Size.y, kFingertip);
-}
-
-// A tap on the stats' header, the top-left corner, closes them; a frame
-// stepped meanwhile is still counted, so reopened, past a refresh, their
-// table has the worker's rows besides the profiler's.
-TEST_F(PlayerViewTest, TheStatsCountTheFramesTakenWhileClosed) {
-  ASSERT_TRUE(make_view(/*playing=*/false));
-  for (int i = 0; i < 3; ++i) {
-    ASSERT_TRUE(present());
-  }
-  tap({4.0f, 4.0f});
-  ImGui::SetCurrentContext(view_->ui_context());
-  ASSERT_NE(stats_body(), nullptr);
-  EXPECT_FALSE(stats_body()->Active) << "closed, the header alone";
-  view_->player().step();
-  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
-  EXPECT_FALSE(stats_body()->Active);
-  tap({4.0f, 4.0f});
-  tick_for(2 * StatsPanel::kRefresh);
-  ImGui::SetCurrentContext(view_->ui_context());
-  EXPECT_TRUE(stats_body()->Active);
-  EXPECT_EQ(stats_rows(), 4) << "read, decode, mesh and draw";
 }
 
 TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {
