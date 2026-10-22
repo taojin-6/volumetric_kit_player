@@ -160,9 +160,9 @@ jobs:
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
         # Set on the command, as macOS strips DYLD_* from a step's env when it
-        # starts the system's bash. The `stress` soak runs on demand only, and
-        # the TSan leg skips the view's rerun on MoltenVK's specialized
-        # families (DECISIONS.md, CI).
+        # starts the system's bash. CI leaves out the `stress` soak, and the
+        # TSan leg skips the view's rerun on MoltenVK's specialized families
+        # (DECISIONS.md, CI).
         run: |
           skip=""
           if [ "${{ matrix.tsan }}" = true ]; then

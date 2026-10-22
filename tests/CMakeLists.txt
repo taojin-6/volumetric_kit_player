@@ -36,8 +36,8 @@ vp_add_test(playback_stats volumetric_kit::player)
 # streams.
 vp_add_test(stream_player STREAMS volumetric_kit::player
             volumetric_kit::core_test_support)
-# Its live park test 50 times rather than 8: a soak, on demand with `ctest -L
-# stress`, which CI leaves out (DECISIONS.md).
+# Its live park test 50 times rather than 8: a soak in the `stress` label, which
+# CI leaves out (DECISIONS.md).
 add_test(
   NAME vp_live_park_soak
   COMMAND vp_stream_player_test
