@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -42,9 +43,9 @@ namespace {
 constexpr std::chrono::seconds kParkWait{1};
 
 // The source Documents holds, its names in Finder's order
-// (localizedStandardCompare:). On folder_source's NotFound, neither a
-// scenario nor a stream there, a note is left, as the Files app may hide an
-// empty app folder (DECISIONS.md), and the refusal says what to copy.
+// (localizedStandardCompare:). With neither a scenario nor a stream there, a
+// note is left, as the Files app may hide an empty app folder (DECISIONS.md),
+// and the refusal says what to copy.
 vkc::Result<cfg::Source> DocumentsSource() {
   NSFileManager* files = NSFileManager.defaultManager;
   NSString* documents = NSSearchPathForDirectoriesInDomains(
@@ -57,10 +58,10 @@ vkc::Result<cfg::Source> DocumentsSource() {
        [listed sortedArrayUsingSelector:@selector(localizedStandardCompare:)]) {
     names.emplace_back(name.UTF8String);
   }
-  vkc::Result<cfg::Source> source =
-      vkp::folder_source(documents.UTF8String, names);
-  if (source.ok() || source.status().domain() != vkc::Status::Code::NotFound) {
-    return source;
+  VKC_ASSIGN(std::optional<cfg::Source> found,
+             vkp::folder_source(documents.UTF8String, names));
+  if (found) {
+    return *std::move(found);
   }
   NSString* note =
       [documents stringByAppendingPathComponent:@"Copy .vrst streams here.txt"];

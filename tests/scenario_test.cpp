@@ -7,8 +7,9 @@
 // otherwise. folder_source, over a folder of the test's own: its scenario wins
 // over a .vrst wherever it is in the names; one the core refuses or cannot
 // read is the error, never passed over for a .vrst; with none, the first
-// .vrst in the names' order, in any case; with neither, NotFound; and the
-// scenario's relative path resolves against the folder.
+// .vrst in the names' order, in any case; with neither, nothing, which no
+// refusal reads as; and the scenario's relative path resolves against the
+// folder.
 
 #include "volumetric_kit/player/scenario.hpp"
 
@@ -18,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -115,12 +117,13 @@ TEST(FolderSource, ItsScenarioWinsOverAStream) {
       vp_test::write_undecodable_stream(scratch.file("a.vrst"), 3).ok());
   for (const Names& names :
        {Names{"a.vrst", kFolderScenario}, Names{kFolderScenario, "a.vrst"}}) {
-    const core::Result<cfg::Source> source =
+    const core::Result<std::optional<cfg::Source>> source =
         folder_source(scratch.path(), names);
     ASSERT_TRUE(source.ok()) << source.status().message();
-    EXPECT_EQ(source->host, "lab.invalid");
-    EXPECT_EQ(source->port, 1u);
-    EXPECT_TRUE(source->path.empty()) << source->path;
+    ASSERT_TRUE(source->has_value());
+    EXPECT_EQ((*source)->host, "lab.invalid");
+    EXPECT_EQ((*source)->port, 1u);
+    EXPECT_TRUE((*source)->path.empty()) << (*source)->path;
   }
 }
 
@@ -135,13 +138,13 @@ TEST(FolderSource, AScenarioItCannotUseIsTheErrorNotAStream) {
     const core::Result<cfg::Config> loaded =
         cfg::load(path, cfg::Application::Player);
     ASSERT_FALSE(loaded.ok()) << what;
-    const core::Result<cfg::Source> source =
+    const core::Result<std::optional<cfg::Source>> source =
         folder_source(scratch.path(), names);
-    ASSERT_FALSE(source.ok()) << what << ": " << source->path;
+    ASSERT_FALSE(source.ok()) << what;
     EXPECT_EQ(source.status().domain(), loaded.status().domain()) << what;
     EXPECT_EQ(source.status().message(), loaded.status().message()) << what;
   };
-  // Listed, but gone since.
+  // Listed, but gone since: the core's NotFound, never nothing.
   expect_refused("gone");
   for (const char* text :
        {"{", R"({"version":1,"operation":"view"})",
@@ -167,22 +170,26 @@ TEST(FolderSource, WithNoScenarioTheFirstStreamInTheNamesOrder) {
              "Take 2.VRST"},
         Case{{"z.vrst", "Take 2.VRST"}, "z.vrst"},
         Case{{"a.vrst.txt", "player.json.txt", "b.Vrst"}, "b.Vrst"}}) {
-    const core::Result<cfg::Source> source =
+    const core::Result<std::optional<cfg::Source>> source =
         folder_source(scratch.path(), listed.names);
     ASSERT_TRUE(source.ok()) << source.status().message();
-    EXPECT_EQ(source->kind, cfg::SourceKind::Stream);
-    EXPECT_EQ(source->path,
+    ASSERT_TRUE(source->has_value());
+    EXPECT_EQ((*source)->kind, cfg::SourceKind::Stream);
+    EXPECT_EQ((*source)->path,
               (std::filesystem::path(scratch.path()) / listed.first).string());
-    EXPECT_TRUE(source->host.empty());
+    EXPECT_TRUE((*source)->host.empty());
   }
 }
 
-TEST(FolderSource, WithNeitherNotFound) {
+// Not the NotFound of a listed player.json gone since (above).
+TEST(FolderSource, WithNeitherNothing) {
   const Scratch scratch;
   for (const Names& names :
        {Names{}, Names{"notes.txt", "a.vrst.txt", "player.json.txt", "vrst"}}) {
-    EXPECT_EQ(folder_source(scratch.path(), names).status().domain(),
-              Code::NotFound);
+    const core::Result<std::optional<cfg::Source>> source =
+        folder_source(scratch.path(), names);
+    ASSERT_TRUE(source.ok()) << source.status().message();
+    EXPECT_FALSE(source->has_value()) << (*source)->path;
   }
 }
 
@@ -194,13 +201,14 @@ TEST(FolderSource, ItsScenariosRelativePathResolvesAgainstTheFolder) {
   ASSERT_TRUE(vp_test::write_undecodable_stream(take, 3).ok());
   write_file(scratch.file(kFolderScenario),
              scenario(R"("path":"takes/take.vrst")"));
-  const core::Result<cfg::Source> source =
+  const core::Result<std::optional<cfg::Source>> source =
       folder_source(scratch.path(), {kFolderScenario});
   ASSERT_TRUE(source.ok()) << source.status().message();
-  EXPECT_EQ(source->path,
+  ASSERT_TRUE(source->has_value());
+  EXPECT_EQ((*source)->path,
             std::filesystem::path(take).lexically_normal().string());
   const core::Result<std::unique_ptr<StreamPlayer>> player =
-      open_source(*source);
+      open_source(**source);
   ASSERT_TRUE(player.ok()) << player.status().message();
   EXPECT_EQ((*player)->frame_count(), 3u);
 }

@@ -42,8 +42,8 @@ core::Result<std::unique_ptr<StreamPlayer>> open_source(
   return StreamPlayer::connect(std::move(address));
 }
 
-core::Result<cfg::Source> folder_source(const std::string& directory,
-                                        const std::vector<std::string>& names) {
+core::Result<std::optional<cfg::Source>> folder_source(
+    const std::string& directory, const std::vector<std::string>& names) {
   try {
     const std::filesystem::path folder(directory);
     if (std::find(names.begin(), names.end(), kFolderScenario) != names.end()) {
@@ -60,8 +60,7 @@ core::Result<cfg::Source> folder_source(const std::string& directory,
         return source;
       }
     }
-    return core::Status::not_found("no " + std::string(kFolderScenario) +
-                                   " or .vrst stream in " + directory);
+    return std::nullopt;
   } catch (...) {
     return core::exception_status("folder_source", core::Status::Code::IoError);
   }

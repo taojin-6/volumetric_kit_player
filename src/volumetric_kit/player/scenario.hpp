@@ -9,6 +9,7 @@
 ///        folder.
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,9 +42,11 @@ core::Result<std::unique_ptr<StreamPlayer>> open_source(
 ///        else its first `.vrst`.
 ///
 /// @code
-/// VKC_ASSIGN(const core::config::Source source,
+/// VKC_ASSIGN(const std::optional<core::config::Source> source,
 ///            folder_source(documents, names));
-/// VKC_ASSIGN(std::unique_ptr<StreamPlayer> player, open_source(source));
+/// if (source) {
+///   VKC_ASSIGN(std::unique_ptr<StreamPlayer> player, open_source(*source));
+/// }
 /// @endcode
 /// @param directory  The folder.
 /// @param names      Its entries' names, in the order its first `.vrst` is
@@ -51,10 +54,10 @@ core::Result<std::unique_ptr<StreamPlayer>> open_source(
 /// @return The scenario's source, a relative path resolved against
 ///         @p directory as `core::config::load` resolves it; else a stream
 ///         source of the first name in @p names whose extension is `.vrst`,
-///         in any case; or `core::config::load`'s refusal of the scenario,
-///         never passed over for a `.vrst`, and
-///         `core::Status::Code::NotFound` with neither.
-core::Result<core::config::Source> folder_source(
+///         in any case; `std::nullopt` with neither; or
+///         `core::config::load`'s refusal of the scenario, never passed over
+///         for a `.vrst`.
+core::Result<std::optional<core::config::Source>> folder_source(
     const std::string& directory, const std::vector<std::string>& names);
 
 }  // namespace volumetric_kit::player
