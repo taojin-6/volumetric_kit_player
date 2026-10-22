@@ -30,8 +30,8 @@ how to run it.
 `networking::StreamClient` reads what a `StreamServer` sends: the `.vrst`
 chunks, joined at the newest key.
 
-- **Decode every record, mesh the newest.** The worker decodes each record as
-  it arrives, and meshes once the consumer has taken the last mesh: when
+- **Decode every record, mesh the newest.** The worker decodes every record,
+  and meshes once the consumer has taken the last mesh: when
   nothing more has come, at once for a connection's first frame, or every
   100 ms while records keep coming, so a join shows a picture at once and
   its GOP as it drains. Not paced by pts: the sender paces. Why: the
