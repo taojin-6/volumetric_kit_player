@@ -20,9 +20,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `player::PlayerView`: the window side of playback on any window system,
   over gfx: the shared device, a FIFO swapchain, and the newest mesh under an
   orbit camera and a controls panel, one `frame(extent)` per tick.
-- The desktop app, `volumetric_kit_player <stream.vrst>`: a GLFW window over
-  `PlayerView`, with mouse orbit, pan and zoom and keys for the panel's
-  controls. CI plays a stream in it under Xvfb on the Linux GPU legs.
+- The desktop app, `volumetric_kit_player`: a GLFW window over `PlayerView`,
+  with mouse orbit, pan and zoom and keys for the panel's controls. CI plays
+  a stream in it under Xvfb on the Linux GPU legs.
 - An iOS build, `cmake --preset ios`, and the iOS app (`apps/ios/`): a UIKit
   shell over `PlayerView` that plays the first `.vrst` in its Documents
   folder, with touch for the panel and the camera, and a park while the
@@ -37,8 +37,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   record's `bytes`, `key` and `stages`; `StreamPlayer::track_stats` and `rate`
   give the track's counts and nominal rate.
 - Live mode: `StreamPlayer::connect` plays a sender's live stream (recon's
-  `networking::StreamServer`) over TCP, and the desktop app takes
-  `--connect host[:port]`. The worker decodes every record and meshes the
+  `networking::StreamServer`) over TCP, and the desktop app plays a
+  scenario's `source.host`. The worker decodes every record and meshes the
   newest; a connection that ends or is refused is retried about every
   second, its reason on the status line (`LiveStatus`, `live_reason`), and a
   park closes it. Live, the stats show the bitrate and records a second over
@@ -53,6 +53,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sizes wide, rather than three frame heights.
 - The status line no longer shows the frame's decode and mesh time;
   `FrameStamp::decode_mesh_ms` is gone.
+- The desktop app takes a scenario, `volumetric_kit_player --config PATH`
+  (or `--help`), which the core's `Application::Player` loads (core
+  0.17.0); `config/examples/` has a stream file's and a live sender's. A
+  command line or a scenario the core refuses exits 2.
 
 ### Fixed
 
@@ -60,3 +64,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nothing, rather than staying on the frame before (recon #256).
 - The `cmake-format` hook runs on Python 3.14, locally and in CI: it cannot
   start on 3.15, which Homebrew's pre-commit now uses.
+
+### Migration
+
+- Write a scenario in place of the command line (the core's CONFIG.md):
+  `source.path` for the stream's path, `source.host` and `port` for
+  `--connect host[:port]`, and `run.frames` for `--frames N`.

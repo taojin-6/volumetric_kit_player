@@ -10,15 +10,17 @@
 include(FetchContent)
 
 # --- volumetric_kit_core -----------------------------------------------------
-# The device, Status/Result and the GPU test fixtures, declared first
-# (DECISIONS.md). The pin is core main at #42's merge (7757c13, 0.12.0): its iOS
-# module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT) and
-# answers glm. gfx pins the same core (#147); recon's pin (b992f12, 0.15.0) is
-# newer and yields to it too, as the player declares the core first. The floor
-# below is the pin's version (0.12.0), so an older FETCHCONTENT_SOURCE_DIR
-# override is refused. The player installs nothing, so the core's install rules
-# are off too.
+# The device, Status/Result and the GPU test fixtures, declared first, and for
+# the desktop app the config tier, whose Player profile loads its scenario
+# (DECISIONS.md). The pin is core main at #47's merge (f133d41, 0.17.0), which
+# adds that profile; its iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS
+# release (MoltenVK_ROOT) and answers glm. gfx's pin (7757c13, 0.12.0) and
+# recon's (b992f12, 0.15.0) are older and yield to it, as the player declares
+# the core first. The floor below is the pin's version (0.17.0), so an older
+# FETCHCONTENT_SOURCE_DIR override is refused. The player installs nothing, so
+# the core's install rules are off too.
 set(VKC_WITH_VULKAN ON)
+set(VKC_WITH_CONFIG ${VP_DESKTOP_APP})
 set(VKC_INSTALL OFF)
 if(VP_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
@@ -26,9 +28,13 @@ endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 7757c131d7283cacd1fb478c7b0118f7844954d6)
+  GIT_TAG f133d418dce30159bd002dc360c152bbdec4759a)
 FetchContent_MakeAvailable(volumetric_kit_core)
-vkc_require_core(0.12.0 VULKAN)
+set(_vp_core_tiers VULKAN)
+if(VP_DESKTOP_APP)
+  list(APPEND _vp_core_tiers CONFIG)
+endif()
+vkc_require_core(0.17.0 ${_vp_core_tiers})
 
 # --- volumetric_kit_recon ----------------------------------------------------
 # The stream reader, the codec's decode grid, Marching Cubes, the mesh exchange

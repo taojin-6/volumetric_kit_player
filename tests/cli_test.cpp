@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// The desktop app's command line, the app run as a process: usage, a bad
-// --frames, a bad --connect and --connect with a path exit 2; a missing file
-// and one that is not a .vrst exit 1 with StreamPlayer::open's refusal and
-// nothing else, before glfwInit. Each runs with VP_NO_WINDOW set, which stops
-// the app just before glfwInit with a reason of its own (DECISIONS.md); a
-// valid --connect, which nothing refuses, exits 1 with that reason. A run not
-// back within kPrompt, as a window's loop would not be, is killed and fails
-// the test. On the host: parse_count, which --frames and a port take.
+// The desktop app's entry point, the app run as a process. A command line the
+// core's parse_args refuses, the old one's included, exits 2 with its message
+// and the usage on stderr; --help and -h exit 0 with the usage on stdout. A
+// scenario the core cannot load, or refuses, exits 2 with its message. One it
+// loads runs: a missing stream and a file that is not one exit 1 with
+// StreamPlayer::open's refusal and nothing else, before glfwInit. Each runs
+// with VP_NO_WINDOW set, which stops the app just before glfwInit with a
+// refusal that names what the window would play, its title (DECISIONS.md); a
+// stream that opens, and a live scenario, which nothing refuses, exit 1 with
+// that refusal. A run not back within kPrompt, as a window's loop would not
+// be, is killed and fails the test. On the host: the scenarios in
+// config/examples/, and parse_count, which vp_live_probe's --frames and a
+// live address's port take.
 
 #include <gtest/gtest.h>
 #include <poll.h>
@@ -23,44 +28,68 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
 
 #include "test_stream.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/player/command_line.hpp"
+#include "volumetric_kit/player/stream_player.hpp"
 
 extern char** environ;
 
 namespace {
 
+namespace core = volumetric_kit::core;
+namespace cfg = volumetric_kit::core::config;
 using namespace std::chrono_literals;
+using volumetric_kit::player::LiveAddress;
 using volumetric_kit::player::parse_count;
 using vp_test::Scratch;
 using SteadyClock = std::chrono::steady_clock;
 
-constexpr const char* kApp = VP_PLAYER_APP;  // tests/CMakeLists.txt
+constexpr const char* kApp = VP_PLAYER_APP;            // tests/CMakeLists.txt
+constexpr const char* kExamples = VP_CONFIG_EXAMPLES;  // likewise
 constexpr auto kPrompt = 10s;
+
+// The backstop's line, for a window titled `title`.
+std::string no_window(const std::string& title) {
+  return "volumetric_kit_player: Unsupported: VP_NO_WINDOW is set, so no "
+         "window for " +
+         title + "\n";
+}
 
 struct Outcome {
   int exit_code = -1;  // -1 unless it exited
-  std::string output;  // stdout and stderr
+  std::string out;     // stdout
+  std::string err;     // stderr
 };
 
 // The app on `args`, with VP_NO_WINDOW set; killed after kPrompt.
 Outcome run_app(const std::vector<std::string>& args) {
   Outcome run;
-  int pipe_fds[2];
-  if (pipe(pipe_fds) != 0) {
+  int out_fds[2];
+  int err_fds[2];
+  if (pipe(out_fds) != 0) {
     ADD_FAILURE() << "pipe: " << std::strerror(errno);
+    return run;
+  }
+  if (pipe(err_fds) != 0) {
+    ADD_FAILURE() << "pipe: " << std::strerror(errno);
+    close(out_fds[0]);
+    close(out_fds[1]);
     return run;
   }
   posix_spawn_file_actions_t actions;
   posix_spawn_file_actions_init(&actions);
-  posix_spawn_file_actions_adddup2(&actions, pipe_fds[1], STDOUT_FILENO);
-  posix_spawn_file_actions_adddup2(&actions, pipe_fds[1], STDERR_FILENO);
-  posix_spawn_file_actions_addclose(&actions, pipe_fds[0]);
-  posix_spawn_file_actions_addclose(&actions, pipe_fds[1]);
+  posix_spawn_file_actions_adddup2(&actions, out_fds[1], STDOUT_FILENO);
+  posix_spawn_file_actions_adddup2(&actions, err_fds[1], STDERR_FILENO);
+  for (const int fd : {out_fds[0], out_fds[1], err_fds[0], err_fds[1]}) {
+    posix_spawn_file_actions_addclose(&actions, fd);
+  }
   std::vector<char*> argv{const_cast<char*>(kApp)};
   for (const std::string& arg : args) {
     argv.push_back(const_cast<char*>(arg.c_str()));
@@ -75,42 +104,61 @@ Outcome run_app(const std::vector<std::string>& args) {
   const int spawned =
       posix_spawn(&pid, kApp, &actions, nullptr, argv.data(), env.data());
   posix_spawn_file_actions_destroy(&actions);
-  close(pipe_fds[1]);
+  close(out_fds[1]);
+  close(err_fds[1]);
   if (spawned != 0) {
-    close(pipe_fds[0]);
+    close(out_fds[0]);
+    close(err_fds[0]);
     ADD_FAILURE() << "posix_spawn " << kApp << ": " << std::strerror(spawned);
     return run;
   }
-  // Read to the end of its output, which comes as it exits.
+  // Read both to the end of their output, which comes as it exits.
+  pollfd fds[2] = {{out_fds[0], POLLIN, 0}, {err_fds[0], POLLIN, 0}};
+  std::string* const into[2] = {&run.out, &run.err};
   const SteadyClock::time_point deadline = SteadyClock::now() + kPrompt;
-  for (;;) {
+  bool failed = false;
+  while (!failed && (fds[0].fd >= 0 || fds[1].fd >= 0)) {
     const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
         deadline - SteadyClock::now());
-    pollfd out{pipe_fds[0], POLLIN, 0};
     const int ready =
-        left.count() > 0 ? poll(&out, 1, static_cast<int>(left.count())) : 0;
-    char buffer[4096];
-    const ssize_t got =
-        ready > 0 ? read(pipe_fds[0], buffer, sizeof buffer) : ready;
+        left.count() > 0 ? poll(fds, 2, static_cast<int>(left.count())) : 0;
     const int error = errno;
-    if (got > 0) {
-      run.output.append(buffer, static_cast<std::size_t>(got));
-    } else if (got < 0 && error == EINTR) {
-      // A signal interrupted poll or read: try again.
-    } else if (got == 0 && ready > 0) {
-      break;  // the end of its output
-    } else {
-      kill(pid, SIGKILL);
-      if (ready == 0) {
-        ADD_FAILURE() << "the app was not back within " << kPrompt.count()
-                      << " s";
-      } else {
-        ADD_FAILURE() << "poll or read: " << std::strerror(error);
+    if (ready < 0 && error == EINTR) {
+      continue;  // a signal interrupted poll: try again
+    }
+    if (ready == 0) {
+      ADD_FAILURE() << "the app was not back within " << kPrompt.count()
+                    << " s";
+      failed = true;
+    } else if (ready < 0) {
+      ADD_FAILURE() << "poll: " << std::strerror(error);
+      failed = true;
+    }
+    for (int i = 0; i < 2 && !failed; ++i) {
+      if (fds[i].fd < 0 || fds[i].revents == 0) {
+        continue;
       }
-      break;
+      char buffer[4096];
+      const ssize_t got = read(fds[i].fd, buffer, sizeof buffer);
+      if (got > 0) {
+        into[i]->append(buffer, static_cast<std::size_t>(got));
+      } else if (got == 0) {  // the end of this one
+        close(fds[i].fd);
+        fds[i].fd = -1;
+      } else if (errno != EINTR) {
+        ADD_FAILURE() << "read: " << std::strerror(errno);
+        failed = true;
+      }
     }
   }
-  close(pipe_fds[0]);
+  if (failed) {
+    kill(pid, SIGKILL);
+  }
+  for (const pollfd& fd : fds) {
+    if (fd.fd >= 0) {
+      close(fd.fd);
+    }
+  }
   int status = 0;
   pid_t waited = 0;
   do {
@@ -122,95 +170,215 @@ Outcome run_app(const std::vector<std::string>& args) {
   return run;
 }
 
-// The app's one line for a refusal with `domain`, naming `path`.
+// A Player scenario: the envelope, a stream source of `fields`, then
+// `sections`, each with its leading comma.
+std::string scenario(const std::string& fields,
+                     const std::string& sections = "") {
+  return R"({"version":1,"operation":"view","source":{"kind":"stream",)" +
+         fields + "}" + sections + "}";
+}
+
+// `text` in the file at `path`.
+void write_file(const std::string& path, const std::string& text) {
+  std::ofstream(path) << text;
+}
+
+// The app's one line for `refused`, as main prints a Status.
+std::string line_of(const core::Status& refused) {
+  return "volumetric_kit_player: " +
+         std::string(core::to_string(refused.domain())) + ": " +
+         refused.message() + "\n";
+}
+
+// The app on `args`, which the core's parse_args refuses: exit 2, with its
+// message and then the usage on stderr.
+void expect_usage(const std::vector<std::string>& args) {
+  std::vector<const char*> argv{kApp};
+  for (const std::string& arg : args) {
+    argv.push_back(arg.c_str());
+  }
+  const core::Result<cfg::Arguments> parsed =
+      cfg::parse_args(static_cast<int>(argv.size()), argv.data());
+  ASSERT_FALSE(parsed.ok());
+  const Outcome run = run_app(args);
+  EXPECT_EQ(run.exit_code, 2) << run.err;
+  EXPECT_EQ(run.out, "");
+  EXPECT_EQ(run.err, "volumetric_kit_player: " + parsed.status().message() +
+                         "\n" + cfg::usage());
+}
+
+// The app on the scenario at `path`, which the core refuses for `reason`:
+// exit 2, with the core's message alone.
+void expect_scenario_refused(const std::string& path,
+                             const std::string& reason) {
+  const core::Result<cfg::Config> loaded =
+      cfg::load(path, cfg::Application::Player);
+  ASSERT_FALSE(loaded.ok());
+  EXPECT_NE(loaded.status().message().find(reason), std::string::npos)
+      << loaded.status().message();
+  const Outcome run = run_app({"--config", path});
+  EXPECT_EQ(run.exit_code, 2) << run.err;
+  EXPECT_EQ(run.out, "");
+  EXPECT_EQ(run.err, line_of(loaded.status()));
+}
+
+// The app's one line for a refusal of the run with `domain`, naming `path`.
 void expect_refused(const Outcome& run, const std::string& domain,
                     const std::string& path) {
-  EXPECT_EQ(run.exit_code, 1) << run.output;
+  EXPECT_EQ(run.exit_code, 1) << run.err;
+  EXPECT_EQ(run.out, "");
   const std::string prefix = "volumetric_kit_player: " + domain + ": ";
-  EXPECT_EQ(run.output.rfind(prefix, 0), 0u) << run.output;
-  EXPECT_NE(run.output.find(path), std::string::npos) << run.output;
-  EXPECT_EQ(std::count(run.output.begin(), run.output.end(), '\n'), 1)
-      << run.output;
+  EXPECT_EQ(run.err.rfind(prefix, 0), 0u) << run.err;
+  EXPECT_NE(run.err.find(path), std::string::npos) << run.err;
+  EXPECT_EQ(std::count(run.err.begin(), run.err.end(), '\n'), 1) << run.err;
 }
 
-TEST(CliTest, UsageExits2) {
+TEST(CliTest, ACommandLineTheCoreRefusesExits2WithTheUsage) {
   const Scratch scratch;
-  const std::string path = scratch.file("missing.vrst");
-  const std::vector<std::vector<std::string>> cases = {
-      {}, {"--frames", "5"}, {path, path}, {"--fast", path}, {path, "-v"}};
-  for (const std::vector<std::string>& args : cases) {
-    const Outcome run = run_app(args);
-    EXPECT_EQ(run.exit_code, 2) << run.output;
-    EXPECT_EQ(run.output.rfind("usage: volumetric_kit_player", 0), 0u)
-        << run.output;
-  }
-}
-
-TEST(CliTest, BadFramesExits2) {
-  const Scratch scratch;
-  const std::string path = scratch.file("missing.vrst");
-  for (const char* frames :
-       {"0", "-1", "+5", "five", "5x", "", "99999999999999999999"}) {
-    const Outcome run = run_app({"--frames", frames, path});
-    EXPECT_EQ(run.exit_code, 2) << "--frames '" << frames << "'\n"
-                                << run.output;
-  }
-  const Outcome last = run_app({path, "--frames"});
-  EXPECT_EQ(last.exit_code, 2) << last.output;
-  const Outcome twice = run_app({"--frames", "5", "--frames", "6", path});
-  EXPECT_EQ(twice.exit_code, 2) << twice.output;
-}
-
-TEST(CliTest, BadConnectExits2) {
-  const Scratch scratch;
-  const std::string path = scratch.file("missing.vrst");
-  const std::vector<std::vector<std::string>> cases = {
-      {"--connect"},
-      {"--connect", ""},
-      {"--connect", ":5"},
-      {"--connect", "h:0"},
-      {"--connect", "h:65536"},
-      {"--connect", "h:x"},
-      {"--connect", "h:5:6"},
-      {"--connect", "h", "--connect", "g"},
-      {"--connect", "h", path},
-      {path, "--connect", "h"}};
-  for (const std::vector<std::string>& args : cases) {
-    const Outcome run = run_app(args);
-    EXPECT_EQ(run.exit_code, 2) << args.back() << "\n" << run.output;
-    EXPECT_EQ(run.output.rfind("usage: volumetric_kit_player", 0), 0u)
-        << run.output;
-  }
-}
-
-// connect does no I/O, so a valid address passes every refusal and stops at
-// the backstop, whether or not anything serves there.
-TEST(CliTest, AValidConnectReachesTheNoWindowBackstop) {
+  const std::string path = scratch.file("play.json");
   for (const std::vector<std::string>& args :
        std::vector<std::vector<std::string>>{
-           {"--connect", "127.0.0.1:1"},
-           {"--frames", "60", "--connect", "lab.invalid"}}) {
-    const Outcome run = run_app(args);
-    EXPECT_EQ(run.exit_code, 1) << run.output;
-    EXPECT_EQ(run.output,
-              "volumetric_kit_player: Unsupported: VP_NO_WINDOW is set, so no "
-              "window\n");
+           {},
+           {"--fast"},
+           {"--config"},
+           {"--config", "--help"},
+           {"--config", path, "--config", path},
+           {"--config", path, "-v"},
+           {path},
+           // The command line before the scenario.
+           {"stream.vrst"},
+           {"--frames", "60", "stream.vrst"},
+           {"--connect", "lab"}}) {
+    expect_usage(args);
   }
 }
 
-TEST(CliTest, RefusesAMissingFileBeforeGlfw) {
+TEST(CliTest, HelpPrintsTheUsageOnStdout) {
+  for (const char* help : {"--help", "-h"}) {
+    const Outcome run = run_app({help});
+    EXPECT_EQ(run.exit_code, 0) << help << "\n" << run.err;
+    EXPECT_EQ(run.out, cfg::usage());
+    EXPECT_EQ(run.err, "");
+  }
+}
+
+TEST(CliTest, AScenarioTheCoreCannotLoadExits2) {
   const Scratch scratch;
-  const std::string path = scratch.file("missing.vrst");
-  expect_refused(run_app({path}), "NotFound", path);
-  expect_refused(run_app({"--frames", "60", path}), "NotFound", path);
+  const std::string path = scratch.file("missing.json");
+  expect_scenario_refused(path, path);
+}
+
+TEST(CliTest, AScenarioTheCoreRefusesExits2WithItsField) {
+  const Scratch scratch;
+  const std::string path = scratch.file("play.json");
+  struct Case {
+    std::string text;
+    const char* reason;
+  };
+  // The core's config_test has its rules; these show only that the app
+  // passes on its refusal, by the field it names.
+  const std::vector<Case> cases = {
+      {scenario(R"("path":"s.vrst","host":"lab")"), "source:"},
+      {scenario(R"("path":"s.vrst")", R"(,"window":{"overlay":true})"),
+       "window.overlay:"},
+      {R"({"version":1,"operation":"view",)"
+       R"("source":{"kind":"dataset","path":"room0"}})",
+       "source.kind:"}};
+  for (const Case& refused : cases) {
+    write_file(path, refused.text);
+    expect_scenario_refused(path, refused.reason);
+  }
+}
+
+TEST(CliTest, RefusesAMissingStreamBeforeGlfw) {
+  const Scratch scratch;
+  const std::string path = scratch.file("play.json");
+  write_file(path, scenario(R"("path":"missing.vrst")"));
+  expect_refused(run_app({"--config", path}), "NotFound",
+                 scratch.file("missing.vrst"));
+  write_file(path,
+             scenario(R"("path":"missing.vrst")", R"(,"run":{"frames":60})"));
+  expect_refused(run_app({"--config", path}), "NotFound",
+                 scratch.file("missing.vrst"));
 }
 
 TEST(CliTest, RefusesAFileThatIsNotAStreamBeforeGlfw) {
   const Scratch scratch;
-  const std::string path = scratch.file("notes.txt");
-  std::ofstream(path) << "not a stream, but long enough to have been one if "
-                         "it began with the magic\n";
-  expect_refused(run_app({path}), "InvalidArgument", path);
+  const std::string notes = scratch.file("notes.txt");
+  std::ofstream(notes) << "not a stream, but long enough to have been one if "
+                          "it began with the magic\n";
+  const std::string path = scratch.file("play.json");
+  write_file(path, scenario(R"("path":"notes.txt")"));
+  expect_refused(run_app({"--config", path}), "InvalidArgument", notes);
+}
+
+// A stream that opens passes every refusal and stops at the backstop.
+TEST(CliTest, AStreamThatOpensReachesTheNoWindowBackstop) {
+  const Scratch scratch;
+  ASSERT_TRUE(
+      vp_test::write_undecodable_stream(scratch.file("stream.vrst"), 3).ok());
+  const std::string path = scratch.file("play.json");
+  for (const char* sections :
+       {"", R"(,"window":{"width":1600,"height":900,"validation":true})",
+        R"(,"run":{"frames":60})"}) {
+    write_file(path, scenario(R"("path":"stream.vrst")", sections));
+    const Outcome run = run_app({"--config", path});
+    EXPECT_EQ(run.exit_code, 1) << sections << "\n" << run.err;
+    EXPECT_EQ(run.out, "");
+    EXPECT_EQ(run.err, no_window(scratch.file("stream.vrst")));
+  }
+}
+
+// connect does no I/O, so a valid sender passes every refusal and stops at
+// the backstop, whether or not anything serves there, naming the address it
+// would play: the scenario's port, or for 0 or none the sender's default.
+TEST(CliTest, ALiveScenarioReachesTheNoWindowBackstop) {
+  const Scratch scratch;
+  const std::string path = scratch.file("play.json");
+  struct Case {
+    std::string text;
+    std::string address;
+  };
+  const std::vector<Case> cases = {
+      {scenario(R"("host":"127.0.0.1")"), to_string(LiveAddress{"127.0.0.1"})},
+      {scenario(R"("host":"lab.invalid","port":0)"),
+       to_string(LiveAddress{"lab.invalid"})},
+      {scenario(R"("host":"127.0.0.1","port":1)"), "127.0.0.1:1"},
+      {scenario(R"("host":"lab.invalid")", R"(,"run":{"frames":60})"),
+       to_string(LiveAddress{"lab.invalid"})}};
+  for (const Case& live : cases) {
+    write_file(path, live.text);
+    const Outcome run = run_app({"--config", path});
+    EXPECT_EQ(run.exit_code, 1) << live.text << "\n" << run.err;
+    EXPECT_EQ(run.out, "");
+    EXPECT_EQ(run.err, no_window(live.address));
+  }
+}
+
+// Each example loads as a Player scenario: the file one plays the stream it
+// names beside it, the live one this machine's sender on the sender's default
+// port.
+TEST(CliTest, TheExamplesAreScenariosTheCoreLoads) {
+  for (const std::filesystem::directory_entry& entry :
+       std::filesystem::directory_iterator(kExamples)) {
+    if (entry.path().extension() == ".json") {
+      const core::Result<cfg::Config> loaded =
+          cfg::load(entry.path().string(), cfg::Application::Player);
+      EXPECT_TRUE(loaded.ok()) << loaded.status().message();
+    }
+  }
+  const std::filesystem::path dir(kExamples);
+  const core::Result<cfg::Config> file =
+      cfg::load((dir / "play_file.json").string(), cfg::Application::Player);
+  ASSERT_TRUE(file.ok()) << file.status().message();
+  EXPECT_EQ(file->source.path, (dir / "data" / "rafa2.vrst").string());
+  EXPECT_TRUE(file->source.host.empty());
+  const core::Result<cfg::Config> live =
+      cfg::load((dir / "play_live.json").string(), cfg::Application::Player);
+  ASSERT_TRUE(live.ok()) << live.status().message();
+  EXPECT_EQ(live->source.host, "127.0.0.1");
+  EXPECT_EQ(live->source.port, 0u);
+  EXPECT_TRUE(live->source.path.empty());
 }
 
 TEST(ParseCount, TakesDecimalDigitsAloneFromOne) {

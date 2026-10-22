@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "operation": "view",
+  "source": {
+    "kind": "stream",
+    "host": "127.0.0.1"
+  }
+}

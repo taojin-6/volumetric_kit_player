@@ -41,9 +41,9 @@ struct PlayerViewConfig {
   /// 44 on iOS.
   float ui_min_frame_height = 0.0f;
   /// The Khronos validation layer on the shared instance, where it loads (a
-  /// logged warning where it does not). The desktop shell sets it in Debug,
-  /// and iOS has no layer (DECISIONS.md); the tests take it from
-  /// VKC_TEST_VALIDATION.
+  /// logged warning where it does not). The desktop shell sets it from its
+  /// scenario's window.validation, and always in Debug; iOS has no layer
+  /// (DECISIONS.md); the tests take it from VKC_TEST_VALIDATION.
   bool validation = false;
 };
 

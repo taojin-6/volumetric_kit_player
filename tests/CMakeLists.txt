@@ -29,11 +29,14 @@ vp_add_test(controls volumetric_kit::player volumetric_kit::recon_tsdf)
 # loader has none (NVIDIA's ICD).
 vp_add_test(player_view volumetric_kit::player
             volumetric_kit::core_test_support volumetric_kit::recon_tsdf)
-# The desktop app's command line, the app run with VP_NO_WINDOW set (AGENTS.md);
-# host only.
-vp_add_test(cli volumetric_kit::player volumetric_kit::recon_tsdf)
+# The desktop app's entry point, the app run with VP_NO_WINDOW set (AGENTS.md),
+# and the scenarios in config/examples/; host only.
+vp_add_test(cli volumetric_kit::player volumetric_kit::recon_tsdf
+            volumetric_kit::core_config)
 target_compile_definitions(
-  vp_cli_test PRIVATE VP_PLAYER_APP="$<TARGET_FILE:volumetric_kit_player>")
+  vp_cli_test
+  PRIVATE VP_PLAYER_APP="$<TARGET_FILE:volumetric_kit_player>"
+          VP_CONFIG_EXAMPLES="${PROJECT_SOURCE_DIR}/config/examples")
 add_dependencies(vp_cli_test volumetric_kit_player)
 # The tests' stream as a file, for CI's smoke run of the window (ci.yml): a
 # tool, not a test.

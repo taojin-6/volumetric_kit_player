@@ -41,18 +41,30 @@ ctest --test-dir "$root/build" --output-on-failure
 
 ## Run
 
+The app plays a scenario, `--config <scenario.json>` (`--help` prints the
+usage), in the format the core's
+[CONFIG.md](https://github.com/taojin-6/volumetric_kit_core/blob/main/CONFIG.md)
+gives for its `Player` profile. [config/examples](config/examples) has a
+stream file's, [play_file.json](config/examples/play_file.json), and a live
+sender's, [play_live.json](config/examples/play_live.json). Edit
+play_file.json's `source.path` to point at a `.vrst`, or put one at
+`config/examples/data/rafa2.vrst`:
+
 ```bash
-"$root/build/apps/volumetric_kit_player/volumetric_kit_player" <stream.vrst>
+"$root/build/apps/volumetric_kit_player/volumetric_kit_player" \
+  --config "$root/config/examples/play_file.json"
 ```
 
-A Debug build runs under the Khronos validation layer. On macOS, put
-Homebrew's layer on the search path, as the tests do (AGENTS.md):
+A Debug build runs under the Khronos validation layer, and a Release build
+when the scenario's `window.validation` is true. On macOS, put Homebrew's
+layer on the search path, as the tests do (AGENTS.md):
 
 ```bash
 cmake -S "$root" -B "$root/build-debug" -DCMAKE_BUILD_TYPE=Debug
 cmake --build "$root/build-debug" --parallel
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib \
-  "$root/build-debug/apps/volumetric_kit_player/volumetric_kit_player" <stream.vrst>
+  "$root/build-debug/apps/volumetric_kit_player/volumetric_kit_player" \
+  --config <scenario.json>
 ```
 
 The panel at the bottom plays, pauses, steps and loops, and shows the frame.
@@ -70,20 +82,17 @@ The keys are the panel's shortcuts:
 | L | turns looping on or off |
 | Esc | closes the window |
 
-`--frames N` exits after N presents of a stream frame and prints the frame
-drawn, for CI's smoke run (DECISIONS.md).
+With `run.frames`, the app prints the frame drawn as it exits, for CI's
+smoke run (DECISIONS.md).
 
 ### Live
 
-`--connect host[:port]`, in place of the path, plays what a sender serves
-(recon's `serve_stream`, or its `fuse_orbbec` with `output.serve` in a recon
-whose `fuse_orbbec` serves), on port 47801 unless one is named. For the lab's
-sender, over the VPN:
-
-```bash
-"$root/build/apps/volumetric_kit_player/volumetric_kit_player" \
-  --connect taojin-desktop.arena.andrew.cmu.edu:47801  # or 192.168.21.217
-```
+A scenario with `source.host` in place of `source.path` plays what a sender
+serves (recon's `serve_stream`, or its `fuse_orbbec` with `output.serve` in
+a recon whose `fuse_orbbec` serves).
+[play_live.json](config/examples/play_live.json) plays a sender on this
+machine; for the lab's, over the VPN, copy it and set `source.host` to
+`taojin-desktop.arena.andrew.cmu.edu` or `192.168.21.217`.
 
 The picture joins at the sender's newest I-frame. The panel at the bottom is
 then a status line alone: connecting, live with the newest record's seq and

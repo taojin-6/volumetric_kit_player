@@ -13,7 +13,7 @@ records why.
 
 - It is assembled from its siblings, each fetched pinned by commit:
   [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core)
-  (the device, `Status`/`Result`, the test fixtures),
+  (the device, `Status`/`Result`, the scenario format, the test fixtures),
   [`volumetric_kit_recon`](https://github.com/taojin-6/volumetric_kit_recon)
   (the stream reader and client, the codec, Marching Cubes) and
   [`volumetric_kit_gfx`](https://github.com/taojin-6/volumetric_kit_gfx)

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// volumetric_kit_player [--frames N] (<stream.vrst> | --connect host[:port]):
-// plays a stream, from a file or live from a sender, in a GLFW window.
-// PlayerView does the work; this shell makes the window, hands it the mouse
-// and keys, and pumps frames (DECISIONS.md). A stream it cannot play is
-// refused before GLFW starts, and with VP_NO_WINDOW set it stops there.
+// volumetric_kit_player --config <scenario.json>: plays a scenario's stream,
+// from a file or live from a sender, in a GLFW window. The core loads the
+// scenario with its Player profile (its CONFIG.md), and refuses one the app
+// cannot use. PlayerView does the work; this shell makes the window, hands it
+// the mouse and keys, and pumps frames (DECISIONS.md). A stream it cannot play
+// is refused before GLFW starts, and with VP_NO_WINDOW set it stops there.
 
 #include <GLFW/glfw3.h>
 
@@ -22,63 +23,21 @@
 #include <glm/vec2.hpp>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/camera/orbit_camera.hpp"
 #include "volumetric_kit/gfx/glfw/imgui_glfw.hpp"
 #include "volumetric_kit/gfx/glfw/window.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
-#include "volumetric_kit/player/command_line.hpp"
 #include "volumetric_kit/player/player_view.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
 namespace {
 
 namespace vkc = volumetric_kit::core;
+namespace cfg = volumetric_kit::core::config;
 namespace vg = volumetric_kit::gfx;
 namespace vkp = volumetric_kit::player;
-
-constexpr const char* kUsage =
-    "usage: volumetric_kit_player [--frames N]"
-    " (<stream.vrst> | --connect host[:port])\n"
-    "  --frames N             exit after N presents of a stream frame\n"
-    "                         (N >= 1)\n"
-    "  --connect host[:port]  play a sender's live stream, on port 47801\n"
-    "                         unless one is named\n";
-
-struct Args {
-  std::string path;
-  std::optional<vkp::LiveAddress> live;  // --connect, refused with a path
-  std::optional<std::uint64_t> frames;   // --frames, the CI smoke run's
-};
-
-// The command line, or none for the usage.
-std::optional<Args> parse(int argc, char** argv) {
-  Args args;
-  for (int i = 1; i < argc; ++i) {
-    const std::string_view arg = argv[i];
-    if (arg == "--frames" && i + 1 < argc && !args.frames) {
-      args.frames = vkp::parse_count(argv[++i]);
-      if (!args.frames) {
-        return std::nullopt;
-      }
-    } else if (arg == "--connect" && i + 1 < argc && !args.live) {
-      vkc::Result<vkp::LiveAddress> address =
-          vkp::parse_live_address(argv[++i]);
-      if (!address.ok()) {
-        return std::nullopt;
-      }
-      args.live = std::move(address).value();
-    } else if (!arg.empty() && arg[0] != '-' && args.path.empty()) {
-      args.path = arg;
-    } else {
-      return std::nullopt;
-    }
-  }
-  if (args.path.empty() == !args.live) {  // neither, or both
-    return std::nullopt;
-  }
-  return args;
-}
 
 // What GLFW's callbacks hand the loop, through the window's user pointer.
 // TODO: the GLFW input glue (keys, the wheel, drags) gets one home in gfx_glfw
@@ -120,25 +79,39 @@ void on_scroll(GLFWwindow* window, double /*dx*/, double dy) {
   input_of(window).wheel += dy;
 }
 
-vkc::Status run(const Args& args) {
+vkc::Status run(const cfg::Config& settings) {
+  const cfg::Source& source = settings.source;
+  // A sender's, when the scenario names a host: on LiveAddress's default
+  // port, the sender's, unless it names one too.
+  std::optional<vkp::LiveAddress> live;
+  if (!source.host.empty()) {
+    live.emplace();
+    live->host = source.host;
+    if (source.port != 0) {
+      live->port = source.port;
+    }
+  }
   // Refusals before GLFW; connect does no I/O.
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
-             args.live ? vkp::StreamPlayer::connect(*args.live)
-                       : vkp::StreamPlayer::open(args.path));
+             live ? vkp::StreamPlayer::connect(*live)
+                  : vkp::StreamPlayer::open(source.path));
+  const std::string title = live ? vkp::to_string(*live) : source.path;
   if (std::getenv("VP_NO_WINDOW") != nullptr) {  // cli_test's backstop
-    return vkc::Status::unsupported("VP_NO_WINDOW is set, so no window");
+    return vkc::Status::unsupported("VP_NO_WINDOW is set, so no window for " +
+                                    title);
   }
   VKC_ASSIGN(const std::unique_ptr<vg::glfw::Library> library,
              vg::glfw::Library::init());
   Input input;  // outlives the window
-  const std::string title = args.live ? vkp::to_string(*args.live) : args.path;
   VKC_ASSIGN(const vg::glfw::Window window,
-             vg::glfw::create_window(1280, 720, title.c_str()));
+             vg::glfw::create_window(settings.window.width,
+                                     settings.window.height, title.c_str()));
   GLFWwindow* const w = window.get();
   glfwSetWindowUserPointer(w, &input);
   glfwSetKeyCallback(w, on_key);  // before ImGuiGlfw, which chains them
   glfwSetScrollCallback(w, on_scroll);
   vkp::PlayerViewConfig config;
+  config.validation = settings.window.validation;
 #ifndef NDEBUG
   config.validation = true;
 #endif
@@ -152,6 +125,11 @@ vkc::Status run(const Args& args) {
   input.player = &view->player();
 
   glm::vec2 last = vg::glfw::cursor_in_framebuffer(w);
+  // The presents of a stream frame to exit after, for CI's smoke run; 0 plays
+  // until the window closes.
+  const std::uint64_t frames =
+      settings.run.frames > 0 ? static_cast<std::uint64_t>(settings.run.frames)
+                              : 0;
   std::uint64_t presented = 0;
   while (!glfwWindowShouldClose(w)) {
     glfwPollEvents();
@@ -176,11 +154,11 @@ vkc::Status run(const Args& args) {
     VKC_ASSIGN(const bool drawn, view->frame(size));
     if (!drawn) {
       glfwWaitEventsTimeout(0.05);  // minimized or settling: no busy loop
-    } else if (args.frames && view->shown() && ++presented == *args.frames) {
+    } else if (frames != 0 && view->shown() && ++presented == frames) {
       break;
     }
   }
-  if (args.frames) {
+  if (frames != 0) {
     std::printf(
         "volumetric_kit_player: presented %llu frame(s), drew stream frame "
         "%lld\n",
@@ -190,21 +168,33 @@ vkc::Status run(const Args& args) {
   return {};
 }
 
+// A refusal on one line, with its domain; `exit_code`.
+int report(const vkc::Status& refused, int exit_code) {
+  const std::string_view domain = vkc::to_string(refused.domain());
+  std::fprintf(stderr, "volumetric_kit_player: %.*s: %s\n",
+               static_cast<int>(domain.size()), domain.data(),
+               refused.message().c_str());
+  return exit_code;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-  const std::optional<Args> args = parse(argc, argv);
-  if (!args) {
-    std::fputs(kUsage, stderr);
+  const vkc::Result<cfg::Arguments> args = cfg::parse_args(argc, argv);
+  if (!args.ok()) {
+    std::fprintf(stderr, "volumetric_kit_player: %s\n%s",
+                 args.status().message().c_str(), cfg::usage());
     return 2;
   }
-  const vkc::Status status = run(*args);
-  if (!status.ok()) {
-    const std::string_view domain = vkc::to_string(status.domain());
-    std::fprintf(stderr, "volumetric_kit_player: %.*s: %s\n",
-                 static_cast<int>(domain.size()), domain.data(),
-                 status.message().c_str());
-    return 1;
+  if (args.value().help) {
+    std::fputs(cfg::usage(), stdout);
+    return 0;
   }
-  return 0;
+  const vkc::Result<cfg::Config> settings =
+      cfg::load(args.value().config_path, cfg::Application::Player);
+  if (!settings.ok()) {
+    return report(settings.status(), 2);
+  }
+  const vkc::Status status = run(settings.value());
+  return status.ok() ? 0 : report(status, 1);
 }
