@@ -41,9 +41,9 @@ struct PlayerViewConfig {
   /// header's (gfx::ui::ImGuiOverlayConfig::min_frame_height). 0 on desktop,
   /// 44 on iOS.
   float ui_min_frame_height = 0.0f;
-  /// The controls' Source button, which asks the shell for something else
-  /// to play (PlayerView::take_source_request): on iOS; the desktop takes a
-  /// scenario instead.
+  /// The Source button at the top right (draw_source), which asks the shell
+  /// for something else to play (PlayerView::take_source_request): on iOS;
+  /// the desktop takes a scenario instead.
   bool source_button = false;
   /// The Khronos validation layer on the shared instance, where it loads (a
   /// logged warning where it does not). The desktop shell sets it from its
@@ -88,7 +88,7 @@ class PlayerView {
   ///                 outlive the view.
   /// @param extent   The drawable now, in pixels; both sides > 0.
   /// @param player   An opened player, not started.
-  /// @param config   The UI's sizes and validation.
+  /// @param config   The UI's sizes, the Source button and validation.
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
   ///         @p player or an empty @p extent; or the first failure (device,
   ///         swapchain, pipeline, overlay, profiler, StreamPlayer::start).

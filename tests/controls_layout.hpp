@@ -4,8 +4,8 @@
 #pragma once
 
 /// @file controls_layout.hpp
-/// Where draw_controls lays out its row, for the tests that put a finger on
-/// a control.
+/// Where draw_controls lays out its row, and draw_source its button, for the
+/// tests that put a finger on a control.
 
 #include <glm/vec2.hpp>
 
@@ -27,33 +27,29 @@ inline glm::vec2 control_size(const ImGuiWindow& panel, int index) {
   return {index < 2 ? button : height, height};
 }
 
-// Its top left, in points; with the Source button drawn (`source`), on the
-// row below Source's.
-inline glm::vec2 control_top_left(const ImGuiWindow& panel, int index,
-                                  bool source = false) {
+// Its top left, in points.
+inline glm::vec2 control_top_left(const ImGuiWindow& panel, int index) {
   const ImGuiStyle& style = ImGui::GetStyle();
   const float button = control_size(panel, 0).x;
-  const float above =
-      source ? control_size(panel, 0).y + style.ItemSpacing.y : 0.0f;
   return {panel.Pos.x + style.WindowPadding.x +
               static_cast<float>(index) * (button + style.ItemSpacing.x),
-          panel.Pos.y + style.WindowPadding.y + above};
+          panel.Pos.y + style.WindowPadding.y};
 }
 
 // Its middle, in points.
-inline glm::vec2 control_middle(const ImGuiWindow& panel, int index,
-                                bool source = false) {
-  return control_top_left(panel, index, source) +
-         0.5f * control_size(panel, index);
+inline glm::vec2 control_middle(const ImGuiWindow& panel, int index) {
+  return control_top_left(panel, index) + 0.5f * control_size(panel, index);
 }
 
-// The Source button's top left and middle, in points: alone on the panel's
-// first row, sized as Play/Pause.
-inline glm::vec2 source_top_left(const ImGuiWindow& panel) {
-  return control_top_left(panel, 0);
+// The Source button's top left, in points, as the last frame laid out its
+// window (`source`, draw_source): the window's, as it has no padding.
+inline glm::vec2 source_top_left(const ImGuiWindow& source) {
+  return {source.Pos.x, source.Pos.y};
 }
-inline glm::vec2 source_middle(const ImGuiWindow& panel) {
-  return control_middle(panel, 0);
+
+// Its middle, in points: it is sized as Play/Pause.
+inline glm::vec2 source_middle(const ImGuiWindow& source) {
+  return source_top_left(source) + 0.5f * control_size(source, 0);
 }
 
 }  // namespace vp_test

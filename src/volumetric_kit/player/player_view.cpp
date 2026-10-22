@@ -150,9 +150,13 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
     return false;
   }
   const gfx::windowing::Frame& frame = *begun;
-  // 2. The controls and the stats, as of the last frame drawn.
+  // 2. The controls, Source if asked for, and the stats, as of the last frame
+  // drawn.
   overlay_.new_frame();
-  draw_controls(*player_, shown_, source_button_ ? &source_request_ : nullptr);
+  draw_controls(*player_, shown_);
+  if (source_button_ && draw_source()) {
+    source_request_ = true;
+  }
   stats_panel_.draw(stats_, shown_, shown_triangles_,
                     profiler_.metrics().sections, PlaybackStats::Clock::now(),
                     player_->live());

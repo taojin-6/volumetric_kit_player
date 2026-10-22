@@ -13,6 +13,13 @@
 namespace volumetric_kit::player {
 namespace {
 
+// The controls' and Source's windows: sized to what they hold, where they are
+// put, and never taking focus.
+constexpr ImGuiWindowFlags kFlags =
+    ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+    ImGuiWindowFlags_NoFocusOnAppearing;
+
 // `value` to `decimals` places.
 std::string fixed(double value, int decimals) {
   char text[32];
@@ -61,21 +68,14 @@ void draw_file_controls(StreamPlayer& player,
 
 }  // namespace
 
-void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
-                   bool* source) {
+void draw_controls(StreamPlayer& player,
+                   const std::optional<FrameStamp>& shown) {
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(
       ImVec2(viewport->WorkPos.x + 0.5f * viewport->WorkSize.x,
              viewport->WorkPos.y + viewport->WorkSize.y),
       ImGuiCond_Always, ImVec2(0.5f, 1.0f));
-  constexpr ImGuiWindowFlags kFlags =
-      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-      ImGuiWindowFlags_NoFocusOnAppearing;
   if (ImGui::Begin(kControlsWindow, nullptr, kFlags)) {
-    if (source != nullptr && ImGui::Button("Source", button_size())) {
-      *source = true;
-    }
     if (player.live()) {
       ImGui::TextUnformatted(
           live_status_line(player.live_status(), Playback::Clock::now())
@@ -85,6 +85,22 @@ void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
     }
   }
   ImGui::End();
+}
+
+bool draw_source() {
+  const ImGuiViewport* viewport = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(
+      ImVec2(viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y),
+      ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+  // No padding, so the button is all of the window, and no border, which
+  // would clip a point off each side of the button's target.
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  const bool drawn = ImGui::Begin(kSourceWindow, nullptr, kFlags);
+  ImGui::PopStyleVar(2);
+  const bool pressed = drawn && ImGui::Button("Source", button_size());
+  ImGui::End();
+  return pressed;
 }
 
 std::string live_status_line(const LiveStatus& status,

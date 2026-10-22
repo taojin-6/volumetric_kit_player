@@ -134,19 +134,18 @@ The app's entitlement `com.apple.developer.kernel.increased-memory-limit`
 needs that capability on its App ID; `codesign -d --entitlements - <app>`
 shows whether the signed app has it.
 
-Source, at the top of the panel, opens iOS's dialog: Connect plays the
-sender at Host and Port, on the sender's default port when Port is empty,
-and Play file, offered while the app's folder holds a `.vrst`, plays the
-first one, by name. What the dialog refuses it shows with why, keeping what
-was typed. The app remembers the choice: at launch it connects to the last
-sender, if that was the choice, or else plays the first `.vrst`, or else
-asks. For the lab's sender (above), put the phone on the VPN or the
-sender's network. On the sender's network, not over the VPN, the first
-connection asks for local network access; once refused, Settings › Privacy &
-Security › Local Network allows it. A sender the app cannot reach is the
-status line's reason, retried about every second until Source chooses
-another. While nothing plays, a label says why, and a tap on it opens the
-dialog.
+Source, at the top right, opens iOS's dialog: Connect plays the sender at
+Host and Port, on the sender's default port when Port is empty, and Play
+file, offered while the app's folder holds a `.vrst`, plays the first one,
+by name. What the dialog refuses it shows with why, keeping what was typed.
+The app remembers the choice: at launch it connects to the last sender, if
+that was the choice, or else plays the first `.vrst`. For the lab's sender
+(above), put the phone on the VPN or the sender's network. On the sender's
+network, not over the VPN, the first connection asks for local network
+access; once refused, Settings › Privacy & Security › Local Network allows
+it. A sender the app cannot reach is the status line's reason, retried
+about every second until Source chooses another. While nothing plays, a
+label says why, and a tap on it opens the dialog.
 
 To give it a file, launch it once, then copy a `.vrst` into its folder: in
 the Files app under On My iPhone (or iPad) › Player, in Finder under the
@@ -158,10 +157,11 @@ xcrun devicectl device copy to --device <device id> \
   --source <file> --destination Documents/<name>
 ```
 
-Unless a sender is the choice, the app looks each time it builds its view:
-at launch, on a choice, and on coming back to the foreground with nothing
-playing. A file plays with loop on. A tap works the panel and the stats'
-header, one finger orbits the camera, two pan it, and a pinch zooms.
+Unless a sender is the choice, the app looks each time it builds its view,
+and with no `.vrst` asks: at launch, on a choice, and on coming back to the
+foreground with nothing playing. A file plays with loop on. A tap works the
+panel, Source and the stats' header, one finger orbits the camera, two pan
+it, and a pinch zooms.
 
 It logs the view's bring-up time, each park's wait and any failure, which
 Console.app shows. The owner checks the app on a device by hand

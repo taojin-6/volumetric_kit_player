@@ -5,10 +5,10 @@
 // the CAMetalLayer, a display link ticks the view, every touch phase reaches
 // gfx's ImGuiTouch for the controls panel, three recognizers drive the camera
 // unless the panel holds the finger, and the scene's activation parks and
-// unparks the worker. The panel's Source button opens iOS's dialog, which
-// chooses a sender by host and port, or the first .vrst in the app's
-// Documents folder, which the Files app and Finder show (Info.plist.in); the
-// choice is kept for the next launch.
+// unparks the worker. The Source button, at the top right, opens iOS's
+// dialog, which chooses a sender by host and port, or the first .vrst in the
+// app's Documents folder, which the Files app and Finder show (Info.plist.in);
+// the choice is kept for the next launch.
 
 #import "PlayerViewController.h"
 
@@ -197,7 +197,7 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   _failure.textAlignment = NSTextAlignmentCenter;
   _failure.textColor = UIColor.whiteColor;
   _failure.hidden = YES;
-  _failure.userInteractionEnabled = YES;  // with no panel, no Source button
+  _failure.userInteractionEnabled = YES;  // with no view, no Source button
   [_failure addGestureRecognizer:[[UITapGestureRecognizer alloc]
                                      initWithTarget:self
                                              action:@selector(ask)]];

@@ -6,20 +6,22 @@ is implemented.
 
 ## 2026-10-22 — The iOS app chooses what to play on screen
 
-`PlayerViewConfig::source_button`, `PlayerView::take_source_request`,
-`player::parse_live_source`, `folder_source` and `open_source`; README.md
-says how to use it.
+`PlayerViewConfig::source_button`, `draw_source`,
+`PlayerView::take_source_request`, `player::parse_live_source`,
+`folder_source` and `open_source`; README.md says how to use it.
 
-- **The panel's Source button opens iOS's own dialog** (`UIAlertController`):
-  Host and Port on the system keyboard, then Connect, Play file while
-  Documents holds a `.vrst`, or Cancel; a refusal shows why and keeps what
-  was typed. Why: the owner asked for the sender's address on screen, not in
-  a file; ImGui has no touch keyboard on iOS, and the system keyboard would
-  cover an ImGui field in the panel at the bottom.
-- **Source is opt-in, alone on the panel's first row,** the file's and the
-  live player's. A tap only records a request, which the shell takes after
-  `frame()`. Why: the desktop takes a scenario; a phone's row of playback
-  buttons has no room for another; and no UIKit runs inside the ImGui frame.
+- **The Source button opens iOS's own dialog** (`UIAlertController`). Why:
+  the owner asked for the sender's address on screen, not in a file; ImGui
+  has no touch keyboard on iOS, and the system keyboard would cover an ImGui
+  field in the panel at the bottom.
+- **Source is opt-in, a button of its own at the work area's top right,**
+  file or live, as tall as the stats' header beside it, so their body clears
+  it. A tap only records a request, which the shell takes after `frame()`.
+  Why: the desktop takes a scenario; no UIKit runs inside the ImGui frame;
+  and the controls have no room for it. Their playback row is full with
+  Normals (365 of 375 pt), the status line's row is full beside a 5-digit
+  track's line, and a row of its own would lift the controls into the stats'
+  body on a landscape phone.
 - **One parser for the typed fields, `parse_live_source`,** over
   `parse_live_address`, into the source `open_source` plays, the desktop
   app's call too, so the library links the core's config tier on every
@@ -27,10 +29,9 @@ says how to use it.
   a host with a ':' points at the Port field. Why: the port's range and the
   default port each keep one home.
 - **The choice is remembered** in `NSUserDefaults`: the sender's host and
-  port as the parser took them, or the file. At launch the app plays the
-  remembered sender, else the first `.vrst`, else asks; while nothing plays,
-  a tap on the label asks. Why: the lab's sender is typed once, and with no
-  view there is no panel to hold Source.
+  port as the parser took them, or the file. While nothing plays, a tap on
+  the label asks. Why: the lab's sender is typed once, and with no view
+  there is no Source button.
 - **The listing stays in Objective-C,** sorted as Finder sorts it
   (`localizedStandardCompare:`), and `folder_source` takes the names in that
   order. Why: no C++ collation matches Finder's, and the choice is still
@@ -191,9 +192,9 @@ the sizes.
   unparks it and restarts the link. A park that timed out, or a `frame()`
   error, drops the view and builds a new one, from frame 0: the first at the
   next activation, the second at once, once per activation; after that a
-  label says why until the next activation. Why: a park that timed out may
-  have let the step under way submit from the background (below), and a
-  rebuild is the only recovery from a lost device.
+  label says why until the next activation or a choice. Why: a park that
+  timed out may have let the step under way submit from the background
+  (below), and a rebuild is the only recovery from a lost device.
 - **A file is the first `.vrst`, by name, in the app's Documents folder**
   (a sender is chosen on screen, 2026-10-22), which `UIFileSharingEnabled`
   and `LSSupportsOpeningDocumentsInPlace` show in Finder and the Files app;
