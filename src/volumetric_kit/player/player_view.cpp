@@ -3,12 +3,10 @@
 
 #include "volumetric_kit/player/player_view.hpp"
 
-#include <cstddef>
 #include <utility>
 
 #include "imgui.h"
 #include "volumetric_kit/gfx/app/shared_device_config.hpp"
-#include "volumetric_kit/gfx/assets/mesh.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
@@ -16,7 +14,6 @@
 #include "volumetric_kit/player/controls.hpp"
 #include "volumetric_kit/player/mesh_wiring.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
 
 namespace volumetric_kit::player {
 
@@ -25,24 +22,12 @@ namespace pipelines = gfx::pipelines;
 
 namespace {
 
-// recon's buffers, drawn in place: gfx reads them through its own Vertex's
-// size and offsets, so the two layouts must agree, or every vertex misreads
-// with no error. gfx binds no tangent.
+// recon's buffers, drawn in place: gfx reads them at its own Vertex's size
+// and offsets, which recon's mesh.hpp and gfx's hybrid_mesh_pipeline.cpp each
+// pin to the same numbers.
 // TODO: a gfx live-mesh class owns this conversion (plan: once a 4th app
 // draws a live mesh).
 pipelines::LiveMesh live_mesh(const recon::mesh::DeviceMesh& mesh) {
-  using Recon = recon::mesh::Vertex;
-  using Gfx = gfx::assets::Vertex;
-  static_assert(sizeof(Recon) == sizeof(Gfx),
-                "recon and gfx vertex layouts have diverged in size");
-  static_assert(offsetof(Recon, position) == offsetof(Gfx, position),
-                "recon and gfx vertex layouts have diverged: position");
-  static_assert(offsetof(Recon, normal) == offsetof(Gfx, normal),
-                "recon and gfx vertex layouts have diverged: normal");
-  static_assert(offsetof(Recon, uv0) == offsetof(Gfx, uv0),
-                "recon and gfx vertex layouts have diverged: uv0");
-  static_assert(offsetof(Recon, color) == offsetof(Gfx, color),
-                "recon and gfx vertex layouts have diverged: color");
   pipelines::LiveMesh live;
   live.vertices = mesh.vertices;
   live.indices = mesh.indices;
