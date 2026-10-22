@@ -59,6 +59,9 @@ vp_add_test(controls volumetric_kit::player)
 # loader has none (NVIDIA's ICD).
 vp_add_test(player_view STREAMS volumetric_kit::player
             volumetric_kit::core_test_support)
+# A scenario's source played (open_source), the iOS dialog's fields parsed
+# (parse_live_source) and its folder's first stream (folder_source): host only.
+vp_add_test(scenario volumetric_kit::player)
 # The desktop app's entry point, the app run with VP_NO_WINDOW set (AGENTS.md),
 # and the scenarios in config/examples/; host only.
 vp_add_test(cli volumetric_kit::player volumetric_kit::core_config)

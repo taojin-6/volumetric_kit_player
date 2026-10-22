@@ -44,6 +44,10 @@
   <true/>
   <key>LSSupportsOpeningDocumentsInPlace</key>
   <true/>
+  <!-- The prompt before a live stream's first connection on the local
+       network. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Player plays a live stream from a sender on your network.</string>
   <!-- Without it, an app is letterboxed at a compatibility scale. -->
   <key>UILaunchScreen</key>
   <dict/>

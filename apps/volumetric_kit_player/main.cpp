@@ -15,7 +15,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -30,6 +29,7 @@
 #include "volumetric_kit/gfx/glfw/window.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/player/player_view.hpp"
+#include "volumetric_kit/player/scenario.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
 namespace {
@@ -83,22 +83,11 @@ void on_scroll(GLFWwindow* window, double /*dx*/, double dy) {
 }
 
 vkc::Status run(const cfg::Config& settings) {
-  const cfg::Source& source = settings.source;
-  // A sender's, when the scenario names a host: on LiveAddress's default
-  // port, the sender's, unless it names one too.
-  std::optional<vkp::LiveAddress> live;
-  if (!source.host.empty()) {
-    live.emplace();
-    live->host = source.host;
-    if (source.port != 0) {
-      live->port = source.port;
-    }
-  }
-  // Refusals before GLFW; connect does no I/O.
+  // Refusals before GLFW; a live player does no I/O.
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
-             live ? vkp::StreamPlayer::connect(*live)
-                  : vkp::StreamPlayer::open(source.path));
-  const std::string title = live ? vkp::to_string(*live) : source.path;
+             vkp::open_source(settings.source));
+  const std::string title =
+      player->live() ? player->live_status().address : settings.source.path;
   if (std::getenv("VP_NO_WINDOW") != nullptr) {  // cli_test's backstop
     return vkc::Status::unsupported("VP_NO_WINDOW is set, so no window for " +
                                     title);

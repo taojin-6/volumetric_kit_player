@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -41,6 +42,10 @@ struct PlayerViewConfig {
   /// header's (gfx::ui::ImGuiOverlayConfig::min_frame_height). 0 on desktop,
   /// 44 on iOS.
   float ui_min_frame_height = 0.0f;
+  /// The Source button at the top right (draw_source), which asks the shell
+  /// for something else to play (PlayerView::take_source_request): on iOS;
+  /// the desktop takes a scenario instead.
+  bool source_button = false;
   /// The Khronos validation layer on the shared instance, where it loads (a
   /// logged warning where it does not). The desktop shell sets it from its
   /// scenario's window.validation, and always in Debug; iOS has no layer
@@ -96,7 +101,7 @@ class PlayerView {
   ///                 outlive the view.
   /// @param extent   The drawable now, in pixels; both sides > 0.
   /// @param player   An opened player, not started.
-  /// @param config   The UI's sizes and validation.
+  /// @param config   The UI's sizes, the Source button and validation.
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
   ///         @p player or an empty @p extent; or the first failure (device,
   ///         swapchain, pipeline, overlay, profiler, StreamPlayer::start).
@@ -139,6 +144,13 @@ class PlayerView {
   /// @return The flags the mesh draws with (gfx::pipelines::HybridMeshFlags):
   ///         kHybridMeshNormals while @ref normals, else kHybridMeshLit.
   std::uint32_t mesh_flags() const noexcept;
+  /// @return Whether the Source button (PlayerViewConfig::source_button) was
+  ///         pressed since the last call: true once per press. The shell
+  ///         takes it after @ref frame, so it asks what to play outside the
+  ///         UI's frame.
+  bool take_source_request() noexcept {
+    return std::exchange(source_request_, false);
+  }
   /// @return The ImGui context the controls draw in. Bind the window system's
   ///         platform half to it (glfw::ImGuiGlfw, gfx::ui::ImGuiTouch),
   ///         declared after the view so it dies first.
@@ -183,7 +195,9 @@ class PlayerView {
   gfx::ui::ImGuiOverlay overlay_;
   FrameExchange exchange_;
   gfx::camera::OrbitCamera camera_;
-  bool normals_ = false;  // the mesh's shading (mesh_flags)
+  bool normals_ = false;         // the mesh's shading (mesh_flags)
+  bool source_button_ = false;   // frame() draws Source
+  bool source_request_ = false;  // pressed since take_source_request
   std::unique_ptr<StreamPlayer> player_;
   PlaybackStats stats_;  // from player_'s track
   std::optional<FrameStamp> shown_;

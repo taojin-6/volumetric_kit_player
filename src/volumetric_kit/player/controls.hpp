@@ -25,9 +25,12 @@ inline constexpr const char* kControlsWindow = "##player_controls";
 /// The stats panel's header window; its body's is derived from it
 /// (gfx::ui::begin_collapsible_panel).
 inline constexpr const char* kStatsWindow = "##player_stats";
-/// The width of the Play/Pause, Step and Normals buttons, in font sizes, so
-/// each is a stable target: "Pause" and "Normals" fit at the desktop's scale
-/// and the iOS shell's, and a phone's row stays inside 375 pt.
+/// The Source button's ImGui window (@ref draw_source).
+inline constexpr const char* kSourceWindow = "##player_source";
+/// The width of the Play/Pause, Step, Normals and Source buttons, in font
+/// sizes, so each is a stable target: "Pause" and "Normals" fit at the
+/// desktop's scale and, with "Source", at the iOS shell's, and a phone's row
+/// stays inside 375 pt.
 inline constexpr float kButtonEms = 4.5f;
 
 /// @brief Draw Play/Pause, Step, Loop and Normals in a row, the status line
@@ -47,6 +50,22 @@ inline constexpr float kButtonEms = 4.5f;
 /// @pre An ImGui frame is open on the view's context.
 void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
                    bool& normals);
+
+/// @brief Draw the Source button, which asks for something else to play, at
+///        the top right of the main viewport's work area. Its window has no
+///        padding or border, so the button is all of it, a frame tall, as
+///        the stats' header is: the stats' body below the header clears it,
+///        as the controls at the bottom do, in either orientation.
+///
+/// @code
+/// overlay.new_frame();
+/// if (draw_source()) {
+///   source_requested = true;  // PlayerView::take_source_request
+/// }
+/// @endcode
+/// @return Whether a tap or click pressed it in this frame.
+/// @pre An ImGui frame is open on the view's context.
+bool draw_source();
 
 /// @brief A live player's status line.
 ///

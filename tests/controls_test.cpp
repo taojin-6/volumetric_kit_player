@@ -9,7 +9,10 @@
 // Normals flips the view's shading and shows pressed while on, hovered or not,
 // "Pause" and "Normals" fit their buttons, a finger on the controls is
 // ImGui's, and they keep clear of the safe area; a live player's, never
-// started, are Normals over its status line. The stats sit at the
+// started, are Normals over its status line. The Source button is drawn only
+// when asked for, at the work area's top right clear of the safe area and of
+// the stats' body, leaving the controls where they were, and a tap on it is
+// one press. The stats sit at the
 // work area's top left; a finger on their header is ImGui's and on their body
 // the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
@@ -48,8 +51,10 @@ namespace ui = volumetric_kit::gfx::ui;
 using std::chrono::milliseconds;
 using std::chrono::seconds;
 using volumetric_kit::player::draw_controls;
+using volumetric_kit::player::draw_source;
 using volumetric_kit::player::FrameStamp;
 using volumetric_kit::player::kControlsWindow;
+using volumetric_kit::player::kSourceWindow;
 using volumetric_kit::player::kStatsWindow;
 using volumetric_kit::player::live_reason;
 using volumetric_kit::player::live_status_line;
@@ -284,19 +289,49 @@ class ControlsTest : public ::testing::Test {
                     std::chrono::duration<double>(seconds_));
   }
 
-  // One frame, 1/60 s after the last, with the controls and the stats in it.
+  // One frame, 1/60 s after the last, with the controls, Source while
+  // `source_shown_`, and the stats in it; a press on Source is counted.
   void frame() {
     seconds_ += 1.0 / 60.0;
     touch_->new_frame(display(seconds_, safe_area_));
     ImGui::NewFrame();
     draw_controls(*player_, std::nullopt, normals_);
+    if (source_shown_ && draw_source()) {
+      ++source_presses_;
+    }
     panel_.draw(*stats_, shown_, triangles_, render_, now(), player_->live());
     ImGui::Render();
+  }
+
+  // Source drawn from the next frame; its window takes its size on its
+  // second.
+  void show_source() {
+    source_shown_ = true;
+    frame();
+    frame();
+  }
+
+  // The ImGui item under a finger at `at` in the frame it lands in; 0 for
+  // none. It then goes, pressing nothing.
+  ImGuiID item_under(glm::vec2 at) {
+    touch_->touch_began(1, at);
+    frame();
+    const ImGuiID item = ImGui::GetCurrentContext()->HoveredId;
+    touch_->touch_cancelled(1);
+    frame();
+    frame();
+    return item;
   }
 
   // The controls, as the last frame laid them out; SetUp found them.
   const ImGuiWindow& panel() const {
     return *ImGui::FindWindowByName(kControlsWindow);
+  }
+
+  // Source's window, as the last frame laid it out; null before it is first
+  // drawn.
+  static ImGuiWindow* source_window() {
+    return ImGui::FindWindowByName(kSourceWindow);
   }
 
   // The stats' header, as the last frame laid it out; SetUp found it.
@@ -379,6 +414,8 @@ class ControlsTest : public ::testing::Test {
   std::optional<FrameStamp> shown_;
   std::uint32_t triangles_ = 0;
   std::vector<core::StageRow> render_;
+  bool source_shown_ = false;
+  int source_presses_ = 0;
   ui::EdgeInsets safe_area_;
   ImGuiContext* context_ = nullptr;
   std::unique_ptr<ui::ImGuiTouch> touch_;  // reset before the context
@@ -465,6 +502,57 @@ TEST_F(ControlsTest, ALivePlayersControlsAreNormalsOverItsStatusLine) {
   EXPECT_TRUE(normals_);
   tap(control(0));
   EXPECT_FALSE(normals_);
+}
+
+// Asked for, all of its window is the button, to its corner.
+TEST_F(ControlsTest, SourceIsDrawnOnlyWhenAskedFor) {
+  EXPECT_EQ(source_window(), nullptr);
+  show_source();
+  ASSERT_NE(source_window(), nullptr);
+  const ImGuiID source = source_window()->GetID("Source");
+  EXPECT_EQ(item_under(vp_test::source_middle(*source_window())), source);
+  EXPECT_EQ(item_under(vp_test::source_top_left(*source_window()) +
+                       glm::vec2(0.5f, 0.5f)),
+            source);
+  EXPECT_EQ(source_presses_, 0) << "the fingers pressed nothing";
+}
+
+// The controls stay where they were, and work as before.
+TEST_F(ControlsTest, ATapOnSourceIsOnePressAndTheControlsStayPut) {
+  const glm::vec2 play = control(0);
+  const float height = panel().Size.y;
+  show_source();
+  EXPECT_EQ(control(0), play);
+  EXPECT_EQ(panel().Size.y, height);
+  tap(vp_test::source_middle(*source_window()));
+  EXPECT_EQ(source_presses_, 1);
+  for (int i = 0; i < 10; ++i) {
+    frame();
+  }
+  EXPECT_EQ(source_presses_, 1) << "one tap, one press";
+  EXPECT_TRUE(player_->playing());
+  tap(control(0));
+  EXPECT_FALSE(player_->playing());
+  EXPECT_EQ(source_presses_, 1);
+}
+
+// A phone's insets in landscape, the Dynamic Island's side on the right: the
+// window is the button, kButtonEms font sizes wide and as tall as the stats'
+// header, a frame, so their body clears it. ImGui snaps a window's position
+// and size to whole points.
+TEST_F(ControlsTest, SourceSitsAtTheWorkAreasTopRightClearOfTheSafeArea) {
+  show_source();
+  const ImGuiWindow& source = *source_window();
+  EXPECT_EQ(source.Pos.x + source.Size.x, 400.0f);
+  EXPECT_EQ(source.Pos.y, 0.0f);
+  safe_area_.top = 62.0f;
+  safe_area_.right = 62.0f;
+  frame();
+  EXPECT_EQ(source.Pos.x + source.Size.x, 338.0f);
+  EXPECT_EQ(source.Pos.y, 62.0f);
+  EXPECT_NEAR(source.Size.x, vp_test::control_size(source, 0).x, 1.0f);
+  EXPECT_EQ(source.Size.y, stats_header().Size.y);
+  EXPECT_LE(source.Pos.y + source.Size.y, stats_body()->Pos.y);
 }
 
 TEST_F(ControlsTest, AFingerOnThePanelIsImGuis) {

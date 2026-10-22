@@ -44,6 +44,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   park closes it. Live, the stats show the bitrate and records a second over
   the last second (`FrameStamp::records`, `record_bytes`, `published`).
   `tests/vp_live_probe` plays one with no window, on a Mac.
+- The iOS app chooses what to play on screen: a Source button at the top
+  right (`PlayerViewConfig::source_button`, `draw_source`,
+  `PlayerView::take_source_request`) opens iOS's dialog for a sender's host
+  and port (`player::parse_live_source`) or the first `.vrst` in its
+  Documents folder (`player::folder_source`), and the app remembers the
+  choice for its next launch. It asks for local network access before its
+  first connection to a sender on the local network
+  (`NSLocalNetworkUsageDescription`).
+- `player::open_source`: the player of a scenario's source, a file's or a
+  sender's, which both apps call.
 - A normal-coloured view: Normals in the panel, beside Loop and live over the
   status line, and the desktop's N key colour the mesh by its world-space
   normals (gfx's `kHybridMeshNormals`) in place of lighting
@@ -62,6 +72,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (or `--help`), which the core's `Application::Player` loads (core
   0.17.0); `config/examples/` has a stream file's and a live sender's. A
   command line or a scenario the core refuses exits 2.
+- The library links the core's config tier on every platform, iOS
+  included, rather than the desktop app alone.
 - Meshes share their vertices (`mesh_wiring`), so the mesh ring holds,
   and each draw fetches, about a third of the bytes: Rafa2's from 191 to
   59 MB.
