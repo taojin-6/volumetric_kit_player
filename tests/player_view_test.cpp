@@ -81,15 +81,16 @@ constexpr auto kArrival = 10s;
 constexpr auto kQuiet = 300ms;
 constexpr auto kPrompt = 1s;
 
-class PlayerViewTest : public core::test::VulkanDeviceTest {
+class PlayerViewTest : public core::test::VulkanTest {
  protected:
-  // The fixture's device writes the stream; the view makes its own.
+  // The fixture's physical device says whether there is one for the view,
+  // which makes its own device.
   core::DeviceRequirements requirements() const override {
     return recon::device_requirements();
   }
 
   void SetUp() override {
-    VulkanDeviceTest::SetUp();
+    VulkanTest::SetUp();
     if (base_setup_incomplete()) {
       return;
     }
@@ -99,16 +100,15 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
       GTEST_SKIP() << headless.status().message();
     }
     surface_ = std::move(headless).value();
-    const core::Status written =
-        vp_test::write_stream(device(), allocator(), path_);
-    ASSERT_TRUE(written.ok()) << written.message();
+    path_ = scratch_.copy(VP_TEST_STREAMS, vp_test::kStream);
+    ASSERT_FALSE(path_.empty());
   }
 
   // The view goes while the fixture still counts the layer's errors.
   void TearDown() override {
     touch_.reset();
     view_.reset();
-    VulkanDeviceTest::TearDown();
+    VulkanTest::TearDown();
   }
 
   // The view's config: at `ui_scale_` and `ui_min_frame_height_`, validated
@@ -289,7 +289,7 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
   }
 
   vp_test::Scratch scratch_;
-  const std::string path_ = scratch_.file("sphere.vrst");
+  std::string path_;  // the test's copy of the stream
   gfx::windowing::SurfaceSource surface_;
   std::unique_ptr<PlayerView> view_;
   std::unique_ptr<gfx::ui::ImGuiTouch> touch_;  // destroyed before the view
@@ -369,10 +369,9 @@ TEST_F(PlayerViewTest, FramesPresentAndShownAdvances) {
 }
 
 TEST_F(PlayerViewTest, ShownMovesOntoAFrameThatMeshesNothing) {
-  const std::string path = scratch_.file("empty_frame.vrst");
-  const core::Status written =
-      vp_test::write_stream(device(), allocator(), path, /*empty=*/1);
-  ASSERT_TRUE(written.ok()) << written.message();
+  const std::string path =
+      scratch_.copy(VP_TEST_STREAMS, vp_test::kEmptyFrameStream);
+  ASSERT_FALSE(path.empty());
   ASSERT_TRUE(make_view(path, /*playing=*/false));
   view_->player().step();
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));

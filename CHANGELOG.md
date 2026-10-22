@@ -57,6 +57,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (or `--help`), which the core's `Application::Player` loads (core
   0.17.0); `config/examples/` has a stream file's and a live sender's. A
   command line or a scenario the core refuses exits 2.
+- The tests' streams are written once a ctest run, by `vp_test_streams`
+  (`vp_write_stream <dir>`), rather than encoded again by every device test.
 
 ### Fixed
 

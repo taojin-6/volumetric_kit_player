@@ -109,7 +109,6 @@ using vp_test::kIntraPeriod;
 using vp_test::kPeriodNs;
 using vp_test::pts_of;
 using vp_test::Scratch;
-using vp_test::write_stream;
 using Bytes = std::vector<std::uint8_t>;
 using Code = core::Status::Code;
 using SteadyClock = std::chrono::steady_clock;
@@ -188,8 +187,8 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     if (base_setup_incomplete()) {
       return;
     }
-    const core::Status written = write_stream(device(), allocator(), path_);
-    ASSERT_TRUE(written.ok()) << written.message();
+    path_ = scratch_.copy(VP_TEST_STREAMS, vp_test::kStream);
+    ASSERT_FALSE(path_.empty());
   }
 
   // Every test's player stops here too, so one that fails early is still
@@ -397,8 +396,9 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   }
 
   Scratch scratch_;
-  std::string path_ = scratch_.file("sphere.vrst");
-  // The stream's frame that meshes nothing (write_stream's `empty`), if any.
+  // The test's copy of the stream it plays.
+  std::string path_;
+  // The stream's frame that meshes nothing, if any.
   std::optional<std::uint64_t> empty_frame_;
   FrameExchange exchange_;
   std::uint32_t slot_ = 0;
@@ -464,11 +464,9 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
 }
 
 TEST_F(StreamPlayerTest, AFrameThatMeshesNothingReachesTheCommitWithItsStamp) {
-  path_ = scratch_.file("empty_frame.vrst");
-  empty_frame_ = 1;
-  const core::Status written =
-      write_stream(device(), allocator(), path_, empty_frame_);
-  ASSERT_TRUE(written.ok()) << written.message();
+  path_ = scratch_.copy(VP_TEST_STREAMS, vp_test::kEmptyFrameStream);
+  ASSERT_FALSE(path_.empty());
+  empty_frame_ = vp_test::kEmptyFrame;
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
@@ -1583,10 +1581,9 @@ TEST_F(LivePlayerTest, AServerGoneIsARetryAndANewOneOnItsPortGivesFrames) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
   // A new server on the same port, of the stream at twice the voxel size,
   // which a grid of the last connection's would refuse: frames again.
-  const std::string coarse = scratch_.file("coarse.vrst");
-  const core::Status written = write_stream(device(), allocator(), coarse,
-                                            std::nullopt, 2 * vp_test::kVoxel);
-  ASSERT_TRUE(written.ok()) << written.message();
+  const std::string coarse =
+      scratch_.copy(VP_TEST_STREAMS, vp_test::kCoarseStream);
+  ASSERT_FALSE(coarse.empty());
   ASSERT_NO_FATAL_FAILURE(read_recording(coarse, &recording_));
   server = serve(port);
   ASSERT_NE(server, nullptr);

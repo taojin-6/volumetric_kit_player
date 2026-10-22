@@ -209,12 +209,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -eo pipefail
-          build/tests/vp_write_stream build/smoke.vrst
+          build/tests/vp_write_stream build/streams
           cat > build/smoke.json <<'EOF'
           {
             "version": 1,
             "operation": "view",
-            "source": { "kind": "stream", "path": "smoke.vrst" },
+            "source": { "kind": "stream", "path": "streams/sphere.vrst" },
             "run": { "frames": 60 }
           }
           EOF
