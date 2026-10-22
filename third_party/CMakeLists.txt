@@ -15,8 +15,9 @@ include(FetchContent)
 # module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT) and
 # answers glm. gfx pins the same core (#147); recon's pin (b992f12, 0.15.0) is
 # newer and yields to it too, as the player declares the core first. The floor
-# below is that version, so an older FETCHCONTENT_SOURCE_DIR override is
-# refused. The player installs nothing, so the core's install rules are off too.
+# below is the pin's version (0.12.0), so an older FETCHCONTENT_SOURCE_DIR
+# override is refused. The player installs nothing, so the core's install rules
+# are off too.
 set(VKC_WITH_VULKAN ON)
 set(VKC_INSTALL OFF)
 if(VP_BUILD_TESTS)
