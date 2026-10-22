@@ -82,10 +82,13 @@ HostMesh sphere(const recon::Vec3f& centre) {
 // along x, at pts_of, an I-frame every kIntraPeriod, each record a key
 // exactly when its frame is an I-frame, at `voxel` metres a voxel. Frame
 // `empty`, if given, holds no block, so it meshes nothing: an I-frame of no
-// blocks.
+// blocks. It replaces a file at `path`, such as the last ctest run's, which
+// StreamWriter would refuse.
 core::Status write_stream(core::Device& device, core::Allocator& allocator,
                           const std::string& path,
                           std::optional<std::uint64_t> empty, float voxel) {
+  std::error_code ec;
+  std::filesystem::remove(path, ec);  // StreamWriter says why if it is left
   namespace stream = recon::stream;
   namespace vol = recon::volume;
   constexpr std::int32_t kBuckets = 1024;
