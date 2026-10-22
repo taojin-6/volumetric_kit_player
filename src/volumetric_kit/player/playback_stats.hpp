@@ -31,6 +31,7 @@ namespace volumetric_kit::player {
 /// PlaybackStats stats(player.track_stats(), player.rate());
 /// exchange.begin_frame(slot, [&](const DeviceMesh&, FrameStamp& stamp) {
 ///   stats.add_frame(stamp, PlaybackStats::Clock::now());
+///   player.taken();
 ///   return true;
 /// });
 /// const std::vector<core::StageRow> rows = stats.stage_means();

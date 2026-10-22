@@ -3,12 +3,10 @@
 
 #include "volumetric_kit/player/player_view.hpp"
 
-#include <cstddef>
 #include <utility>
 
 #include "imgui.h"
 #include "volumetric_kit/gfx/app/shared_device_config.hpp"
-#include "volumetric_kit/gfx/assets/mesh.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
@@ -16,7 +14,6 @@
 #include "volumetric_kit/player/controls.hpp"
 #include "volumetric_kit/player/mesh_wiring.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
 
 namespace volumetric_kit::player {
 
@@ -25,24 +22,12 @@ namespace pipelines = gfx::pipelines;
 
 namespace {
 
-// recon's buffers, drawn in place: gfx reads them through its own Vertex's
-// size and offsets, so the two layouts must agree, or every vertex misreads
-// with no error. gfx binds no tangent.
+// recon's buffers, drawn in place: gfx reads them at its own Vertex's size
+// and offsets, which recon's mesh.hpp and gfx's hybrid_mesh_pipeline.cpp each
+// pin to the same numbers.
 // TODO: a gfx live-mesh class owns this conversion (plan: once a 4th app
 // draws a live mesh).
 pipelines::LiveMesh live_mesh(const recon::mesh::DeviceMesh& mesh) {
-  using Recon = recon::mesh::Vertex;
-  using Gfx = gfx::assets::Vertex;
-  static_assert(sizeof(Recon) == sizeof(Gfx),
-                "recon and gfx vertex layouts have diverged in size");
-  static_assert(offsetof(Recon, position) == offsetof(Gfx, position),
-                "recon and gfx vertex layouts have diverged: position");
-  static_assert(offsetof(Recon, normal) == offsetof(Gfx, normal),
-                "recon and gfx vertex layouts have diverged: normal");
-  static_assert(offsetof(Recon, uv0) == offsetof(Gfx, uv0),
-                "recon and gfx vertex layouts have diverged: uv0");
-  static_assert(offsetof(Recon, color) == offsetof(Gfx, color),
-                "recon and gfx vertex layouts have diverged: color");
   pipelines::LiveMesh live;
   live.vertices = mesh.vertices;
   live.indices = mesh.indices;
@@ -51,6 +36,17 @@ pipelines::LiveMesh live_mesh(const recon::mesh::DeviceMesh& mesh) {
 }
 
 }  // namespace
+
+gfx::windowing::SwapchainConfig view_swapchain(VkExtent2D extent, bool live) {
+  gfx::windowing::SwapchainConfig config;
+  config.extent = extent;
+  config.preferred_present_mode = VK_PRESENT_MODE_FIFO_KHR;
+  config.depth_format = VK_FORMAT_D32_SFLOAT;
+  if (live) {
+    config.min_image_count = 2;
+  }
+  return config;
+}
 
 core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
     const gfx::windowing::SurfaceSource& surface, VkExtent2D extent,
@@ -63,9 +59,7 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
         "PlayerView::create needs a drawable of at least 1 x 1");
   }
   app::WindowedAppConfig app_config;
-  app_config.swapchain.extent = extent;
-  app_config.swapchain.preferred_present_mode = VK_PRESENT_MODE_FIFO_KHR;
-  app_config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
+  app_config.swapchain = view_swapchain(extent, player->live());
   app_config.frames_in_flight = kFramesInFlight;
   app::WindowDeviceConfig device_config;
   device_config.instance.app_name = "volumetric_kit_player";
@@ -162,6 +156,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
     stats_.add_frame(stamp, PlaybackStats::Clock::now());
     shown_triangles_ = mesh.triangle_count;
     shown_ = std::move(stamp);
+    player_->taken();
     return true;
   });
   const core::Status drawn = drawable(exchange_);
@@ -173,11 +168,12 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   clear.clear_color.float32[1] = 0.05f;
   clear.clear_color.float32[2] = 0.07f;
   clear.clear_color.float32[3] = 1.0f;
-  frame.target->begin(frame.cmd, clear);
   {
     // The stats' "draw" row: CPU is the recording, GPU the device's time
-    // where the graphics queue can time.
+    // where the graphics queue can time. It spans the whole pass, as Apple
+    // GPUs time only at a pass's bounds: inside, it reads about 0.
     const gfx::Profiler::Scope timed = profiler_.gpu_scope(frame.cmd, "draw");
+    frame.target->begin(frame.cmd, clear);
     const recon::mesh::DeviceMesh& mesh = exchange_.live();
     if (mesh.valid() && !mesh.empty()) {
       const pipelines::HybridMeshDraw draw{live_mesh(mesh)};
@@ -195,8 +191,8 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
       mesh_pipeline_.submit(frame.cmd, draws);
     }
     overlay_.render(frame.cmd);
+    frame.target->end(frame.cmd);
   }
-  frame.target->end(frame.cmd);
   // 5. Every path from begin_frame ends the frame.
   const core::Status ended = app_.end_frame(frame);
   VKC_TRY(drawn);
