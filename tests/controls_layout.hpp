@@ -9,6 +9,7 @@
 
 #include <cfloat>
 #include <cmath>
+#include <string>
 
 #include <glm/vec2.hpp>
 
@@ -17,6 +18,14 @@
 #include "volumetric_kit/player/controls.hpp"
 
 namespace vp_test {
+
+// The width of `text` in `panel`'s font as of the last frame, in points,
+// rounded up as ImGui rounds a line's. The panel's context is current.
+inline float text_width(const ImGuiWindow& panel, const std::string& text) {
+  ImFont* const font = ImGui::GetIO().Fonts->Fonts[0];
+  return std::ceil(
+      font->CalcTextSizeA(panel.FontRefSize, FLT_MAX, 0.0f, text.c_str()).x);
+}
 
 // The size of the row's `index`th control, in points, as the last frame laid
 // out `panel`: Play/Pause, Step, Loop's box, then Normals. Each is a frame
@@ -32,18 +41,13 @@ inline glm::vec2 control_size(const ImGuiWindow& panel, int index) {
 }
 
 // The width the row gives its `index`th control: its size's, and for Loop's
-// box its label's after it, rounded up as ImGui rounds a label's.
+// box its label's after it.
 inline float control_width(const ImGuiWindow& panel, int index) {
   if (index != 2) {
     return control_size(panel, index).x;
   }
-  const float label =
-      std::ceil(ImGui::GetIO()
-                    .Fonts->Fonts[0]
-                    ->CalcTextSizeA(panel.FontRefSize, FLT_MAX, 0.0f, "Loop")
-                    .x);
   return control_size(panel, 2).x + ImGui::GetStyle().ItemInnerSpacing.x +
-         label;
+         text_width(panel, "Loop");
 }
 
 // Its top left, in points.

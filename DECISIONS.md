@@ -17,8 +17,8 @@ the desktop's N key.
 - **A button shown pressed while on, `kButtonEms` wide,** not a box as Loop's:
   with its label a box took a phone's row to 402 pt, past 375; the button
   keeps it at 365.
-- **Live too,** over the status line, its one control: the shading is the
-  view's, so a sender's stream takes it as a file's does.
+- **Live too:** the shading is the view's, so a sender's stream takes it as a
+  file's does.
 - **No scenario field:** the core's Player profile has no render section; a
   default from the scenario waits for a need.
 
@@ -72,13 +72,13 @@ chunks, joined at the newest key.
   decoder is kept, as a key resyncs it.
 - **No jitter buffer in v1.** Network jitter shows as judder. Add a bounded
   delay only if the owner sees judder.
-- **The panels live:** the controls are Normals over the status line, and the
-  keys but N do nothing. The bitrate and records a second are over the last
-  second, as a live stream has no track mean: the records each frame stands
-  for (`FrameStamp::records`), by when the worker published it rather than
-  when it was taken, as the frame taken after a pause in drawing (a minimized
-  window) stands for the whole pause. They and the status line's seq count
-  records as they arrive, decoded or not, so they show what the link
+- **The panels live:** the controls are Normals over the status line, and
+  Space, Right and L do nothing. The bitrate and records a second are over
+  the last second, as a live stream has no track mean: the records each
+  frame stands for (`FrameStamp::records`), by when the worker published it
+  rather than when it was taken, as the frame taken after a pause in drawing
+  (a minimized window) stands for the whole pause. They and the status line's
+  seq count records as they arrive, decoded or not, so they show what the link
   carries. `decode` is the shown record's own, and there is no `read` row,
   as the network's wait is no stage.
 - **`vp_live_probe`** plays a live stream on gfx's headless surface and

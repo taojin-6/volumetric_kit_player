@@ -7,15 +7,14 @@
 // frame that meshes nothing too, which still presents; 0 x 0
 // skips without blocking; a step moves one frame; the worker's failure
 // surfaces from frame(); a tap on Normals switches the mesh's flags from lit to
-// normals and back, drawing either way; the panel draws at a phone's scale, and
-// its controls fit a phone and a fingertip at the iOS shell's sizes, as do the
-// stats, with the profiler's draw row in their table; ui_wants_pointer()
-// follows a finger on the panel and on the stats' header, not on their body;
-// and teardown
-// mid-playback, the profiler attached, is clean. Whether the draw row has a
-// device half is not checked, as the view keeps its profiler to itself; the
-// owner checks the GPU column by hand. The view
-// makes its own shared device, validated as the test policy asks, so the
+// normals and back, and frames keep presenting; the panel draws at a phone's
+// scale, and its controls fit a phone and a fingertip at the iOS shell's
+// sizes, as do the stats, with the profiler's draw row in their table;
+// ui_wants_pointer() follows a finger on the panel and on the stats' header,
+// not on their body; and teardown mid-playback, the profiler attached, is
+// clean. Whether the draw row has a device half is not checked, as the view
+// keeps its profiler to itself; the owner checks the GPU column by hand. The
+// view makes its own shared device, validated as the test policy asks, so the
 // layer's errors fail the test. The tests skip where the
 // loader offers no headless surface (NVIDIA's ICD). On Apple a skip fails
 // (CMakeLists.txt), and MoltenVK plans two queue families, so the mesh's
@@ -27,9 +26,7 @@
 
 #include <gtest/gtest.h>
 
-#include <cfloat>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -282,14 +279,6 @@ class PlayerViewTest : public core::test::VulkanDeviceTest {
            2.0f * ImGui::GetStyle().DisplaySafeAreaPadding.x;
   }
 
-  // The width of `text` in `panel`'s font as of the last frame, in points,
-  // rounded up as ImGui rounds a line's. The view's context is current.
-  static float text_width(const ImGuiWindow& panel, const std::string& text) {
-    ImFont* const font = ImGui::GetIO().Fonts->Fonts[0];
-    return std::ceil(
-        font->CalcTextSizeA(panel.FontRefSize, FLT_MAX, 0.0f, text.c_str()).x);
-  }
-
   vp_test::Scratch scratch_;
   const std::string path_ = scratch_.file("sphere.vrst");
   gfx::windowing::SurfaceSource surface_;
@@ -443,10 +432,12 @@ TEST_F(PlayerViewTest, TheWorkersFailureSurfacesFromFrame) {
   EXPECT_FALSE(view_->shown().has_value());
 }
 
-// Lit at first; a tap on Normals, the row's last control, colours the mesh by
-// its normals, with frames drawn so; another lights it again, and
-// set_normals does as a tap does. Whether a frame shows the normals' colours
-// is gfx's to test, as the view's swapchain cannot be read back.
+// Lit at first; a tap on Normals, the row's last control, flips normals() and
+// mesh_flags() to the normals', and frames keep presenting; another flips them
+// back, and set_normals does as a tap does. Whether frame()'s draw takes
+// mesh_flags() is not checked, as gfx's swapchain images are colour
+// attachments only and cannot be read back; the normals' colours are gfx's to
+// test.
 TEST_F(PlayerViewTest, ATapOnNormalsSwitchesTheMeshsFlags) {
   using gfx::pipelines::kHybridMeshLit;
   using gfx::pipelines::kHybridMeshNormals;
@@ -461,8 +452,8 @@ TEST_F(PlayerViewTest, ATapOnNormalsSwitchesTheMeshsFlags) {
   tap(normals);
   EXPECT_TRUE(view_->normals());
   EXPECT_EQ(view_->mesh_flags(), kHybridMeshNormals);
-  const std::uint64_t lit = view_->shown()->index;
-  ASSERT_TRUE(tick_until([&] { return view_->shown()->index != lit; }))
+  const std::uint64_t before = view_->shown()->index;
+  ASSERT_TRUE(tick_until([&] { return view_->shown()->index != before; }))
       << "no frame drawn in normals";
   tap(normals);
   EXPECT_FALSE(view_->normals());
@@ -545,13 +536,14 @@ TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
   EXPECT_LE(panel->ContentSize.x + padding, widest_panel());
   FrameStamp last;
   last.index = 99'998;
-  EXPECT_LE(text_width(*panel, status_line(last, 99'999, true, true)) + padding,
+  EXPECT_LE(vp_test::text_width(*panel, status_line(last, 99'999, true, true)) +
+                padding,
             widest_panel());
   const float label_padding = 2.0f * ImGui::GetStyle().FramePadding.x;
   EXPECT_GE(vp_test::control_size(*panel, 0).x,
-            text_width(*panel, "Pause") + label_padding);
+            vp_test::text_width(*panel, "Pause") + label_padding);
   EXPECT_GE(vp_test::control_size(*panel, 3).x,
-            text_width(*panel, "Normals") + label_padding);
+            vp_test::text_width(*panel, "Normals") + label_padding);
   const ImGuiID controls[] = {panel->GetID("###play"), panel->GetID("Step"),
                               panel->GetID("Loop"), panel->GetID("Normals")};
   for (int i = 0; i < 4; ++i) {

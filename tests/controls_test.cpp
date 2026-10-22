@@ -6,9 +6,10 @@
 // live_reason; parse_live_address; and draw_controls and StatsPanel on a
 // CPU-only ImGui context fed by gfx's ImGuiTouch, over a stream opened but not
 // started. A tap on Play/Pause flips playing(), Step pauses, Loop toggles,
-// Normals flips the view's shading and shows pressed while on, a finger on the
-// controls is ImGui's, and they keep clear of the safe area; a live player's,
-// never started, are Normals over its status line. The stats sit at the
+// Normals flips the view's shading and shows pressed while on, hovered or not,
+// "Pause" and "Normals" fit their buttons, a finger on the controls is
+// ImGui's, and they keep clear of the safe area; a live player's, never
+// started, are Normals over its status line. The stats sit at the
 // work area's top left; a finger on their header is ImGui's and on their body
 // the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
@@ -321,7 +322,7 @@ class ControlsTest : public ::testing::Test {
 
   // Whether the last frame filled Normals, the row's last control, in a
   // pressed button's colour: a vertex of that colour in its frame. With no
-  // finger on the panel, only its toggle draws that colour there.
+  // finger pressing the panel, only its toggle draws that colour there.
   bool normals_drawn_pressed() const {
     const ImU32 pressed = ImGui::GetColorU32(ImGuiCol_ButtonActive);
     const glm::vec2 min = vp_test::control_top_left(panel(), 3);
@@ -407,6 +408,7 @@ TEST_F(ControlsTest, LoopToggles) {
   EXPECT_TRUE(player_->loop());
 }
 
+// Pressed while on, under a pointer too, as a mouse rests on it after a click.
 TEST_F(ControlsTest, NormalsFlipsTheViewsShadingAndShowsPressedWhileOn) {
   ASSERT_FALSE(normals_);
   EXPECT_FALSE(normals_drawn_pressed());
@@ -415,9 +417,26 @@ TEST_F(ControlsTest, NormalsFlipsTheViewsShadingAndShowsPressedWhileOn) {
   EXPECT_TRUE(normals_drawn_pressed());
   EXPECT_TRUE(player_->playing());
   EXPECT_TRUE(player_->loop());
+  touch_->touch_began(1, control(3));
+  frame();  // its position alone: hovered, not held
+  EXPECT_TRUE(normals_drawn_pressed()) << "hovered";
+  touch_->touch_cancelled(1);
+  frame();
+  frame();
+  EXPECT_TRUE(normals_);
   tap(control(3));
   EXPECT_FALSE(normals_);
   EXPECT_FALSE(normals_drawn_pressed());
+}
+
+// At the desktop's scale, this context's, as at the iOS shell's
+// (player_view_test), "Pause" and "Normals" fit their buttons.
+TEST_F(ControlsTest, PauseAndNormalsFitTheirButtons) {
+  const float padding = 2.0f * ImGui::GetStyle().FramePadding.x;
+  EXPECT_GE(vp_test::control_size(panel(), 0).x,
+            vp_test::text_width(panel(), "Pause") + padding);
+  EXPECT_GE(vp_test::control_size(panel(), 3).x,
+            vp_test::text_width(panel(), "Normals") + padding);
 }
 
 // A live player's controls are Normals over its status line: a frame and a

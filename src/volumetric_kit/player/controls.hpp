@@ -26,8 +26,8 @@ inline constexpr const char* kControlsWindow = "##player_controls";
 /// (gfx::ui::begin_collapsible_panel).
 inline constexpr const char* kStatsWindow = "##player_stats";
 /// The width of the Play/Pause, Step and Normals buttons, in font sizes, so
-/// each is a stable target: "Pause" and "Normals" fit at any scale, and a
-/// phone's row stays inside 375 pt.
+/// each is a stable target: "Pause" and "Normals" fit at the desktop's scale
+/// and the iOS shell's, and a phone's row stays inside 375 pt.
 inline constexpr float kButtonEms = 4.5f;
 
 /// @brief Draw Play/Pause, Step, Loop and Normals in a row, the status line

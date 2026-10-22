@@ -33,18 +33,20 @@ std::string rate_text(double fps) {
 // A button's size: kButtonEms font sizes wide, a frame tall.
 ImVec2 button_size() { return {kButtonEms * ImGui::GetFontSize(), 0.0f}; }
 
-// Normals, a button drawn pressed while on (DECISIONS.md).
+// Normals, a button drawn pressed while on, hovered or not, as a mouse stays
+// on it after a click (DECISIONS.md).
 void draw_normals(bool& normals) {
   const bool on = normals;
   if (on) {
-    ImGui::PushStyleColor(ImGuiCol_Button,
-                          ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    const ImVec4 pressed = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+    ImGui::PushStyleColor(ImGuiCol_Button, pressed);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, pressed);
   }
   if (ImGui::Button("Normals", button_size())) {
     normals = !normals;
   }
   if (on) {
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(2);
   }
 }
 
