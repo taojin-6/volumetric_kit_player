@@ -1042,9 +1042,10 @@ class RawPeer {
  public:
   using Feed = std::function<Bytes(std::uint64_t piece)>;
 
-  RawPeer(Feed feed, std::chrono::milliseconds period)
+  RawPeer(Feed feed, std::chrono::milliseconds period, int send_buffer = 0)
       : feed_(std::move(feed)),
         period_(period),
+        send_buffer_(send_buffer),
         listener_(listen_on_loopback(&port_)),
         thread_([this] { run(); }) {}
   ~RawPeer() {
@@ -1097,10 +1098,15 @@ class RawPeer {
     }
   }
 
-  // Non-blocking, and on Apple no SIGPIPE.
-  static bool prepare(int fd) {
+  // Non-blocking, optionally bounded buffering, and on Apple no SIGPIPE.
+  bool prepare(int fd) const {
     const int flags = ::fcntl(fd, F_GETFL);
     if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+      return false;
+    }
+    if (send_buffer_ != 0 &&
+        ::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &send_buffer_,
+                     sizeof send_buffer_) != 0) {
       return false;
     }
 #ifdef __APPLE__
@@ -1169,6 +1175,7 @@ class RawPeer {
 
   Feed feed_;  // the peer's thread's alone
   const std::chrono::milliseconds period_;
+  const int send_buffer_;
   std::uint16_t port_ = 0;
   core::UniqueFd listener_;
   std::atomic<bool> stop_{false};
@@ -1390,13 +1397,16 @@ class LivePlayerTest : public StreamPlayerTest {
     };
   }
 
-  // With K0 published but untaken, and P1 decoded behind it, drain a burst
-  // within less than the time a 10 ms wait before each record/receive would
-  // take. The burst has valid framing but invalid codec payloads, so none
-  // of the measured work depends on the GPU. Framing and allocation happen
-  // before the timer starts too.
-  void expect_burst_drained_while_untaken(std::size_t count,
-                                          std::size_t payload_size) {
+  // Time a burst with K0 published but untaken and P1 decoded behind it, or
+  // with equally sized invalid K0/P1 payloads so no frame waits. The burst
+  // also has valid framing but invalid codec payloads: none of the measured
+  // work depends on the GPU. Framing and allocation precede the timer too.
+  // For a large record, time the sender getting its bytes out through bounded
+  // socket buffers, holding its last byte back until afterwards: the record's
+  // CRC, expensive under TSan, cannot start within the timed interval.
+  void measure_burst_drain(std::size_t count, std::size_t payload_size,
+                           bool untaken, bool time_sender,
+                           SteadyClock::duration* elapsed) {
     core::Result<stream::ChunkEncoder> made =
         stream::ChunkEncoder::create(recording_.session);
     ASSERT_TRUE(made.ok()) << made.status().message();
@@ -1416,9 +1426,13 @@ class LivePlayerTest : public StreamPlayerTest {
       return true;
     };
     Bytes initial = encoder.session_chunk();
-    ASSERT_TRUE(append(recording_.infos[0], recording_.payloads[0], &initial));
+    const Bytes key = untaken ? recording_.payloads[0]
+                              : Bytes(recording_.payloads[0].size(), 0);
+    ASSERT_TRUE(append(recording_.infos[0], key, &initial));
     Bytes behind;
-    ASSERT_TRUE(append(recording_.infos[1], recording_.payloads[1], &behind));
+    const Bytes predicted = untaken ? recording_.payloads[1]
+                                    : Bytes(recording_.payloads[1].size(), 0);
+    ASSERT_TRUE(append(recording_.infos[1], predicted, &behind));
     stream::RecordInfo info = recording_.infos[1];
     info.seq = 2;
     info.pts_ns = pts_of(info.seq);
@@ -1430,11 +1444,19 @@ class LivePlayerTest : public StreamPlayerTest {
       info.pts_ns = pts_of(info.seq);
       ASSERT_TRUE(append(info, payload, &burst));
     }
+    Bytes tail;
+    if (time_sender) {
+      // The last payload byte and any padding, so the body stays incomplete.
+      const std::size_t withheld = 1 + (8 - payload_size % 8) % 8;
+      tail.assign(burst.end() - withheld, burst.end());
+      burst.resize(burst.size() - withheld);
+    }
     const std::uint64_t last = info.seq;
     std::atomic<unsigned> phase{0};
     const RawPeer peer(
         [initial = std::move(initial), behind = std::move(behind),
-         burst = std::move(burst), &phase, sent = 0u](std::uint64_t) mutable {
+         burst = std::move(burst), tail = std::move(tail), &phase,
+         sent = 0u](std::uint64_t) mutable {
           if (sent == 0) {
             ++sent;
             return std::move(initial);
@@ -1447,35 +1469,58 @@ class LivePlayerTest : public StreamPlayerTest {
             ++sent;
             return std::move(burst);
           }
+          if (sent == 3) {
+            ++sent;
+            phase = 3;  // the preceding send_all completed
+          }
+          if (sent == 4 && phase >= 4) {
+            ++sent;
+            return std::move(tail);
+          }
           return Bytes();
         },
-        1ms);
+        1ms, time_sender ? 256 * 1024 : 0);
     StreamPlayer* player = start_live(peer.port());
     ASSERT_NE(player, nullptr);
-    const std::atomic<bool> cancel{false};
-    ASSERT_TRUE(
-        eventually([&] { return !exchange_.wait_collected(0ms, cancel); }));
+    if (untaken) {
+      const std::atomic<bool> cancel{false};
+      ASSERT_TRUE(
+          eventually([&] { return !exchange_.wait_collected(0ms, cancel); }));
+    } else {
+      ASSERT_TRUE(eventually([&] {
+        const LiveStatus status = player->live_status();
+        return status.state == LiveState::kLive && status.seq == 0;
+      }));
+    }
     phase = 1;
-    // Seeing record 2 proves P1's decode finished. The invalid record does
-    // not replace P1, which remains in hand behind the untaken K0.
+    // Seeing record 2 proves P1's decode finished (or was skipped). It does
+    // not replace a decoded P1, which remains behind the untaken K0.
     ASSERT_TRUE(eventually([&] { return player->live_status().seq == 2; }));
     const SteadyClock::time_point sent = SteadyClock::now();
     phase = 2;
-    ASSERT_TRUE(eventually([&] { return player->live_status().seq == last; }));
-    const auto elapsed = SteadyClock::now() - sent;
+    ASSERT_TRUE(eventually([&] {
+      return time_sender ? phase == 3 : player->live_status().seq == last;
+    }));
+    *elapsed = SteadyClock::now() - sent;
+    if (time_sender) {
+      EXPECT_EQ(player->live_status().seq, 2u) << "body must remain incomplete";
+    }
+    phase = 4;
     RecordProperty(
-        "drain_ms",
-        std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
-    EXPECT_LT(elapsed, 750ms)
-        << std::chrono::duration<double, std::milli>(elapsed).count()
-        << " ms to drain queued input with an untaken mesh";
-    const std::optional<FrameStamp> first = take(kArrival);
-    ASSERT_TRUE(first.has_value());
-    EXPECT_EQ(first->index, 0u);
-    const std::optional<FrameStamp> next = take(kArrival);
-    ASSERT_TRUE(next.has_value());
-    EXPECT_EQ(next->index, 1u);
-    EXPECT_EQ(next->records, count + 2);
+        untaken ? "drain_ms" : "baseline_ms",
+        std::chrono::duration_cast<std::chrono::milliseconds>(*elapsed)
+            .count());
+    ASSERT_TRUE(eventually([&] { return player->live_status().seq == last; }));
+    if (untaken) {
+      const std::optional<FrameStamp> first = take(kArrival);
+      ASSERT_TRUE(first.has_value());
+      EXPECT_EQ(first->index, 0u);
+      const std::optional<FrameStamp> next = take(kArrival);
+      ASSERT_TRUE(next.has_value());
+      EXPECT_EQ(next->index, 1u);
+      EXPECT_EQ(next->records, count + 2);
+    }
+    EXPECT_LT(stop_time(*player), kPrompt);
     EXPECT_TRUE(player->status().ok()) << player->status().message();
   }
 
@@ -1585,13 +1630,30 @@ TEST_F(LivePlayerTest, AllPublishedWhileAMeshWaitsAreDecodedAndTheNewestShown) {
 TEST_F(LivePlayerTest, AnUntakenMeshDoesNotDelayBufferedRecords) {
   // All 128 tiny records fit in one receive. A wait per record adds at
   // least 1.28 s even though parsing and skipping them takes little time.
-  expect_burst_drained_while_untaken(128, 1);
+  SteadyClock::duration elapsed{};
+  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(128, 1, /*untaken=*/true,
+                                              /*time_sender=*/false, &elapsed));
+  EXPECT_LT(elapsed, 750ms)
+      << std::chrono::duration<double, std::milli>(elapsed).count()
+      << " ms to drain queued records with an untaken mesh";
 }
 
 TEST_F(LivePlayerTest, AnUntakenMeshDoesNotDelayAPartialRecord) {
   // At most 256 KiB is received by each nonblocking next(): one record
   // spanning 128 receives must also keep draining while no record is ready.
-  expect_burst_drained_while_untaken(1, 32 * 1024 * 1024);
+  // Bounded socket buffers cannot hold more than a small fraction of it.
+  // Compare against the same receive/parser work without a pending frame,
+  // so sanitizer overhead is paid in both timings rather than mistaken for
+  // waits between receives.
+  SteadyClock::duration baseline{};
+  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(
+      1, 32 * 1024 * 1024, /*untaken=*/false, /*time_sender=*/true, &baseline));
+  SteadyClock::duration elapsed{};
+  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(
+      1, 32 * 1024 * 1024, /*untaken=*/true, /*time_sender=*/true, &elapsed));
+  EXPECT_LT(elapsed, baseline + 750ms)
+      << std::chrono::duration<double, std::milli>(elapsed - baseline).count()
+      << " ms added to socket draining by an untaken mesh";
 }
 
 // Records one at a time, each published once the frame before is taken: each
