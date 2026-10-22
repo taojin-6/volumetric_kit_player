@@ -57,6 +57,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (or `--help`), which the core's `Application::Player` loads (core
   0.17.0); `config/examples/` has a stream file's and a live sender's. A
   command line or a scenario the core refuses exits 2.
+- Meshes share their vertices (`mesh_wiring`), so the mesh ring holds,
+  and each draw fetches, about a third of the bytes: Rafa2's from 191 to
+  59 MB. `PlayerView::mesh()` reads the drawn mesh's counts.
 
 ### Fixed
 

@@ -126,6 +126,11 @@ class PlayerView {
   bool ui_wants_pointer() const noexcept;
   /// @return The last stream frame drawn, for a read-out (the CI smoke).
   const std::optional<FrameStamp>& shown() const noexcept { return shown_; }
+  /// @return Its mesh, in the extractor's ring, for a read-out of its counts;
+  ///         generation 0 before the first.
+  const recon::mesh::DeviceMesh& mesh() const noexcept {
+    return exchange_.live();
+  }
   /// @return The stats panel, for a read-out of its figures (vp_live_probe).
   const StatsPanel& stats_panel() const noexcept { return stats_panel_; }
 

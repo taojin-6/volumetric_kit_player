@@ -3,8 +3,9 @@
 
 // PlayerView on a device, over gfx's headless surface and the tests' stream
 // (test_stream.hpp), with gfx's ImGuiTouch as the platform half: create
-// refuses what it cannot use; frames present and shown() advances, onto a
-// frame that meshes nothing too, which still presents; 0 x 0
+// refuses what it cannot use; frames present and shown() advances, their
+// triangles sharing vertices, onto a frame that meshes nothing too, which
+// still presents; 0 x 0
 // skips without blocking; a step moves one frame; the worker's failure
 // surfaces from frame(); the panel draws at a phone's scale, and its controls
 // fit a phone and a fingertip at the iOS shell's sizes, as do the stats, with
@@ -358,6 +359,11 @@ TEST_F(PlayerViewTest, FramesPresentAndShownAdvances) {
   ASSERT_TRUE(advanced) << shown.size() << " frame(s) shown";
   // In order, from the first; the loop wraps only after kFrames.
   EXPECT_EQ(shown, (std::vector<std::uint64_t>{0, 1, 2}));
+  // Its triangles share their vertices (mesh_wiring): fewer than 3 each.
+  const recon::mesh::DeviceMesh& mesh = view_->mesh();
+  EXPECT_TRUE(mesh.shares_vertices);
+  EXPECT_GT(mesh.triangle_count, 0u);
+  EXPECT_LT(mesh.vertex_count, 3 * mesh.triangle_count);
   for (int i = 0; i < 3; ++i) {
     const core::Result<bool> ticked = tick();
     ASSERT_TRUE(ticked.ok()) << ticked.status().message();
