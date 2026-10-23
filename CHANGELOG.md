@@ -59,11 +59,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   normals (gfx's `kHybridMeshNormals`) in place of lighting
   (`PlayerView::normals`, `set_normals` and `mesh_flags`; `draw_controls`
   takes the view's `normals`).
-- The decoder-side deblock (recon #264), on by default:
-  `StreamPlayer::set_deblock` and `deblock` turn it on and off, and while
-  paused the frame shown is rebuilt with the change and published again
-  (`FrameStamp::rebuild`). Each frame carries what it did
-  (`FrameStamp::deblock_on` and `deblock`).
+- The decoder-side deblock (recon #264), on by default: Deblock in the panel
+  and the desktop's D key turn it on and off (`StreamPlayer::set_deblock`
+  and `deblock`), and while paused the frame shown is rebuilt with the
+  change and drawn again (`FrameStamp::rebuild`). The stats say what it did
+  to the frame drawn, off, its filter or skipped, and the frame's T
+  (`FrameStamp::deblock_on` and `deblock`). The iOS app keeps the choice
+  for the next source.
 
 ### Changed
 

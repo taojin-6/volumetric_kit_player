@@ -7,7 +7,9 @@
 // triangles sharing vertices, onto a frame that meshes nothing too, which
 // still presents; 0 x 0 skips without blocking; a step moves one frame; the
 // worker's failure surfaces from frame(); a tap on Normals switches the mesh's
-// flags from lit to normals and back, and frames keep presenting; the panel
+// flags from lit to normals and back, and frames keep presenting; a tap on
+// Deblock while paused shows the frame shown rebuilt, and the stats say so;
+// the panel
 // draws at a phone's scale; in portrait and in landscape, at the iOS shell's
 // sizes, its controls fit a phone and a fingertip, as does Source, clear of
 // them, and so do the stats, clear of both, with the profiler's draw row in
@@ -492,6 +494,40 @@ TEST_F(PlayerViewTest, ATapOnNormalsSwitchesTheMeshsFlags) {
   EXPECT_TRUE(view_->player().playing()) << "the taps pressed Normals alone";
 }
 
+// The true-SDF stream, which the deblock runs on, paused on frame 0: a tap
+// turns the deblock off, and the worker's rebuild of frame 0 is drawn; the
+// stats, past a refresh, say it is off.
+TEST_F(PlayerViewTest, ATapOnDeblockWhilePausedRebuildsTheFrameShown) {
+  const std::string path =
+      scratch_.copy(VP_TEST_STREAMS, vp_test::kTrueSdfStream);
+  ASSERT_FALSE(path.empty());
+  ASSERT_TRUE(make_view(path, /*playing=*/false));
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  EXPECT_TRUE(view_->shown()->deblock_on);
+  EXPECT_STREQ(view_->shown()->deblock.filter, "R");
+  tick_for(2 * StatsPanel::kRefresh);
+  const std::vector<std::string> before = view_->stats_panel().lines();
+  ASSERT_EQ(before.size(), 4u);
+  EXPECT_EQ(before[2], "deblock R · T 1.962 mm");
+  ImGui::SetCurrentContext(view_->ui_context());
+  const ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
+  ASSERT_NE(panel, nullptr);
+  tap(vp_test::control_middle(*panel, vp_test::kDeblock));
+  EXPECT_FALSE(view_->player().deblock());
+  ASSERT_TRUE(tick_until([&] { return view_->shown()->rebuild; }))
+      << "no rebuild drawn";
+  EXPECT_EQ(view_->shown()->index, 0u);
+  EXPECT_FALSE(view_->shown()->deblock_on);
+  tick_for(2 * StatsPanel::kRefresh);
+  const std::vector<std::string> after = view_->stats_panel().lines();
+  ASSERT_EQ(after.size(), 4u);
+  EXPECT_EQ(after[2], "deblock off · T 1.962 mm");
+  EXPECT_FALSE(view_->player().playing());
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
+
 TEST_F(PlayerViewTest, UiWantsPointerFollowsAFingerOnThePanel) {
   ASSERT_TRUE(make_view(/*playing=*/false));
   // An auto-sized panel takes its size on its second frame.
@@ -529,11 +565,12 @@ TEST_F(PlayerViewTest, ThePanelDrawsAtAPhonesScale) {
 }
 
 // On the narrowest phone in portrait and the shortest with a notch in
-// landscape, at the iOS shell's sizes, Source included: a fingertip's square
-// at each control's top left and at Source's lands on it, as does Source's far
-// edge; "Pause", "Normals" and "Source" fit their buttons; the panel fits
-// across, both its row and the widest status line, a 5-digit track's playing
-// in a loop; and Source ends above it, so the two never overlap.
+// landscape, at the iOS shell's sizes, Source included: Deblock is below the
+// row in portrait and on it in landscape; a fingertip's square at each
+// control's top left and at Source's lands on it, as does Source's far edge;
+// "Pause", "Normals" and "Source" fit their buttons; the panel fits across,
+// both its row and the widest status line, a 5-digit track's playing in a
+// loop; and Source ends above it, so the two never overlap.
 TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
   struct Target {
     ImGuiID id;
@@ -558,6 +595,8 @@ TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
     ImGuiWindow* const source = ImGui::FindWindowByName(kSourceWindow);
     ASSERT_NE(panel, nullptr);
     ASSERT_NE(source, nullptr);
+    EXPECT_EQ(vp_test::deblock_on_row(*panel),
+              phone.pixels.width == kLandscapePhone.width);
     // The width ImGui fits the panel to. Before the first frame the status
     // line says "loading", so it fits the row.
     const float padding = 2.0f * panel->WindowPadding.x;
@@ -579,8 +618,10 @@ TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
         {panel->GetID("Step"), vp_test::control_top_left(*panel, 1)},
         {panel->GetID("Loop"), vp_test::control_top_left(*panel, 2)},
         {panel->GetID("Normals"), vp_test::control_top_left(*panel, 3)},
+        {panel->GetID("Deblock"),
+         vp_test::control_top_left(*panel, vp_test::kDeblock)},
         {source->GetID("Source"), vp_test::source_top_left(*source)}};
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 6; ++i) {
       for (const float dx : {0.5f, kFingertip - 0.5f}) {
         for (const float dy : {0.5f, kFingertip - 0.5f}) {
           EXPECT_EQ(item_under(targets[i].corner + glm::vec2(dx, dy)),
@@ -594,12 +635,13 @@ TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
     EXPECT_EQ(item_under(vp_test::source_top_left(*source) +
                          glm::vec2(vp_test::control_size(*source, 0).x - 1.0f,
                                    kFingertip - 0.5f)),
-              targets[4].id);
+              targets[5].id);
     EXPECT_LE(source->Pos.y + source->Size.y, panel->Pos.y);
     // The fingers pressed nothing.
     EXPECT_FALSE(view_->player().playing());
     EXPECT_TRUE(view_->player().loop());
     EXPECT_FALSE(view_->normals());
+    EXPECT_TRUE(view_->player().deblock());
     EXPECT_FALSE(view_->take_source_request());
     EXPECT_FALSE(view_->shown().has_value());
   }

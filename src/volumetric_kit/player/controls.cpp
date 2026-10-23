@@ -4,6 +4,7 @@
 #include "volumetric_kit/player/controls.hpp"
 
 #include <cstdio>
+#include <string_view>
 #include <utility>
 
 #include "imgui.h"
@@ -57,7 +58,28 @@ void draw_normals(bool& normals) {
   }
 }
 
-// A file's controls: Play/Pause, Step, Loop and Normals, then the status line.
+// Deblock, a box, after the row's last control, or below the row when the
+// row would not fit the work area with it.
+void draw_deblock(StreamPlayer& player) {
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float box = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x +
+                    ImGui::CalcTextSize("Deblock").x;
+  // The window's width with it on the row, against the widest ImGui lets an
+  // auto-sized window grow.
+  const float row = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x +
+                    style.ItemSpacing.x + box + style.WindowPadding.x;
+  if (row <= ImGui::GetMainViewport()->WorkSize.x -
+                 2.0f * style.DisplaySafeAreaPadding.x) {
+    ImGui::SameLine();
+  }
+  bool on = player.deblock();
+  if (ImGui::Checkbox("Deblock", &on)) {
+    player.set_deblock(on);
+  }
+}
+
+// A file's controls: Play/Pause, Step, Loop, Normals and Deblock, then the
+// status line.
 void draw_file_controls(StreamPlayer& player,
                         const std::optional<FrameStamp>& shown, bool& normals) {
   const ImVec2 button = button_size();
@@ -81,6 +103,7 @@ void draw_file_controls(StreamPlayer& player,
   }
   ImGui::SameLine();
   draw_normals(normals);
+  draw_deblock(player);
   ImGui::TextUnformatted(
       status_line(shown, player.frame_count(), player.playing(), loop).c_str());
 }
@@ -97,6 +120,7 @@ void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
   if (ImGui::Begin(kControlsWindow, nullptr, kFlags)) {
     if (player.live()) {
       draw_normals(normals);
+      draw_deblock(player);
       ImGui::TextUnformatted(
           live_status_line(player.live_status(), Playback::Clock::now())
               .c_str());
@@ -167,10 +191,19 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
   const std::optional<double> mbit =
       live ? stats.rolling_mbit_per_s(now) : stats.mean_mbit_per_s();
   std::string frame = "frame - · - kB · - k tris";
+  std::string deblock = "deblock - · T - mm";
   if (shown) {
     frame = std::string("frame ") + (shown->key ? "I" : "P") + " · " +
             fixed(static_cast<double>(shown->bytes) / 1e3, 1) + " kB · " +
             fixed(triangles / 1e3, 0) + " k tris";
+    const char* filter = "off";
+    if (shown->deblock_on) {
+      filter = std::string_view(shown->deblock.filter) == "off"
+                   ? "skipped"
+                   : shown->deblock.filter;
+    }
+    deblock = std::string("deblock ") + filter + " · T " +
+              fixed(static_cast<double>(shown->deblock.step) * 1e3, 3) + " mm";
   }
   std::string rate = "rate " + fixed(stats.frames_per_s(now), 1);
   if (const std::optional<double> nominal = stats.nominal_fps()) {
@@ -182,7 +215,7 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
   }
   return {"bitrate " + (mbit ? fixed(*mbit, 1) : "-") + " Mbit/s" +
               (live ? " · last 1 s" : ""),
-          std::move(frame), std::move(rate)};
+          std::move(frame), std::move(deblock), std::move(rate)};
 }
 
 void StatsPanel::draw(const PlaybackStats& stats,
