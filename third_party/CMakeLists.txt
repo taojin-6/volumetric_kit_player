@@ -13,10 +13,9 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first, and the
 # config tier: its Source, which the library's open_source takes on every
 # platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
-# is core main at #49's merge (ff44a98, 0.19.0), gfx's pin too; its iOS module,
-# cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT) and answers
-# glm. recon's pin (7bb81da, 0.16.0) is older and yields to it, as the player
-# declares the core first. The floor below is the oldest core the player and its
+# is core main at #49's merge (ff44a98, 0.19.0), gfx's and recon's pin too; its
+# iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT)
+# and answers glm. The floor below is the oldest core the player and its
 # siblings build with: gfx's 0.18.0, for Device::pipeline_cache (the Player
 # profile is 0.17.0's), so an older FETCHCONTENT_SOURCE_DIR override is refused.
 set(VKC_WITH_VULKAN ON)
@@ -35,19 +34,15 @@ vkc_require_core(0.18.0 VULKAN CONFIG)
 # The stream reader, the codec's decode grid, Marching Cubes, the mesh exchange
 # and the live stream's client. Its tests, examples and -Werror stay off in a
 # subproject, so its library's core floor (0.2.0) is the one checked. The pin is
-# recon #269's head (e9424a8), StreamClient::next's progress output, based on
-# main at #270's merge (d7577df): #266's block ceiling for
-# codec::make_decode_grid and decode_growing, beside #260's
-# networking::StreamClient and StreamServer, #256's empty mesh payload at
-# MeshExchange's commit and #255's volume::kDefaultBucketSize /
-# kDefaultMaxChain. recon main's #271, after it, changes nothing the player
-# builds.
-#
-# TODO: pin #269's merge once it lands on recon main.
+# recon main at #269's merge (ab8d01c): #269's StreamClient::next progress
+# output and #266's block ceiling for codec::make_decode_grid and
+# decode_growing, beside #260's networking::StreamClient and StreamServer,
+# #256's empty mesh payload at MeshExchange's commit and #255's
+# volume::kDefaultBucketSize / kDefaultMaxChain.
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG e9424a8b2e0dce30e19b30fc973a3ff1a8c1b7e9)
+  GIT_TAG ab8d01c58a0907c5ab0475620a87ccdfddb2a56b)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------
