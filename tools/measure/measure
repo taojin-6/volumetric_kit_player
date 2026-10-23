@@ -1,0 +1,322 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Tao Jin
+#
+# measure: run a measurement of the player and bring its logs home, from the
+# Mac, which only orchestrates (README.md, "Measure"; DECISIONS.md).
+#
+#   measure [--dry-run] lab <ref> [--frames N] [--passes P] [--timing T,...]
+#       On the lab's RTX 4090: keep a detached worktree of the player at <ref>
+#       in the lab's checkout (.worktrees/measure-run), build vp_probe Release
+#       in the lab's scratch under uvrun, run it on rafa2.vrst under
+#       `uvrun --time` once per timing (default off,all; 2 passes, the first
+#       a warm-up), and copy the logs into ~/ws/volumetric_kit/measurements/.
+#   measure [--dry-run] iphone|ipad <ref> [--frames N] [--timing T]
+#       Build the signed Release app at <ref> on the Mac, install it on the
+#       device, copy rafa2.vrst into its Documents if missing, launch it with
+#       the measure arguments (the device must be unlocked), wait for the log,
+#       and copy it home. It starts an app on the owner's device: run it only
+#       with the owner's go-ahead.
+#   measure summarize <log.csv>...
+#       The logs as markdown (summarize.py): two give a before/after diff.
+#
+# <ref> is a branch, a tag, a commit, or pr/<n>. --dry-run prints the commands
+# and runs none. Settings come from the environment, after
+# ${MEASURE_CONFIG:-~/.config/volumetric_kit/measure.env} if it exists:
+#   VP_DEVELOPMENT_TEAM  the Apple team that signs the app (phones; required)
+#   MEASURE_DEVICE       a devicectl device; default the first iPhone or iPad
+#   MEASURE_AGENT        uvrun's agent name on the lab (default measure)
+#   MEASURE_OUT          where logs go (default ~/ws/volumetric_kit/measurements)
+#   LAB_HOST, LAB_REPO, LAB_ROOT, LAB_STREAM, MAC_REPO, MAC_STREAM,
+#   MoltenVK_ROOT, VP_BUNDLE_ID  as defaulted below.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+config="${MEASURE_CONFIG:-$HOME/.config/volumetric_kit/measure.env}"
+if [ -f "$config" ]; then
+  # shellcheck disable=SC1090
+  . "$config"
+fi
+LAB_HOST="${LAB_HOST:-taojin@taojin-desktop.arena.andrew.cmu.edu}"
+LAB_REPO="${LAB_REPO:-/home/taojin/ws/volumetric_kit/volumetric_kit_player}"
+LAB_ROOT="${LAB_ROOT:-/home/taojin/claude_scratch/dataflow/measure}"
+LAB_UVRUN="${LAB_UVRUN:-/home/taojin/claude_scratch/dataflow/bin/uvrun}"
+LAB_STREAM="${LAB_STREAM:-/home/taojin/ws/volumetric_kit/streams/rafa2.vrst}"
+MAC_REPO="${MAC_REPO:-$HOME/ws/volumetric_kit/volumetric_kit_player}"
+MAC_STREAM="${MAC_STREAM:-$HOME/ws/volumetric_kit/streams/rafa2.vrst}"
+MoltenVK_ROOT="${MoltenVK_ROOT:-$HOME/ws/volumetric_kit/third_party/MoltenVK_ios_v1.4.2/MoltenVK}"
+VP_BUNDLE_ID="${VP_BUNDLE_ID:-io.taojin.volumetrickit.player}"
+MEASURE_AGENT="${MEASURE_AGENT:-measure}"
+MEASURE_OUT="${MEASURE_OUT:-$HOME/ws/volumetric_kit/measurements}"
+
+dry=0
+usage() {
+  sed -n '8,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+fail() {
+  echo "measure: $*" >&2
+  exit 1
+}
+# Run a command, or with --dry-run print it.
+run() {
+  if [ "$dry" = 1 ]; then
+    printf '+'
+    printf ' %q' "$@"
+    printf '\n'
+  else
+    "$@"
+  fi
+}
+
+# The commit <ref> names in the checkout at $1, after fetching branches and
+# PR heads; with --dry-run, <ref> itself.
+resolve() {
+  local repo="$1" ref="$2"
+  if [ "$dry" = 1 ]; then
+    echo "$ref"
+    return
+  fi
+  git -C "$repo" fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*' \
+    '+refs/pull/*/head:refs/remotes/origin/pr/*'
+  git -C "$repo" rev-parse --verify --quiet "origin/$ref^{commit}" ||
+    git -C "$repo" rev-parse --verify --quiet "$ref^{commit}" ||
+    fail "no commit $ref in $repo"
+}
+
+summarize() {
+  [ "$#" -ge 1 ] || usage
+  python3 -I "$here/summarize.py" "$@"
+}
+
+# The lab: one script over ssh, so the lab does the work and the Mac waits.
+lab() {
+  local ref="$1"
+  shift
+  local frames="" passes=2 timings="off,all"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --frames) frames="$2"; shift 2 ;;
+      --passes) passes="$2"; shift 2 ;;
+      --timing) timings="$2"; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  local stamp day out
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  day="$(date +%Y-%m-%d)"
+  out="$MEASURE_OUT/$day"
+  local script
+  script="$(cat <<EOF
+set -euo pipefail
+exec 3>&1 1>&2  # the logs' paths alone go to the Mac's stdout
+repo=$(printf %q "$LAB_REPO"); root=$(printf %q "$LAB_ROOT")
+uvrun=$(printf %q "$LAB_UVRUN"); agent=$(printf %q "$MEASURE_AGENT")
+stream=$(printf %q "$LAB_STREAM"); ref=$(printf %q "$ref")
+worktree="\$repo/.worktrees/measure-run"
+mkdir -p "\$root/out"
+git -C "\$repo" fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*' \
+  '+refs/pull/*/head:refs/remotes/origin/pr/*'
+sha=\$(git -C "\$repo" rev-parse --verify --quiet "origin/\$ref^{commit}" ||
+  git -C "\$repo" rev-parse --verify "\$ref^{commit}")
+if [ -e "\$worktree" ]; then
+  git -C "\$worktree" checkout --quiet --detach "\$sha"
+else
+  git -C "\$repo" worktree add --quiet --detach "\$worktree" "\$sha"
+fi
+# GLFW for the desktop app, which the configure asks for: built once, with no
+# window system (the null platform), into the measure folder.
+if [ ! -d "\$root/glfw/lib" ]; then
+  [ -d "\$root/glfw-src" ] || git clone --quiet --depth 1 --branch 3.4 \
+    https://github.com/glfw/glfw.git "\$root/glfw-src"
+  "\$uvrun" "\$agent" -- cmake -S "\$root/glfw-src" -B "\$root/glfw-build" \
+    -DCMAKE_BUILD_TYPE=Release -DGLFW_BUILD_X11=OFF -DGLFW_BUILD_WAYLAND=OFF \
+    -DGLFW_BUILD_EXAMPLES=OFF -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_DOCS=OFF \
+    -DCMAKE_INSTALL_PREFIX="\$root/glfw"
+  "\$uvrun" "\$agent" -- cmake --build "\$root/glfw-build" --parallel 8 \
+    --target install
+fi
+"\$uvrun" "\$agent" -- cmake -S "\$worktree" -B "\$root/build" \
+  -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="\$root/glfw"
+"\$uvrun" "\$agent" -- cmake --build "\$root/build" --parallel 8 \
+  --target vp_probe
+for timing in \$(echo $(printf %q "$timings") | tr , ' '); do
+  csv="\$root/out/$stamp-\${sha:0:7}-lab-\$timing.csv"
+  "\$uvrun" --time "\$agent" -- "\$root/build/tests/vp_probe" --worker \
+    --file "\$stream" --passes $passes ${frames:+--frames $frames} \
+    --timing "\$timing" --csv "\$csv"
+done
+ls "\$root/out/$stamp-"*.csv >&3
+EOF
+)"
+  if [ "$dry" = 1 ]; then
+    echo "+ ssh $LAB_HOST bash -s <<'EOF'"
+    echo "$script"
+    echo "EOF"
+    run mkdir -p "$out"
+    run scp "${LAB_HOST}:$LAB_ROOT/out/$stamp-*.csv" "$out/"
+    return
+  fi
+  local logs
+  logs="$(ssh -o BatchMode=yes "$LAB_HOST" bash -s <<<"$script")"
+  mkdir -p "$out"
+  local fetched=()
+  for log in $logs; do
+    scp -q "${LAB_HOST}:$log" "$out/"
+    fetched+=("$out/$(basename "$log")")
+  done
+  summarize "${fetched[@]}" | tee "$out/$stamp-lab.md"
+}
+
+# A devicectl call's JSON output, into $1.
+devicectl_json() {
+  local file="$1"
+  shift
+  xcrun devicectl "$@" --quiet --json-output "$file" >/dev/null
+}
+
+# Every string in a devicectl JSON file at $1 that ends with $2, one a line:
+# the file names in a listing, whatever its layout.
+json_strings() {
+  python3 -I - "$1" "$2" <<'PY'
+import json, sys
+def walk(value):
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from walk(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from walk(item)
+    elif isinstance(value, str):
+        yield value
+with open(sys.argv[1], encoding="utf-8") as file:
+    for text in walk(json.load(file)):
+        if text.endswith(sys.argv[2]):
+            print(text)
+PY
+}
+
+# The device: $MEASURE_DEVICE, or the first of kind $1 (iPhone, iPad).
+pick_device() {
+  if [ -n "${MEASURE_DEVICE:-}" ]; then
+    echo "$MEASURE_DEVICE"
+    return
+  fi
+  if [ "$dry" = 1 ]; then
+    echo "<first $1>"
+    return
+  fi
+  local list
+  list="$(mktemp)"
+  devicectl_json "$list" list devices
+  python3 -I - "$list" "$1" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as file:
+    devices = json.load(file).get("result", {}).get("devices", [])
+for device in devices:
+    if device.get("hardwareProperties", {}).get("deviceType") == sys.argv[2]:
+        print(device["identifier"])
+        break
+else:
+    sys.exit(f"measure: no {sys.argv[2]} in devicectl's list")
+PY
+  rm -f "$list"
+}
+
+# $1 the mode (iphone, ipad), $2 the device kind devicectl names (iPhone,
+# iPad), $3 the ref, then the options.
+phone() {
+  local mode="$1" kind="$2" ref="$3"
+  shift 3
+  local frames="300" timing="all"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --frames) frames="$2"; shift 2 ;;
+      --timing) timing="$2"; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [ -n "${VP_DEVELOPMENT_TEAM:-}" ] || fail "set VP_DEVELOPMENT_TEAM (README.md, iOS)"
+  local sha worktree app device name out
+  sha="$(resolve "$MAC_REPO" "$ref")"
+  worktree="$MAC_REPO/.worktrees/measure-run"
+  if [ -e "$worktree" ]; then
+    run git -C "$worktree" checkout --quiet --detach "$sha"
+  else
+    run git -C "$MAC_REPO" worktree add --quiet --detach "$worktree" "$sha"
+  fi
+  run env MoltenVK_ROOT="$MoltenVK_ROOT" cmake -S "$worktree" --preset ios \
+    -DVP_DEVELOPMENT_TEAM="$VP_DEVELOPMENT_TEAM" -DVP_BUNDLE_ID="$VP_BUNDLE_ID"
+  run cmake --build "$worktree/build-ios" --config Release \
+    --target volumetric_kit_player -- -allowProvisioningUpdates
+  app="$worktree/build-ios/apps/ios/Release-iphoneos/volumetric_kit_player.app"
+  device="$(pick_device "$kind")"
+  run xcrun devicectl device install app --device "$device" "$app"
+  name="$(basename "$MAC_STREAM")"
+  local before
+  listing="$(mktemp)"  # global, for the trap
+  trap 'rm -f "$listing"' EXIT
+  if [ "$dry" = 1 ] || ! {
+    devicectl_json "$listing" device info files --device "$device" \
+      --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
+      --subdirectory Documents &&
+      json_strings "$listing" "$name" | grep -q .
+  }; then
+    run xcrun devicectl device copy to --device "$device" \
+      --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
+      --source "$MAC_STREAM" --destination "Documents/$name"
+  fi
+  before=""
+  if [ "$dry" = 0 ] && devicectl_json "$listing" device info files \
+    --device "$device" --domain-type appDataContainer \
+    --domain-identifier "$VP_BUNDLE_ID" --subdirectory Documents/measure; then
+    before="$(json_strings "$listing" .csv)"
+  fi
+  echo "measure: launching the player on $kind $device: keep it unlocked" >&2
+  run xcrun devicectl device process launch --device "$device" \
+    --terminate-existing "$VP_BUNDLE_ID" -- --measure "$name" \
+    --frames "$frames" --timing "$timing"
+  out="$MEASURE_OUT/$(date +%Y-%m-%d)"
+  run mkdir -p "$out"
+  if [ "$dry" = 1 ]; then
+    echo "+ (every 5 s, up to 20 min: list Documents/measure, until a new .csv)"
+    run xcrun devicectl device copy from --device "$device" \
+      --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
+      --source "Documents/measure/<new>.csv" \
+      --destination "$out/$mode-<new>.csv"
+    return
+  fi
+  # The app renames its log from .part once it is whole.
+  local deadline=$((SECONDS + 1200)) log=""
+  while [ -z "$log" ]; do
+    [ "$SECONDS" -lt "$deadline" ] || fail "no log after 20 min"
+    sleep 5
+    devicectl_json "$listing" device info files --device "$device" \
+      --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
+      --subdirectory Documents/measure || continue
+    log="$(json_strings "$listing" .csv | grep -vxF -f <(printf '%s\n' "$before") |
+      head -n 1 || true)"
+  done
+  local file="$out/$mode-$(basename "$log")"
+  xcrun devicectl device copy from --device "$device" \
+    --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
+    --source "Documents/measure/$(basename "$log")" --destination "$file"
+  summarize "$file" | tee "${file%.csv}.md"
+}
+
+[ "$#" -ge 1 ] || usage
+if [ "$1" = --dry-run ]; then
+  dry=1
+  shift
+fi
+[ "$#" -ge 1 ] || usage
+mode="$1"
+shift
+case "$mode" in
+  lab) [ "$#" -ge 1 ] || usage; lab "$@" ;;
+  iphone) [ "$#" -ge 1 ] || usage; phone iphone iPhone "$@" ;;
+  ipad) [ "$#" -ge 1 ] || usage; phone ipad iPad "$@" ;;
+  summarize) summarize "$@" ;;
+  *) usage ;;
+esac
