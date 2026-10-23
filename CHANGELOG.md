@@ -54,6 +54,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`NSLocalNetworkUsageDescription`).
 - `player::open_source`: the player of a scenario's source, a file's or a
   sender's, which both apps call.
+- A normal-coloured view: Normals in the panel, beside Loop and live over the
+  status line, and the desktop's N key colour the mesh by its world-space
+  normals (gfx's `kHybridMeshNormals`) in place of lighting
+  (`PlayerView::normals`, `set_normals` and `mesh_flags`; `draw_controls`
+  takes the view's `normals`).
 
 ### Changed
 

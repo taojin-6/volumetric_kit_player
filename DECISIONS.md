@@ -4,6 +4,24 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-22 — A normal-coloured view, toggled from the panel
+
+`PlayerView::normals`, `set_normals` and `mesh_flags`; the panel's Normals and
+the desktop's N key.
+
+- **gfx's `kHybridMeshNormals` in place of lighting,** so the mesh's own
+  normals show, such as Marching Cubes' facets on a noisy live SDF.
+- **The view holds the choice:** it is the drawing thread's, as the camera
+  is, while `StreamPlayer`'s controls are playback's, safe from any thread;
+  `draw_controls` takes it by reference.
+- **A button shown pressed while on, `kButtonEms` wide,** not a box as Loop's:
+  with its label a box took a phone's row to 402 pt, past 375; the button
+  keeps it at 365.
+- **Live too:** the shading is the view's, so a sender's stream takes it as a
+  file's does.
+- **No scenario field:** the core's Player profile has no render section; a
+  default from the scenario waits for a need.
+
 ## 2026-10-22 — The iOS app chooses what to play on screen
 
 `PlayerViewConfig::source_button`, `draw_source`,
@@ -18,10 +36,10 @@ is implemented.
   file or live, as tall as the stats' header beside it, so their body clears
   it. A tap only records a request, which the shell takes after `frame()`.
   Why: the desktop takes a scenario; no UIKit runs inside the ImGui frame;
-  and the controls have little room for it. In their playback row it would
-  fill 365 of a phone's 375 pt, the status line's row is full beside a
-  5-digit track's line, and a row of its own would lift the controls into
-  the stats' body on a landscape phone.
+  and the controls have no room for it. Their playback row is full with
+  Normals (365 of 375 pt), the status line's row is full beside a 5-digit
+  track's line, and a row of its own would lift the controls into the stats'
+  body on a landscape phone.
 - **One parser for the typed fields, `parse_live_source`,** over
   `parse_live_address`, into the source `open_source` plays, the desktop
   app's call too, so the library links the core's config tier on every
@@ -98,13 +116,13 @@ chunks, joined at the newest key.
   gfx's default, the surface's least + 1, a mesh taken waits behind one more
   queued image, a vsync longer. A file keeps the default, as its pts paces
   it.
-- **The panels live:** the controls are the status line alone, and the keys
-  do nothing. The bitrate and records a second are over the last second, as
-  a live stream has no track mean: the records each frame stands for
-  (`FrameStamp::records`), by when the worker published it rather than when
-  it was taken, as the frame taken after a pause in drawing (a minimized
-  window) stands for the whole pause. They and the status line's seq count
-  records as they arrive, decoded or not, so they show what the link
+- **The panels live:** the controls are Normals over the status line, and
+  Space, Right and L do nothing. The bitrate and records a second are over
+  the last second, as a live stream has no track mean: the records each
+  frame stands for (`FrameStamp::records`), by when the worker published it
+  rather than when it was taken, as the frame taken after a pause in drawing
+  (a minimized window) stands for the whole pause. They and the status line's
+  seq count records as they arrive, decoded or not, so they show what the link
   carries. `decode` is the shown record's own, and there is no `read` row,
   as the network's wait is no stage.
 - **`vp_live_probe`** plays a live stream on gfx's headless surface and
@@ -277,9 +295,9 @@ the sizes.
 - **The configure fails if GLFW enters the library's link closure,** checked
   once every directory has linked. Why: the library links no window system
   (below); only the app links gfx's GLFW tier.
-- **Keys are shortcuts for the panel:** Space, Right and L call the controls
-  its buttons call; Esc closes. Why: one set of controls, which the panel
-  shows on every platform.
+- **Keys are shortcuts for the panel:** Space, Right, L and N call the
+  controls its buttons call; Esc closes. Why: one set of controls, which the
+  panel shows on every platform.
 - **The wheel accumulator is a knowing copy** of calib's and gfx's examples'
   (a TODO in `main.cpp`). Why: it shares the window's user pointer with the
   keys, and moving it to gfx means gfx owns that pointer, part of the GLFW

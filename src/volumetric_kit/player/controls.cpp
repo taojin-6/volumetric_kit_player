@@ -40,9 +40,26 @@ std::string rate_text(double fps) {
 // A button's size: kButtonEms font sizes wide, a frame tall.
 ImVec2 button_size() { return {kButtonEms * ImGui::GetFontSize(), 0.0f}; }
 
-// A file's controls: Play/Pause, Step and Loop, then the status line.
+// Normals, a button drawn pressed while on, hovered or not, as a mouse stays
+// on it after a click (DECISIONS.md).
+void draw_normals(bool& normals) {
+  const bool on = normals;
+  if (on) {
+    const ImVec4 pressed = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+    ImGui::PushStyleColor(ImGuiCol_Button, pressed);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, pressed);
+  }
+  if (ImGui::Button("Normals", button_size())) {
+    normals = !normals;
+  }
+  if (on) {
+    ImGui::PopStyleColor(2);
+  }
+}
+
+// A file's controls: Play/Pause, Step, Loop and Normals, then the status line.
 void draw_file_controls(StreamPlayer& player,
-                        const std::optional<FrameStamp>& shown) {
+                        const std::optional<FrameStamp>& shown, bool& normals) {
   const ImVec2 button = button_size();
   // One ID for both labels, so a press that flips the label completes.
   if (ImGui::Button(player.playing() ? "Pause###play" : "Play###play",
@@ -62,14 +79,16 @@ void draw_file_controls(StreamPlayer& player,
   if (ImGui::Checkbox("Loop", &loop)) {
     player.set_loop(loop);
   }
+  ImGui::SameLine();
+  draw_normals(normals);
   ImGui::TextUnformatted(
       status_line(shown, player.frame_count(), player.playing(), loop).c_str());
 }
 
 }  // namespace
 
-void draw_controls(StreamPlayer& player,
-                   const std::optional<FrameStamp>& shown) {
+void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
+                   bool& normals) {
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(
       ImVec2(viewport->WorkPos.x + 0.5f * viewport->WorkSize.x,
@@ -77,11 +96,12 @@ void draw_controls(StreamPlayer& player,
       ImGuiCond_Always, ImVec2(0.5f, 1.0f));
   if (ImGui::Begin(kControlsWindow, nullptr, kFlags)) {
     if (player.live()) {
+      draw_normals(normals);
       ImGui::TextUnformatted(
           live_status_line(player.live_status(), Playback::Clock::now())
               .c_str());
     } else {
-      draw_file_controls(player, shown);
+      draw_file_controls(player, shown, normals);
     }
   }
   ImGui::End();

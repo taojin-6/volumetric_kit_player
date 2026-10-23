@@ -6,14 +6,15 @@
 // refuses what it cannot use; frames present and shown() advances, their
 // triangles sharing vertices, onto a frame that meshes nothing too, which
 // still presents; 0 x 0 skips without blocking; a step moves one frame; the
-// worker's failure surfaces from frame(); the panel draws at a phone's
-// scale, and its controls fit a phone and a fingertip at the iOS shell's
-// sizes, Source included, as do the stats, in portrait and in landscape
-// clear of Source and the controls, with the profiler's draw row in their
-// table, whose device half times the whole pass; Source is off by default,
-// and a tap on it is one request; ui_wants_pointer() follows a finger on the
-// panel, which controls_test.cpp checks on the stats' header and body; and
-// teardown mid-playback, the profiler attached, is clean. A live view
+// worker's failure surfaces from frame(); a tap on Normals switches the mesh's
+// flags from lit to normals and back, and frames keep presenting; the panel
+// draws at a phone's scale; in portrait and in landscape, at the iOS shell's
+// sizes, its controls fit a phone and a fingertip, as does Source, clear of
+// them, and so do the stats, clear of both, with the profiler's draw row in
+// their table, whose device half times the whole pass; Source is off by
+// default, and a tap on it is one request; ui_wants_pointer() follows a finger
+// on the panel, which controls_test.cpp checks on the stats' header and body;
+// and teardown mid-playback, the profiler attached, is clean. A live view
 // presents, on the two images its swapchain asks for (checked on the host).
 // The view makes its own shared device, validated as the test policy asks, so
 // the layer's errors fail the test. The tests skip where the loader offers no
@@ -27,9 +28,7 @@
 
 #include <gtest/gtest.h>
 
-#include <cfloat>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -79,6 +78,13 @@ constexpr VkExtent2D kPhone{1125, 2001};
 // and the home indicator kept clear (the iPhone 12 mini's insets).
 constexpr VkExtent2D kLandscapePhone{2436, 1125};
 constexpr gfx::ui::EdgeInsets kLandscapeSafeArea{0.0f, 50.0f, 21.0f, 50.0f};
+// A phone's drawable and the insets it keeps clear: those two.
+struct Phone {
+  VkExtent2D pixels;
+  gfx::ui::EdgeInsets safe_area;
+};
+constexpr Phone kPhones[] = {{kPhone, {}},
+                             {kLandscapePhone, kLandscapeSafeArea}};
 // The iOS shell's sizes (PlayerViewController.mm).
 constexpr float kPhoneScale = 1.3f;
 constexpr float kFingertip = 44.0f;
@@ -295,14 +301,6 @@ class PlayerViewTest : public core::test::VulkanTest {
            2.0f * ImGui::GetStyle().DisplaySafeAreaPadding.x;
   }
 
-  // The width of `text` in `panel`'s font as of the last frame, in points,
-  // rounded up as ImGui rounds a line's. The view's context is current.
-  static float text_width(const ImGuiWindow& panel, const std::string& text) {
-    ImFont* const font = ImGui::GetIO().Fonts->Fonts[0];
-    return std::ceil(
-        font->CalcTextSizeA(panel.FontRefSize, FLT_MAX, 0.0f, text.c_str()).x);
-  }
-
   vp_test::Scratch scratch_;
   std::string path_;  // the test's copy of the stream
   gfx::windowing::SurfaceSource surface_;
@@ -462,6 +460,38 @@ TEST_F(PlayerViewTest, TheWorkersFailureSurfacesFromFrame) {
   EXPECT_FALSE(view_->shown().has_value());
 }
 
+// Lit at first; a tap on Normals, the row's last control, flips normals() and
+// mesh_flags() to the normals', and frames keep presenting; another flips them
+// back, and set_normals does as a tap does. Whether frame()'s draw takes
+// mesh_flags() is not checked, as gfx's swapchain images are colour
+// attachments only and cannot be read back; the normals' colours are gfx's to
+// test.
+TEST_F(PlayerViewTest, ATapOnNormalsSwitchesTheMeshsFlags) {
+  using gfx::pipelines::kHybridMeshLit;
+  using gfx::pipelines::kHybridMeshNormals;
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  EXPECT_FALSE(view_->normals());
+  EXPECT_EQ(view_->mesh_flags(), kHybridMeshLit);
+  ImGui::SetCurrentContext(view_->ui_context());
+  const ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
+  ASSERT_NE(panel, nullptr);
+  const glm::vec2 normals = vp_test::control_middle(*panel, 3);
+  tap(normals);
+  EXPECT_TRUE(view_->normals());
+  EXPECT_EQ(view_->mesh_flags(), kHybridMeshNormals);
+  const std::uint64_t before = view_->shown()->index;
+  ASSERT_TRUE(tick_until([&] { return view_->shown()->index != before; }))
+      << "no frame drawn in normals";
+  tap(normals);
+  EXPECT_FALSE(view_->normals());
+  EXPECT_EQ(view_->mesh_flags(), kHybridMeshLit);
+  view_->set_normals(true);
+  EXPECT_EQ(view_->mesh_flags(), kHybridMeshNormals);
+  EXPECT_TRUE(present());
+  EXPECT_TRUE(view_->player().playing()) << "the taps pressed Normals alone";
+}
+
 TEST_F(PlayerViewTest, UiWantsPointerFollowsAFingerOnThePanel) {
   ASSERT_TRUE(make_view(/*playing=*/false));
   // An auto-sized panel takes its size on its second frame.
@@ -498,69 +528,81 @@ TEST_F(PlayerViewTest, ThePanelDrawsAtAPhonesScale) {
   EXPECT_TRUE(fonts[0]->IsGlyphInFont(0x00B7));
 }
 
-// On the narrowest phone, at the iOS shell's sizes, Source included: a
-// fingertip's square at each control's top left and at Source's lands on it,
-// as does Source's far edge, "Pause" and "Source" fit their buttons, and the
-// panel fits across, both its row and the widest status line, a 5-digit
-// track's playing in a loop.
+// On the narrowest phone in portrait and the shortest with a notch in
+// landscape, at the iOS shell's sizes, Source included: a fingertip's square
+// at each control's top left and at Source's lands on it, as does Source's far
+// edge; "Pause", "Normals" and "Source" fit their buttons; the panel fits
+// across, both its row and the widest status line, a 5-digit track's playing
+// in a loop; and Source ends above it, so the two never overlap.
 TEST_F(PlayerViewTest, TheControlsFitAPhoneAndAFingertip) {
-  extent_ = kPhone;
-  pixels_per_point_ = kPhonePixelsPerPoint;
-  ui_scale_ = kPhoneScale;
-  ui_min_frame_height_ = kFingertip;
-  source_button_ = true;
-  ASSERT_TRUE(make_view(/*playing=*/false));
-  for (int i = 0; i < 3; ++i) {
-    ASSERT_TRUE(present());
-  }
-  ImGui::SetCurrentContext(view_->ui_context());
-  ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
-  ImGuiWindow* const source = ImGui::FindWindowByName(kSourceWindow);
-  ASSERT_NE(panel, nullptr);
-  ASSERT_NE(source, nullptr);
-  // The width ImGui fits the panel to. Before the first frame the status
-  // line says "loading", so it fits the row.
-  const float padding = 2.0f * panel->WindowPadding.x;
-  EXPECT_LE(panel->ContentSize.x + padding, widest_panel());
-  FrameStamp last;
-  last.index = 99'998;
-  EXPECT_LE(text_width(*panel, status_line(last, 99'999, true, true)) + padding,
-            widest_panel());
-  for (const char* label : {"Pause", "Source"}) {
-    EXPECT_GE(
-        vp_test::control_size(*panel, 0).x,
-        text_width(*panel, label) + 2.0f * ImGui::GetStyle().FramePadding.x)
-        << label;
-  }
   struct Target {
     ImGuiID id;
     glm::vec2 corner;
   };
-  const Target targets[] = {
-      {panel->GetID("###play"), vp_test::control_top_left(*panel, 0)},
-      {panel->GetID("Step"), vp_test::control_top_left(*panel, 1)},
-      {panel->GetID("Loop"), vp_test::control_top_left(*panel, 2)},
-      {source->GetID("Source"), vp_test::source_top_left(*source)}};
-  for (int i = 0; i < 4; ++i) {
-    for (const float dx : {0.5f, kFingertip - 0.5f}) {
-      for (const float dy : {0.5f, kFingertip - 0.5f}) {
-        EXPECT_EQ(item_under(targets[i].corner + glm::vec2(dx, dy)),
-                  targets[i].id)
-            << "control " << i << " at +" << dx << ", +" << dy;
+  pixels_per_point_ = kPhonePixelsPerPoint;
+  ui_scale_ = kPhoneScale;
+  ui_min_frame_height_ = kFingertip;
+  source_button_ = true;
+  for (const Phone& phone : kPhones) {
+    SCOPED_TRACE(phone.pixels.width);
+    touch_.reset();
+    view_.reset();
+    extent_ = phone.pixels;
+    safe_area_ = phone.safe_area;
+    ASSERT_TRUE(make_view(/*playing=*/false));
+    for (int i = 0; i < 3; ++i) {
+      ASSERT_TRUE(present());
+    }
+    ImGui::SetCurrentContext(view_->ui_context());
+    ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
+    ImGuiWindow* const source = ImGui::FindWindowByName(kSourceWindow);
+    ASSERT_NE(panel, nullptr);
+    ASSERT_NE(source, nullptr);
+    // The width ImGui fits the panel to. Before the first frame the status
+    // line says "loading", so it fits the row.
+    const float padding = 2.0f * panel->WindowPadding.x;
+    EXPECT_LE(panel->ContentSize.x + padding, widest_panel());
+    FrameStamp last;
+    last.index = 99'998;
+    const std::string widest_line = status_line(last, 99'999, true, true);
+    EXPECT_LE(vp_test::text_width(*panel, widest_line) + padding,
+              widest_panel());
+    // Every button is kButtonEms font sizes wide (control_size).
+    const float label_padding = 2.0f * ImGui::GetStyle().FramePadding.x;
+    for (const char* label : {"Pause", "Normals", "Source"}) {
+      EXPECT_GE(vp_test::control_size(*panel, 0).x,
+                vp_test::text_width(*panel, label) + label_padding)
+          << label;
+    }
+    const Target targets[] = {
+        {panel->GetID("###play"), vp_test::control_top_left(*panel, 0)},
+        {panel->GetID("Step"), vp_test::control_top_left(*panel, 1)},
+        {panel->GetID("Loop"), vp_test::control_top_left(*panel, 2)},
+        {panel->GetID("Normals"), vp_test::control_top_left(*panel, 3)},
+        {source->GetID("Source"), vp_test::source_top_left(*source)}};
+    for (int i = 0; i < 5; ++i) {
+      for (const float dx : {0.5f, kFingertip - 0.5f}) {
+        for (const float dy : {0.5f, kFingertip - 0.5f}) {
+          EXPECT_EQ(item_under(targets[i].corner + glm::vec2(dx, dy)),
+                    targets[i].id)
+              << "control " << i << " at +" << dx << ", +" << dy;
+        }
       }
     }
+    // Source's far corner, so it is as wide as the labels' check takes it to
+    // be, less the half point its window's whole-point width drops.
+    EXPECT_EQ(item_under(vp_test::source_top_left(*source) +
+                         glm::vec2(vp_test::control_size(*source, 0).x - 1.0f,
+                                   kFingertip - 0.5f)),
+              targets[4].id);
+    EXPECT_LE(source->Pos.y + source->Size.y, panel->Pos.y);
+    // The fingers pressed nothing.
+    EXPECT_FALSE(view_->player().playing());
+    EXPECT_TRUE(view_->player().loop());
+    EXPECT_FALSE(view_->normals());
+    EXPECT_FALSE(view_->take_source_request());
+    EXPECT_FALSE(view_->shown().has_value());
   }
-  // Source's far corner, so it is as wide as the labels' check takes it to
-  // be, less the half point its window's whole-point width drops.
-  EXPECT_EQ(item_under(vp_test::source_top_left(*source) +
-                       glm::vec2(vp_test::control_size(*source, 0).x - 1.0f,
-                                 kFingertip - 0.5f)),
-            targets[3].id);
-  // The fingers pressed nothing.
-  EXPECT_FALSE(view_->player().playing());
-  EXPECT_TRUE(view_->player().loop());
-  EXPECT_FALSE(view_->take_source_request());
-  EXPECT_FALSE(view_->shown().has_value());
 }
 
 // As the desktop's: no Source, so a finger at the top right is the scene's,
@@ -606,16 +648,11 @@ TEST_F(PlayerViewTest, ATapOnSourceIsOneRequest) {
 // the controls and starts below Source, and its header is a fingertip tall,
 // left of Source.
 TEST_F(PlayerViewTest, TheStatsFitAPhone) {
-  struct Phone {
-    VkExtent2D pixels;
-    gfx::ui::EdgeInsets safe_area;
-  };
   pixels_per_point_ = kPhonePixelsPerPoint;
   ui_scale_ = kPhoneScale;
   ui_min_frame_height_ = kFingertip;
   source_button_ = true;
-  for (const Phone& phone :
-       {Phone{kPhone, {}}, Phone{kLandscapePhone, kLandscapeSafeArea}}) {
+  for (const Phone& phone : kPhones) {
     SCOPED_TRACE(phone.pixels.width);
     touch_.reset();
     view_.reset();

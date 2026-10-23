@@ -5,12 +5,14 @@
 // live_status_line's and stats_lines' wording, file and live;
 // live_reason; parse_live_address; and draw_controls and StatsPanel on a
 // CPU-only ImGui context fed by gfx's ImGuiTouch, over a stream opened but not
-// started. A tap on Play/Pause flips playing(), Step pauses, Loop toggles, a
-// finger on the controls is ImGui's, and they keep clear of the safe area; a
-// live player's, never started, are its status line alone. The Source button
-// is drawn only when asked for, at the work area's top right clear of the
-// safe area and of the stats' body, leaving the controls where they were, and
-// a tap on it is one press. The stats sit at the
+// started. A tap on Play/Pause flips playing(), Step pauses, Loop toggles,
+// Normals flips the view's shading and shows pressed while on, hovered or not,
+// "Pause" and "Normals" fit their buttons, a finger on the controls is
+// ImGui's, and they keep clear of the safe area; a live player's, never
+// started, are Normals over its status line. The Source button is drawn only
+// when asked for, at the work area's top right clear of the safe area and of
+// the stats' body, leaving the controls where they were, and a tap on it is
+// one press. The stats sit at the
 // work area's top left; a finger on their header is ImGui's and on their body
 // the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
@@ -293,7 +295,7 @@ class ControlsTest : public ::testing::Test {
     seconds_ += 1.0 / 60.0;
     touch_->new_frame(display(seconds_, safe_area_));
     ImGui::NewFrame();
-    draw_controls(*player_, std::nullopt);
+    draw_controls(*player_, std::nullopt, normals_);
     if (source_shown_ && draw_source()) {
       ++source_presses_;
     }
@@ -353,6 +355,23 @@ class ControlsTest : public ::testing::Test {
     return vp_test::control_middle(panel(), index);
   }
 
+  // Whether the last frame filled Normals, the row's last control, in a
+  // pressed button's colour: a vertex of that colour in its frame. With no
+  // finger pressing the panel, only its toggle draws that colour there.
+  bool normals_drawn_pressed() const {
+    const ImU32 pressed = ImGui::GetColorU32(ImGuiCol_ButtonActive);
+    const glm::vec2 min = vp_test::control_top_left(panel(), 3);
+    const glm::vec2 max = min + vp_test::control_size(panel(), 3);
+    for (const ImDrawVert& vertex : panel().DrawList->VtxBuffer) {
+      if (vertex.col == pressed && vertex.pos.x >= min.x - 0.5f &&
+          vertex.pos.x <= max.x + 0.5f && vertex.pos.y >= min.y - 0.5f &&
+          vertex.pos.y <= max.y + 0.5f) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // A finger lifts where it lands, and the frames ImGui takes the tap over
   // run: its position, its press, its release, and its position cleared.
   void tap(glm::vec2 at) {
@@ -389,6 +408,7 @@ class ControlsTest : public ::testing::Test {
 
   vp_test::Scratch scratch_;
   std::unique_ptr<StreamPlayer> player_;
+  bool normals_ = false;  // the view's shading, which the controls flip
   std::optional<PlaybackStats> stats_;
   StatsPanel panel_;
   std::optional<FrameStamp> shown_;
@@ -425,10 +445,41 @@ TEST_F(ControlsTest, LoopToggles) {
   EXPECT_TRUE(player_->loop());
 }
 
-// A live player's controls are its status line alone: one line as wide as
-// the line, with no row of buttons above it.
-TEST_F(ControlsTest, ALivePlayersControlsAreItsStatusLineAlone) {
-  const float file_height = panel().ContentSize.y;
+// Pressed while on, under a pointer too, as a mouse rests on it after a click.
+TEST_F(ControlsTest, NormalsFlipsTheViewsShadingAndShowsPressedWhileOn) {
+  ASSERT_FALSE(normals_);
+  EXPECT_FALSE(normals_drawn_pressed());
+  tap(control(3));
+  EXPECT_TRUE(normals_);
+  EXPECT_TRUE(normals_drawn_pressed());
+  EXPECT_TRUE(player_->playing());
+  EXPECT_TRUE(player_->loop());
+  touch_->touch_began(1, control(3));
+  frame();  // its position alone: hovered, not held
+  EXPECT_TRUE(normals_drawn_pressed()) << "hovered";
+  touch_->touch_cancelled(1);
+  frame();
+  frame();
+  EXPECT_TRUE(normals_);
+  tap(control(3));
+  EXPECT_FALSE(normals_);
+  EXPECT_FALSE(normals_drawn_pressed());
+}
+
+// At the desktop's scale, this context's, as at the iOS shell's
+// (player_view_test), "Pause" and "Normals" fit their buttons.
+TEST_F(ControlsTest, PauseAndNormalsFitTheirButtons) {
+  const float padding = 2.0f * ImGui::GetStyle().FramePadding.x;
+  EXPECT_GE(vp_test::control_size(panel(), 0).x,
+            vp_test::text_width(panel(), "Pause") + padding);
+  EXPECT_GE(vp_test::control_size(panel(), 3).x,
+            vp_test::text_width(panel(), "Normals") + padding);
+}
+
+// A live player's controls are Normals over its status line: a frame and a
+// line tall and as wide as the line, which a row with Play/Pause, Step and
+// Loop would outgrow. A tap on Normals flips the view's shading.
+TEST_F(ControlsTest, ALivePlayersControlsAreNormalsOverItsStatusLine) {
   core::Result<std::unique_ptr<StreamPlayer>> live =
       StreamPlayer::connect({"127.0.0.1", 47801});  // never started: no I/O
   ASSERT_TRUE(live.ok()) << live.status().message();
@@ -437,14 +488,20 @@ TEST_F(ControlsTest, ALivePlayersControlsAreItsStatusLineAlone) {
   frame();
   const ImGuiWindow& window = panel();
   const float line = window.FontRefSize;
-  EXPECT_NEAR(window.ContentSize.y, line, 1.0f);
-  EXPECT_GT(file_height, window.ContentSize.y + line) << "the file's row";
+  EXPECT_NEAR(window.ContentSize.y,
+              vp_test::control_size(window, 0).y +
+                  ImGui::GetStyle().ItemSpacing.y + line,
+              1.0f);
   const float width =
       ImGui::GetIO()
           .Fonts->Fonts[0]
           ->CalcTextSizeA(line, FLT_MAX, 0.0f, "connecting to 127.0.0.1:47801")
           .x;
   EXPECT_NEAR(window.ContentSize.x, width, 1.0f);
+  tap(control(0));
+  EXPECT_TRUE(normals_);
+  tap(control(0));
+  EXPECT_FALSE(normals_);
 }
 
 // Asked for, all of its window is the button, to its corner.

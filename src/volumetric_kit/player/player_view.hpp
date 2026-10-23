@@ -134,6 +134,16 @@ class PlayerView {
   StreamPlayer& player() noexcept { return *player_; }
   /// @return The camera, for G1's drag verbs (gfx::camera::OrbitCamera).
   gfx::camera::OrbitCamera& camera() noexcept { return camera_; }
+  /// @return Whether the mesh is coloured by its world-space normals rather
+  ///         than lit; false at first. The panel's Normals flips it.
+  bool normals() const noexcept { return normals_; }
+  /// @brief Colour the mesh by its normals, or light it, from the next frame
+  ///        (the desktop's N key).
+  /// @param normals  Whether to colour it by its normals.
+  void set_normals(bool normals) noexcept { normals_ = normals; }
+  /// @return The flags the mesh draws with (gfx::pipelines::HybridMeshFlags):
+  ///         kHybridMeshNormals while @ref normals, else kHybridMeshLit.
+  std::uint32_t mesh_flags() const noexcept;
   /// @return Whether the Source button (PlayerViewConfig::source_button) was
   ///         pressed since the last call: true once per press. The shell
   ///         takes it after @ref frame, so it asks what to play outside the
@@ -185,6 +195,7 @@ class PlayerView {
   gfx::ui::ImGuiOverlay overlay_;
   FrameExchange exchange_;
   gfx::camera::OrbitCamera camera_;
+  bool normals_ = false;         // the mesh's shading (mesh_flags)
   bool source_button_ = false;   // frame() draws Source
   bool source_request_ = false;  // pressed since take_source_request
   std::unique_ptr<StreamPlayer> player_;

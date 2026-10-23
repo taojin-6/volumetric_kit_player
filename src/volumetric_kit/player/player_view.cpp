@@ -147,7 +147,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   // 2. The controls, Source if asked for, and the stats, as of the last frame
   // drawn.
   overlay_.new_frame();
-  draw_controls(*player_, shown_);
+  draw_controls(*player_, shown_, normals_);
   if (source_button_ && draw_source()) {
     source_request_ = true;
   }
@@ -191,6 +191,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
                                            static_cast<float>(size.height),
                                        kNear, kFar)
                             .view_proj();
+      draws.flags = mesh_flags();
       draws.draws = &draw;
       draws.draw_count = 1;
       mesh_pipeline_.submit(frame.cmd, draws);
@@ -208,6 +209,10 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
     return ended;
   }
   return true;
+}
+
+std::uint32_t PlayerView::mesh_flags() const noexcept {
+  return normals_ ? pipelines::kHybridMeshNormals : pipelines::kHybridMeshLit;
 }
 
 bool PlayerView::ui_wants_pointer() const noexcept {
