@@ -148,8 +148,8 @@ for timing in \$(echo $(printf %q "$timings") | tr , ' '); do
   "\$uvrun" --time "\$agent" -- "\$root/build/tests/vp_probe" --worker \
     --file "\$stream" --passes $passes ${frames:+--frames $frames} \
     --timing "\$timing" --csv "\$csv"
+  echo "\$csv" >&3  # in the order run, which the diff keeps
 done
-ls "\$root/out/$stamp-"*.csv >&3
 EOF
 )"
   if [ "$dry" = 1 ]; then
