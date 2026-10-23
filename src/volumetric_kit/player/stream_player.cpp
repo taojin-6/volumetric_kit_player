@@ -266,6 +266,16 @@ bool StreamPlayer::loop() const {
   return loop_;
 }
 
+// Live too: the decoder takes it at the next record.
+void StreamPlayer::set_deblock(bool on) {
+  control([this, on] { deblock_ = on; });
+}
+
+bool StreamPlayer::deblock() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return deblock_;
+}
+
 bool StreamPlayer::park(std::chrono::milliseconds timeout) {
   std::unique_lock<std::mutex> lock(mutex_);
   parked_ = true;
@@ -333,30 +343,45 @@ core::Status StreamPlayer::play_track() {
     // The next frame's stamp's rows, which other tracks' records add to.
     core::StageMetrics stages;
     for (;;) {
-      Step step(*this);  // the record's read and decode
-      if (!step) {
-        return {};
-      }
       stream::Record record;
-      const core::Result<bool> more = [&] {
-        const core::StageScope read(stages, "read");
-        return reader_->next(&pos, &record);
-      }();
-      if (more.ok() && !more.value()) {
-        break;  // the end
+      std::uint64_t frame = 0;  // its place in this pass, once read
+      core::Status status;
+      {
+        const Step step(*this);  // the record's read
+        if (!step) {
+          return {};
+        }
+        const core::Result<bool> more = [&] {
+          const core::StageScope read(stages, "read");
+          return reader_->next(&pos, &record);
+        }();
+        if (more.ok() && !more.value()) {
+          break;  // the end
+        }
+        if (more.ok() && record.info.track != track_) {
+          continue;
+        }
+        // A damaged chunk header leaves `pos` past the damage.
+        status = more.status();
+        if (status.ok()) {
+          frame = index++;
+          const core::StageScope read(stages, "read");
+          status = reader_->read(record, &payload);
+        }
       }
-      if (more.ok() && record.info.track != track_) {
-        continue;
-      }
-      // A damaged chunk header leaves `pos` past the damage.
-      core::Status status = more.status();
-      const std::uint64_t frame = index;
+      // Decoded once due, so the grid holds the frame published last until
+      // then (DECISIONS.md).
+      Clock::time_point due_at{};
       if (status.ok()) {
-        ++index;
-        const core::StageScope read(stages, "read");
-        status = reader_->read(record, &payload);
-      }
-      if (status.ok()) {
+        VKC_ASSIGN(const bool due, wait_due(record.info.pts_ns));
+        if (!due) {
+          return {};
+        }
+        due_at = Clock::now();
+        const Step step(*this);  // the decode
+        if (!step) {
+          return {};
+        }
         status = decode(payload, stages);
       }
       if (!status.ok()) {
@@ -369,14 +394,14 @@ core::Status StreamPlayer::play_track() {
         stages.clear();
         continue;
       }
-      step.end();
-      if (!wait_due(record.info.pts_ns)) {
-        return {};
-      }
-      VKC_ASSIGN(
-          const bool published,
-          publish({frame, record.info.pts_ns, record.size, record.info.key,
-                   std::exchange(stages, {}), 1, record.size}));
+      count_shown(record.info.pts_ns, due_at);
+      FrameStamp stamp{frame,           record.info.pts_ns,        record.size,
+                       record.info.key, std::exchange(stages, {}), 1,
+                       record.size};
+      stamp_deblock(stamp);
+      last_ = stamp;
+      last_->stages.clear();
+      VKC_ASSIGN(const bool published, publish(std::move(stamp)));
       if (!published) {
         return {};
       }
@@ -385,7 +410,8 @@ core::Status StreamPlayer::play_track() {
     if (!shown) {
       return nothing_shown(std::move(first_skip));
     }
-    if (!wait_at_end()) {
+    VKC_ASSIGN(const bool again, wait_at_end());
+    if (!again) {
       return {};
     }
   }
@@ -468,6 +494,7 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
       if (decoded.ok()) {
         newest = {record.info.seq, record.info.pts_ns, record.size,
                   record.info.key, std::move(stages)};
+        stamp_deblock(newest);
         pending = true;
       } else if (!skippable(decoded)) {
         return decoded;
@@ -523,6 +550,7 @@ core::Status StreamPlayer::make_grid(const std::vector<std::uint8_t>& payload) {
 
 core::Status StreamPlayer::decode(const std::vector<std::uint8_t>& payload,
                                   core::StageMetrics& stages) {
+  decoder_->set_deblock(deblock());
   core::StageMetrics decoded;  // recon's rows, for the device's half
   {
     const core::StageScope decode(stages, "decode");
@@ -541,29 +569,94 @@ core::Status StreamPlayer::decode(const std::vector<std::uint8_t>& payload,
   return {};
 }
 
-bool StreamPlayer::wait_due(std::uint64_t pts_ns) {
-  std::unique_lock<std::mutex> lock(mutex_);
+void StreamPlayer::stamp_deblock(FrameStamp& stamp) const {
+  stamp.deblock_on = decoder_->deblock();
+  stamp.deblock = decoder_->last_deblock();
+}
+
+core::Result<bool> StreamPlayer::wait_due(std::uint64_t pts_ns) {
   for (;;) {
-    if (quit_) {
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      for (;;) {
+        if (quit_) {
+          return false;
+        }
+        const Clock::time_point now = Clock::now();
+        // Parked, nothing is due: a control takes effect at unpark.
+        const std::optional<Clock::time_point> due =
+            parked_ ? std::nullopt : clock_.due(pts_ns, now);
+        if (due && *due <= now) {
+          return true;
+        }
+        if (rebuild_wanted()) {
+          break;
+        }
+        if (due) {
+          changed_.wait_until(lock, *due);
+        } else {
+          changed_.wait(lock);
+        }
+      }
+    }
+    VKC_ASSIGN(const bool rebuilt, rebuild());
+    if (!rebuilt) {
       return false;
     }
-    const Clock::time_point now = Clock::now();
-    // Parked, nothing is due: a control takes effect at unpark.
-    const std::optional<Clock::time_point> due =
-        parked_ ? std::nullopt : clock_.due(pts_ns, now);
-    if (due && *due <= now) {
-      break;
-    }
-    if (due) {
-      changed_.wait_until(lock, *due);
-    } else {
-      changed_.wait(lock);
-    }
   }
+}
+
+void StreamPlayer::count_shown(std::uint64_t pts_ns, Clock::time_point due_at) {
+  std::lock_guard<std::mutex> lock(mutex_);
   last_by_step_ = !clock_.playing();
-  clock_.shown(pts_ns, Clock::now());
+  // Shown as of when it was due, so a slow decode does not push the frames
+  // after it back; a pause since, with no step to take, leaves the clock as
+  // it is (Playback::shown's precondition).
+  if (clock_.due(pts_ns, due_at)) {
+    clock_.shown(pts_ns, due_at);
+  }
   last_pts_ns_ = pts_ns;
-  return true;
+}
+
+bool StreamPlayer::rebuild_wanted() const {
+  return last_ && !parked_ && !clock_.playing() &&
+         deblock_ != last_->deblock_on;
+}
+
+core::Result<bool> StreamPlayer::rebuild() {
+  FrameStamp stamp = *last_;
+  stamp.rebuild = true;
+  {
+    const Step step(*this);  // the rebuild
+    if (!step) {
+      return false;
+    }
+    const bool on = deblock();
+    decoder_->set_deblock(on);
+    last_->deblock_on = on;      // tried: once a change
+    core::StageMetrics rebuilt;  // recon's row, for the device's half
+    core::Status status;
+    {
+      const core::StageScope decode(stamp.stages, "decode");
+      status = decoder_->rebuild(*grid_, &rebuilt);
+    }
+    if (!status.ok()) {
+      // A grid a failed decode left as neither frame: the next frame shows
+      // the setting.
+      if (skippable(status)) {
+        return true;
+      }
+      return status;
+    }
+    for (const core::StageRow& row : rebuilt.rows()) {
+      if (row.has_gpu) {
+        stamp.stages.add_gpu("decode", row.gpu_ms);
+      }
+    }
+    stamp_deblock(stamp);
+    last_->deblock = stamp.deblock;
+  }
+  return publish(std::move(stamp));
 }
 
 core::Result<bool> StreamPlayer::publish(FrameStamp stamp) {
@@ -596,26 +689,41 @@ core::Status StreamPlayer::mesh_and_publish(FrameStamp stamp) {
   return {};
 }
 
-bool StreamPlayer::wait_at_end() {
-  std::unique_lock<std::mutex> lock(mutex_);
-  // With loop off the last frame holds: played into, it pauses there; stepped
-  // onto, or paused on, it is held already, so a play, even one since that
-  // step, restarts.
-  if (!loop_ && clock_.playing() && !last_by_step_) {
-    clock_.pause();
+core::Result<bool> StreamPlayer::wait_at_end() {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // With loop off the last frame holds: played into, it pauses there;
+    // stepped onto, or paused on, it is held already, so a play, even one
+    // since that step, restarts.
+    if (!loop_ && clock_.playing() && !last_by_step_) {
+      clock_.pause();
+    }
   }
   for (;;) {
-    // Until a frame may go: playing, or a step.
-    changed_.wait(lock, [this] {
-      return quit_ || clock_.due(last_pts_ns_, Clock::now()).has_value();
-    });
-    if (quit_) {
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      for (;;) {
+        // Until a frame may go, playing or a step, or a rebuild is wanted.
+        changed_.wait(lock, [this] {
+          return quit_ || clock_.due(last_pts_ns_, Clock::now()).has_value() ||
+                 rebuild_wanted();
+        });
+        if (quit_) {
+          return false;
+        }
+        if (!clock_.due(last_pts_ns_, Clock::now())) {
+          break;  // a rebuild
+        }
+        if (loop_ || clock_.playing()) {
+          return true;
+        }
+        clock_.shown(last_pts_ns_, Clock::now());  // a step: the held frame
+      }
+    }
+    VKC_ASSIGN(const bool rebuilt, rebuild());
+    if (!rebuilt) {
       return false;
     }
-    if (loop_ || clock_.playing()) {
-      return true;
-    }
-    clock_.shown(last_pts_ns_, Clock::now());  // a step: the held frame
   }
 }
 

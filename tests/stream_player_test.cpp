@@ -15,7 +15,13 @@
 // waiting for a consumer that takes nothing; the worker sleeps until taken()
 // rather than polling for the take; a fatal error stops the worker,
 // a failed build on it included; start is refused once started or stopped.
-// Playing, no frame arrives before its pts says. A park holds the worker:
+// Playing, no frame arrives before its pts says. The deblock is on by
+// default, and each frame says what it did: the true-SDF stream's filter, and
+// skipped on the masked sphere's; set before start, the first decode takes
+// it; toggled while paused, the frame shown, not the next, is rebuilt,
+// meshed and published again as a rebuild, with nothing else going, at the
+// end with loop off too, and parked only at unpark; toggled while playing,
+// the frames after take it with no rebuild. A park holds the worker:
 // nothing is published while parked, an extract waiting for the consumer
 // included; a control applied meanwhile (a step, a play and a pause) takes
 // effect at unpark; playing() does not change; unpark carries on from the
@@ -26,7 +32,8 @@
 //
 // Live, from a recon StreamServer on 127.0.0.1 publishing the stream (looped
 // and restamped for a steady flow), or a raw peer: frames arrive with their
-// seq as their index and decode and mesh rows alone; a join after a P-frame
+// seq as their index, decode and mesh rows alone and the deblock on, which a
+// toggle turns off and on from the next record; a join after a P-frame
 // shows that GOP from its key; P-frames before a connection's first key are
 // skipped, though counted, with status() OK; every record published while a
 // mesh waits for the consumer is decoded, and the newest is shown with the
@@ -92,6 +99,7 @@
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
+#include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/networking/stream_server.hpp"
 #include "volumetric_kit/recon/stream/chunks.hpp"
 #include "volumetric_kit/recon/stream/stream_writer.hpp"
@@ -134,6 +142,15 @@ constexpr std::size_t kPtsAt = 24;
 constexpr std::size_t kHeaderCrcAt = 52;
 // A codec frame's block count, in its header (recon's codec/bitstream.hpp).
 constexpr std::size_t kBlockCountAt = 32;
+// The streams' T (recon's DeblockInfo::step), in metres: the default scale,
+// 0.2, times the largest sample of the (0,0,1) basis, cos(pi/16) / 16, times
+// trunc_dist, the sphere's 0.04 m and the true-SDF stream's 0.16 m
+// (vp_write_stream); and how far recon's float arithmetic may land from it.
+constexpr float kSphereStep = 0.00049039264f;
+constexpr float kTrueSdfStep = 0.0019615706f;
+constexpr float kStepError = 1e-9f;
+// A frame's sphere's centre moves this far along x a frame (vp_write_stream).
+constexpr double kMetresAFrame = 0.08;
 
 // zlib's CRC-32, which a chunk's header carries (session.hpp).
 std::uint32_t crc32(const std::uint8_t* data, std::size_t size) {
@@ -177,13 +194,16 @@ SteadyClock::duration stop_time(StreamPlayer& player) {
 }
 
 // Parks once the worker is inside a step that cannot end: the caller holds
-// the device's submit mutex, and every step submits (the build, a decode, an
-// extract). A park that finds the worker between steps holds it there, so
-// this unparks and lets it go on until a park finds it busy. Whether one did
-// within kArrival; the hold then stays in force.
+// the device's submit mutex, which every step but a record's read takes (the
+// build, a decode, a rebuild, an extract). A park that finds the worker
+// between steps holds it there, and one that finds it reading returns once
+// the read ends, within kRead, so this unparks and lets it go on until a park
+// times out on a step. Whether one did within kArrival; the hold then stays
+// in force.
 bool park_mid_step(StreamPlayer& player) {
+  constexpr auto kRead = 50ms;
   const SteadyClock::time_point deadline = SteadyClock::now() + kArrival;
-  while (player.park(0ms)) {
+  while (player.park(kRead)) {
     player.unpark();
     if (SteadyClock::now() > deadline) {
       return false;
@@ -303,6 +323,53 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     }
     EXPECT_TRUE(status.ok()) << status.message();
     return read.indexCount;
+  }
+
+  // The mean x of the mesh's vertices on the device, in metres: about its
+  // frame's sphere's centre, kMetresAFrame times the frame.
+  double mean_x(const recon::mesh::DeviceMesh& mesh) {
+    const VkDeviceSize size =
+        VkDeviceSize{mesh.vertex_count} * sizeof(recon::mesh::Vertex);
+    if (size == 0) {
+      ADD_FAILURE() << "an empty mesh";
+      return 0.0;
+    }
+    // A view of the extractor's buffer: its deleter frees nothing.
+    const core::Buffer vertices(
+        mesh.vertices, size, mesh.vertex_usage, mesh.sharing_mode, nullptr,
+        [] {}, std::nullopt);
+    std::vector<recon::mesh::Vertex> read(mesh.vertex_count);
+    core::CommandBatch batch(device(), allocator());
+    core::Status status = batch.readback(vertices, 0, size, read.data());
+    if (status.ok()) {
+      status = batch.submit();
+    }
+    EXPECT_TRUE(status.ok()) << status.message();
+    double sum = 0.0;
+    for (const recon::mesh::Vertex& vertex : read) {
+      sum += vertex.position.x;
+    }
+    return sum / static_cast<double>(read.size());
+  }
+
+  // The test's stream is the true-SDF one, which the deblock runs on.
+  void use_true_sdf() {
+    path_ = scratch_.copy(VP_TEST_STREAMS, vp_test::kTrueSdfStream);
+    ASSERT_FALSE(path_.empty());
+  }
+
+  // The next mesh is frame `frame`'s, published again by a rebuild with the
+  // deblock `on`, which ran `filter`, and is the live mesh, of that frame.
+  void expect_rebuild(std::uint64_t frame, bool on, const char* filter) {
+    const std::optional<FrameStamp> got = next_frame();
+    ASSERT_TRUE(got.has_value()) << "no rebuild of frame " << frame;
+    EXPECT_TRUE(got->rebuild);
+    EXPECT_EQ(got->index, frame);
+    EXPECT_EQ(got->pts_ns, pts_of(frame));
+    EXPECT_EQ(got->deblock_on, on);
+    EXPECT_STREQ(got->deblock.filter, filter);
+    EXPECT_NEAR(got->deblock.step, kTrueSdfStep, kStepError);
+    EXPECT_NEAR(mean_x(exchange_.live()), kMetresAFrame * frame, 0.02);
   }
 
   // The records of the stream at `path`, the test's by default, in file
@@ -527,6 +594,39 @@ TEST_F(StreamPlayerTest, PlayingNoFrameArrivesBeforeItsPts) {
     EXPECT_EQ(frame->index, i);
     EXPECT_GE(arrived_ns, pts_of(i) - pts_of(0)) << "frame " << i;
   }
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A frame counts as shown when it was due, not when its decode ends, so a
+// slow decode does not push the frames after it back: the frame before the
+// pause, its decode held past the next one's due time, lets the next go at
+// once rather than the pause after that decode.
+TEST_F(StreamPlayerTest, ASlowDecodeDoesNotDelayTheFramesAfterIt) {
+  constexpr std::uint64_t kHeld = vp_test::kGapAt - 1;
+  // Frame kHeld is due at play, and the next this long after it.
+  const auto next_due =
+      std::chrono::nanoseconds(pts_of(kHeld + 1) - pts_of(kHeld));
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  for (std::uint64_t i = 0; i < kHeld; ++i) {
+    ASSERT_NO_FATAL_FAILURE(step_to(*player, i));
+  }
+  {
+    // Held here, the device's submit mutex keeps frame kHeld's decode from
+    // ending until the next frame is due.
+    std::unique_lock<std::mutex> queue(*device().submit_mutex());
+    player->play();
+    std::this_thread::sleep_for(next_due + 200ms);
+  }
+  const std::optional<FrameStamp> held = next_frame();
+  ASSERT_TRUE(held.has_value()) << "no frame " << kHeld;
+  EXPECT_EQ(held->index, kHeld);
+  const std::optional<FrameStamp> next = next_frame();
+  ASSERT_TRUE(next.has_value()) << "no frame " << kHeld + 1;
+  EXPECT_EQ(next->index, kHeld + 1);
+  EXPECT_LT(next->published - held->published, next_due / 2)
+      << "the next frame waited out its pts gap after the held decode";
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
@@ -857,7 +957,7 @@ TEST_F(StreamPlayerTest, AStepDuringAParkGoesAtUnpark) {
   ASSERT_NE(player, nullptr);
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 1));
-  // Mid-playback: the worker decodes frame 2 once frame 1 goes.
+  // Mid-playback: the worker reads frame 2 once frame 1 goes.
   EXPECT_TRUE(player->park(kArrival));
   player->step();
   EXPECT_FALSE(next_frame(kQuiet).has_value()) << "published while parked";
@@ -1024,6 +1124,165 @@ TEST_F(StreamPlayerTest, AParkBeforeStartOrAfterStopReturnsAtOnce) {
   EXPECT_LT(stop_time(*player_), kPrompt);
   EXPECT_TRUE(player_->park(0ms)) << "after stop";
   EXPECT_TRUE(player_->status().ok()) << player_->status().message();
+}
+
+TEST_F(StreamPlayerTest, TheDeblockIsOnByDefaultAndEachFrameSaysWhatItDid) {
+  ASSERT_NO_FATAL_FAILURE(use_true_sdf());
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  EXPECT_TRUE(player->deblock());
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    player->step();
+    const std::optional<FrameStamp> frame = next_frame();
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_EQ(frame->index, i);
+    EXPECT_FALSE(frame->rebuild);
+    EXPECT_TRUE(frame->deblock_on);
+    EXPECT_STREQ(frame->deblock.filter, "R") << "frame " << i;
+    EXPECT_NEAR(frame->deblock.step, kTrueSdfStep, kStepError);
+    EXPECT_NEAR(mean_x(exchange_.live()), kMetresAFrame * i, 0.02);
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// The sphere's frames have unobserved voxels, so recon skips them: the
+// deblock is on, its filter "off".
+TEST_F(StreamPlayerTest, TheDeblockSkipsTheMaskedSpheresFrames) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    player->step();
+    const std::optional<FrameStamp> frame = next_frame();
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_TRUE(frame->deblock_on);
+    EXPECT_STREQ(frame->deblock.filter, "off") << "frame " << i;
+    EXPECT_NEAR(frame->deblock.step, kSphereStep, kStepError);
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// The worker builds its decoder after start, and the first decode takes the
+// setting.
+TEST_F(StreamPlayerTest, TurnedOffBeforeStartTheFirstFrameDecodesWithout) {
+  ASSERT_NO_FATAL_FAILURE(use_true_sdf());
+  core::Result<std::unique_ptr<StreamPlayer>> opened =
+      StreamPlayer::open(path_);
+  ASSERT_TRUE(opened.ok()) << opened.status().message();
+  player_ = std::move(opened).value();
+  player_->set_deblock(false);
+  EXPECT_FALSE(player_->deblock());
+  player_->pause();
+  const core::Status started =
+      player_->start(device(), allocator(), extractor_config(), exchange_);
+  ASSERT_TRUE(started.ok()) << started.message();
+  player_->step();
+  const std::optional<FrameStamp> frame = next_frame();
+  ASSERT_TRUE(frame.has_value());
+  EXPECT_EQ(frame->index, 0u);
+  EXPECT_FALSE(frame->deblock_on);
+  EXPECT_STREQ(frame->deblock.filter, "off");
+  EXPECT_NEAR(frame->deblock.step, kTrueSdfStep, kStepError);
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "paused, nothing goes";
+  EXPECT_TRUE(player_->status().ok()) << player_->status().message();
+}
+
+// Paused on frame 1, the worker has read frame 2 but decodes it only when it
+// is due, so the grid holds frame 1: a toggle rebuilds that, and nothing
+// else goes until a step.
+TEST_F(StreamPlayerTest, ToggledWhilePausedTheFrameShownIsRebuilt) {
+  ASSERT_NO_FATAL_FAILURE(use_true_sdf());
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 1));
+  std::this_thread::sleep_for(kQuiet);  // the worker waits for frame 2's due
+  player->set_deblock(false);
+  ASSERT_NO_FATAL_FAILURE(expect_rebuild(1, false, "off"));
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "paused, nothing else goes";
+  player->set_deblock(true);
+  ASSERT_NO_FATAL_FAILURE(expect_rebuild(1, true, "R"));
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "paused, nothing else goes";
+  EXPECT_FALSE(player->playing());
+  // The next frame decodes as set.
+  player->step();
+  const std::optional<FrameStamp> next = next_frame();
+  ASSERT_TRUE(next.has_value());
+  EXPECT_EQ(next->index, 2u);
+  EXPECT_FALSE(next->rebuild);
+  EXPECT_STREQ(next->deblock.filter, "R");
+  EXPECT_NEAR(mean_x(exchange_.live()), 2 * kMetresAFrame, 0.02);
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, ToggledOnTheLastFrameHeldWithLoopOffItIsRebuilt) {
+  ASSERT_NO_FATAL_FAILURE(use_true_sdf());
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  player->set_loop(false);
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    ASSERT_NO_FATAL_FAILURE(step_to(*player, i));
+  }
+  std::this_thread::sleep_for(kQuiet);  // the worker reaches the end
+  player->set_deblock(false);
+  ASSERT_NO_FATAL_FAILURE(expect_rebuild(kFrames - 1, false, "off"));
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "held, nothing else goes";
+  // Play restarts from the first frame, which decodes as set.
+  player->play();
+  const std::optional<FrameStamp> first = next_frame();
+  ASSERT_TRUE(first.has_value());
+  EXPECT_EQ(first->index, 0u);
+  EXPECT_FALSE(first->rebuild);
+  EXPECT_FALSE(first->deblock_on);
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+TEST_F(StreamPlayerTest, AToggleDuringAParkRebuildsAtUnpark) {
+  ASSERT_NO_FATAL_FAILURE(use_true_sdf());
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  EXPECT_TRUE(player->park(kArrival));
+  player->set_deblock(false);
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "rebuilt while parked";
+  player->unpark();
+  ASSERT_NO_FATAL_FAILURE(expect_rebuild(0, false, "off"));
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Playing, a toggle reaches the next frame decoded, which may be after one
+// decoded before it; nothing is rebuilt.
+TEST_F(StreamPlayerTest, ToggledWhilePlayingTheFramesAfterTakeIt) {
+  ASSERT_NO_FATAL_FAILURE(use_true_sdf());
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  const std::optional<FrameStamp> first = next_frame();
+  ASSERT_TRUE(first.has_value());
+  EXPECT_TRUE(first->deblock_on);
+  player->set_deblock(false);
+  std::optional<FrameStamp> frame;
+  for (int i = 0; i < 3; ++i) {
+    frame = next_frame();
+    ASSERT_TRUE(frame.has_value()) << "no frame after the toggle";
+    EXPECT_FALSE(frame->rebuild);
+    if (!frame->deblock_on) {
+      break;
+    }
+  }
+  EXPECT_FALSE(frame->deblock_on) << "the toggle reached no frame";
+  EXPECT_STREQ(frame->deblock.filter, "off");
+  for (int i = 0; i < 2; ++i) {
+    const std::optional<FrameStamp> after = next_frame();
+    ASSERT_TRUE(after.has_value());
+    EXPECT_FALSE(after->rebuild);
+    EXPECT_FALSE(after->deblock_on);
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
 // --- Live: the tests' stream served on 127.0.0.1 ----------------------------
@@ -1604,6 +1863,7 @@ TEST_F(LivePlayerTest, FramesArriveWithTheirSeqAsTheirIndex) {
     EXPECT_EQ(frame->key, i % kIntraPeriod == 0);
     EXPECT_EQ(frame->records, 1u);
     EXPECT_EQ(frame->record_bytes, frame->bytes);
+    EXPECT_TRUE(frame->deblock_on);
     // No "read": the wait for the network is no stage.
     const std::vector<core::StageRow>& rows = frame->stages.rows();
     ASSERT_EQ(rows.size(), 2u) << "frame " << i;
@@ -1615,6 +1875,29 @@ TEST_F(LivePlayerTest, FramesArriveWithTheirSeqAsTheirIndex) {
   EXPECT_EQ(status.seq, kFrames - 1);
   EXPECT_EQ(status.address, "127.0.0.1:" + std::to_string(server->port()));
   EXPECT_TRUE(status.last_error.empty()) << status.last_error;
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// The sphere's frames are masked, so the deblock skips them; the setting each
+// carries is the decoder's at its record.
+TEST_F(LivePlayerTest, ADeblockToggleReachesTheNextRecord) {
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  for (std::uint64_t i = 0; i < 3; ++i) {
+    const bool on = i != 1;
+    player->set_deblock(on);
+    ASSERT_NO_FATAL_FAILURE(publish(*server, i));
+    const std::optional<FrameStamp> frame = next_frame();
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_EQ(frame->index, i);
+    EXPECT_EQ(frame->deblock_on, on) << "frame " << i;
+    EXPECT_STREQ(frame->deblock.filter, "off");
+    EXPECT_NEAR(frame->deblock.step, kSphereStep, kStepError);
+    EXPECT_FALSE(frame->rebuild);
+  }
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 

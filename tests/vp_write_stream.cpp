@@ -44,6 +44,9 @@ using vp_test::kFrames;
 constexpr float kVoxel = 0.01f;
 constexpr float kTrunc = 0.04f;
 constexpr float kRadius = 0.12f;
+// The true-SDF stream's truncation: 16 voxels, past recon's
+// kTrueSdfBandVoxels (15), so every coded voxel is observed.
+constexpr float kTrueSdfTrunc = 0.16f;
 
 struct HostMesh {
   std::vector<recon::Vec3f> vertices;
@@ -80,13 +83,15 @@ HostMesh sphere(const recon::Vec3f& centre) {
 
 // A stream: kFrames frames of the sphere moving a block (8 voxels) a frame
 // along x, at pts_of, an I-frame every kIntraPeriod, each record a key
-// exactly when its frame is an I-frame, at `voxel` metres a voxel. Frame
-// `empty`, if given, holds no block, so it meshes nothing: an I-frame of no
-// blocks. It replaces a file at `path`, such as the last ctest run's, which
-// StreamWriter would refuse.
+// exactly when its frame is an I-frame, at `voxel` metres a voxel and
+// `trunc` metres of truncation, coded as a true SDF when `true_sdf`
+// (recon's EncoderConfig::true_sdf). Frame `empty`, if given, holds no
+// block, so it meshes nothing: an I-frame of no blocks. It replaces a file
+// at `path`, such as the last ctest run's, which StreamWriter would refuse.
 core::Status write_stream(core::Device& device, core::Allocator& allocator,
                           const std::string& path,
-                          std::optional<std::uint64_t> empty, float voxel) {
+                          std::optional<std::uint64_t> empty, float voxel,
+                          float trunc = kTrunc, bool true_sdf = false) {
   std::error_code ec;
   std::filesystem::remove(path, ec);  // StreamWriter says why if it is left
   namespace stream = recon::stream;
@@ -95,7 +100,7 @@ core::Status write_stream(core::Device& device, core::Allocator& allocator,
   const vol::VoxelGridParams params{voxel,
                                     8,
                                     512,
-                                    kTrunc,
+                                    trunc,
                                     vol::kDefaultBucketSize,
                                     kBuckets,
                                     vol::kDefaultBucketSize * kBuckets,
@@ -108,6 +113,7 @@ core::Status write_stream(core::Device& device, core::Allocator& allocator,
              recon::tsdf::MeshIntegrator::create(device, allocator));
   recon::codec::EncoderConfig config;
   config.intra_period = vp_test::kIntraPeriod;
+  config.true_sdf = true_sdf;
   VKC_ASSIGN(recon::codec::Encoder encoder,
              recon::codec::Encoder::create(device, allocator, config));
   stream::Session session;
@@ -171,6 +177,9 @@ core::Status write(const core::Instance& instance,
   VKC_TRY(write_stream(device, allocator,
                        (dir / vp_test::kEmptyFrameStream).string(),
                        vp_test::kEmptyFrame, kVoxel));
+  VKC_TRY(write_stream(device, allocator,
+                       (dir / vp_test::kTrueSdfStream).string(), std::nullopt,
+                       kVoxel, kTrueSdfTrunc, /*true_sdf=*/true));
   return write_stream(device, allocator,
                       (dir / vp_test::kCoarseStream).string(), std::nullopt,
                       2 * kVoxel);

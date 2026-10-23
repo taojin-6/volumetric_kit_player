@@ -4,6 +4,49 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-23 — The decoder-side deblock, on by default
+
+`StreamPlayer::set_deblock` and `deblock`; `FrameStamp`'s `deblock_on`,
+`deblock` and `rebuild`; the panel's Deblock, the stats' deblock line and the
+desktop's D key, over recon #264's `Decoder::set_deblock`, `rebuild` and
+`last_deblock`.
+
+- **On by default,** the owner's call (2026-10-23); recon's `Decoder` keeps
+  it off. It is out of loop and costs no bits (recon's `decoder.hpp`), so it
+  may change between any two frames.
+- **`StreamPlayer` holds the choice,** a control as Loop is, safe from any
+  thread, and the worker gives it to the decoder before each decode, as the
+  decoder is the worker's alone; live too, from the next record. The iOS
+  shell hands it to the player it builds for a new source or after a
+  failure.
+- **A toggle while paused, or held at the end, redoes the frame shown:** the
+  worker rebuilds it from the decoder's reference (`Decoder::rebuild`),
+  meshes it and publishes it again, stamped `rebuild`, which `PlaybackStats`
+  does not count. Why: otherwise the change shows only at the next step.
+  Playing, the next frame shows it.
+- **So a file's frame is decoded once it is due,** not as soon as it is read:
+  until then the grid holds the frame published last, which is the frame
+  `rebuild` redoes, the one decoded last. A frame reaches the screen a
+  decode after it is due, at the same pace, as each is due from the last
+  one's due time; the clock counts a frame shown as of when it was due, so a
+  slow decode does not push the frames after it back, but only once it
+  decodes, so a frame that fails takes no step, as before.
+- **The stats name what the deblock did to the frame drawn:** off, the filter
+  recon ran (LF, LG or R), or skipped: on, but no filter run, for a frame
+  recon's mask gate skips (`codec::Decoder::set_deblock`), as a fused
+  room's are, or one whose T is finer than every filter's. recon's
+  `DeblockInfo` says "off" for both, so the panel does not tell them apart.
+  T is in mm to the micrometre, as the rule's lowest threshold is 0.075 mm.
+- **Deblock is a box after Normals, or, where that row would not fit the work
+  area, on a row of its own below it:** a phone's row in portrait was 365 pt
+  of 375 already. In landscape there is no height for a row: with the
+  deblock line the stats end 9 pt above the controls on the view tests'
+  shortest notched phone (lavapipe, 2026-10-23), and the row with Deblock is
+  488 pt wide.
+- **The tests' true-SDF stream** codes the sphere with no unobserved voxel,
+  so the deblock runs on it (filter R); the other streams' frames are
+  masked, so it skips them.
+
 ## 2026-10-22 — A frame holds at most 131,072 blocks
 
 `kMaxFrameBlocks`, the ceiling recon's `codec::make_decode_grid` and

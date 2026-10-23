@@ -96,12 +96,17 @@ vkc::Result<std::optional<cfg::Source>> ChosenSource() {
   return DocumentsStream();
 }
 
-// The view over `source`, on `layer`, with fingertip-sized controls and the
-// Source button. No validation: iOS has no layer to load (DECISIONS.md).
+// The view over `source`, on `layer`, with fingertip-sized controls, the
+// Source button and the deblock as `deblock`, if set, as a view before had it.
+// No validation: iOS has no layer to load (DECISIONS.md).
 vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
-    CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source) {
+    CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source,
+    std::optional<bool> deblock) {
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
              vkp::open_source(source));
+  if (deblock) {
+    player->set_deblock(*deblock);
+  }
   VKC_ASSIGN(const vg::windowing::SurfaceSource surface,
              vg::windowing::metal_surface((__bridge const void*)layer));
   vkp::PlayerViewConfig config;
@@ -183,6 +188,7 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   BOOL _rebuild;   // a park timed out, so the device may be lost
   BOOL _appeared;  // on screen, so the dialog can be presented
   BOOL _askDue;    // nothing to play before then: ask once it is
+  std::optional<bool> _deblock;  // the last view's Deblock, for the next
 }
 
 - (void)loadView {
@@ -277,7 +283,7 @@ glm::vec2 At(UITouch* touch, UIView* view) {
     return;
   }
   vkc::Result<std::unique_ptr<vkp::PlayerView>> made =
-      MakeView((CAMetalLayer*)_metal.layer, pixels, **chosen);
+      MakeView((CAMetalLayer*)_metal.layer, pixels, **chosen, _deblock);
   if (!made.ok()) {
     [self fail:made.status()];
     return;
@@ -443,6 +449,9 @@ glm::vec2 At(UITouch* touch, UIView* view) {
 
 - (void)dropView {
   [self stopLink];
+  if (_view) {
+    _deblock = _view->player().deblock();
+  }
   _touch.reset();  // the platform half first; the view waits for the GPU
   _view.reset();
 }

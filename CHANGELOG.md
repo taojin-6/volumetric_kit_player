@@ -59,11 +59,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   normals (gfx's `kHybridMeshNormals`) in place of lighting
   (`PlayerView::normals`, `set_normals` and `mesh_flags`; `draw_controls`
   takes the view's `normals`).
+- The decoder-side deblock (recon #264), on by default: Deblock in the panel
+  and the desktop's D key turn it on and off (`StreamPlayer::set_deblock`
+  and `deblock`), and while paused the frame shown is rebuilt with the
+  change and drawn again (`FrameStamp::rebuild`). The stats say what it did
+  to the frame drawn, off, its filter or skipped, and the frame's T
+  (`FrameStamp::deblock_on` and `deblock`). The iOS app keeps the choice
+  for the next source.
 
 ### Changed
 
 - build: the player pins core 0.19.0 (ff44a98, core #49's merge), gfx main
-  at #152's merge (f147e00) and recon main at #269's merge (ab8d01c), and
+  at #152's merge (f147e00) and recon main at #264's merge (6080263), and
   requires core 0.18.0, gfx's floor. The view presents FIFO as gfx's default
   (gfx #150), naming no mode.
 - The iOS app's controls fit a phone: 17-pt text (`ui_scale` 1.3) and every
@@ -85,6 +92,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a vsync sooner; a file keeps gfx's default.
 - The iOS app draws at most 60 frames a second, so a ProMotion iPad no
   longer redraws the same frame at 120 Hz.
+- A file's frame is decoded once it is due rather than as soon as it is
+  read, so the grid holds the frame shown while paused.
 - A consumer of `StreamPlayer` calls `taken()` from the commit of each
   mesh it takes; the worker sleeps until then rather than waking every
   2 ms, as it did while a window was minimized. Live, a frame waiting on

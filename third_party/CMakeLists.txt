@@ -31,18 +31,21 @@ FetchContent_MakeAvailable(volumetric_kit_core)
 vkc_require_core(0.18.0 VULKAN CONFIG)
 
 # --- volumetric_kit_recon ----------------------------------------------------
-# The stream reader, the codec's decode grid, Marching Cubes, the mesh exchange
-# and the live stream's client. Its tests, examples and -Werror stay off in a
-# subproject, so its library's core floor (0.2.0) is the one checked. The pin is
-# recon main at #269's merge (ab8d01c): #269's StreamClient::next progress
-# output and #266's block ceiling for codec::make_decode_grid and
-# decode_growing, beside #260's networking::StreamClient and StreamServer,
-# #256's empty mesh payload at MeshExchange's commit and #255's
-# volume::kDefaultBucketSize / kDefaultMaxChain.
+# The stream reader, the codec's decode grid and its deblock, Marching Cubes,
+# the mesh exchange and the live stream's client. Its tests, examples and
+# -Werror stay off in a subproject, so its library's core floor (0.2.0) is the
+# one checked; its own core pin is the player's. The pin is recon main at #264's
+# merge (6080263): #264's decoder-side deblock (codec::Decoder::set_deblock,
+# rebuild and last_deblock) and #262's EncoderConfig::true_sdf, which the tests'
+# streams use, beside #269's StreamClient::next progress output, #266's block
+# ceiling for codec::make_decode_grid and decode_growing, #260's
+# networking::StreamClient and StreamServer, #256's empty mesh payload at
+# MeshExchange's commit and #255's volume::kDefaultBucketSize /
+# kDefaultMaxChain.
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG ab8d01c58a0907c5ab0475620a87ccdfddb2a56b)
+  GIT_TAG 60802639db2ee47328bd8e1d023cfb752f40a64d)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------
