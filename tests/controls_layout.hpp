@@ -5,11 +5,13 @@
 
 /// @file controls_layout.hpp
 /// Where draw_controls lays out its row, and draw_source its button, for the
-/// tests that put a finger on a control.
+/// tests that put a finger on a control; and the stats' tables, for those
+/// that count their rows.
 
 #include <cfloat>
 #include <cmath>
 #include <string>
+#include <vector>
 
 #include <glm/vec2.hpp>
 
@@ -74,6 +76,31 @@ inline glm::vec2 source_top_left(const ImGuiWindow& source) {
 // Its middle, in points: it is sized as Play/Pause.
 inline glm::vec2 source_middle(const ImGuiWindow& source) {
   return source_top_left(source) + 0.5f * control_size(source, 0);
+}
+
+// The stats' table `id`, "stages" or "render", as the last frame drew it: in
+// one of the compact stats' columns, the body's child windows, or in the body
+// itself; null with none drawn. The stats' context is current.
+inline const ImGuiTable* stats_table(const char* id) {
+  ImGuiWindow* const body = ImGui::FindWindowByName(
+      (std::string(volumetric_kit::player::kStatsWindow) + "##body").c_str());
+  if (body == nullptr) {
+    return nullptr;
+  }
+  std::vector<ImGuiWindow*> windows;
+  for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows) {
+    if (window->ParentWindow == body) {
+      windows.push_back(window);
+    }
+  }
+  windows.push_back(body);
+  for (ImGuiWindow* window : windows) {
+    const ImGuiTable* table = ImGui::TableFindByID(window->GetID(id));
+    if (table != nullptr && table->LastFrameActive == ImGui::GetFrameCount()) {
+      return table;
+    }
+  }
+  return nullptr;
 }
 
 }  // namespace vp_test

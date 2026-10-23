@@ -152,8 +152,9 @@ std::string display_line(const gfx::FrameMetrics& render);
 /// figures. Not thread-safe: the drawing thread owns it.
 ///
 /// **Compact**, for a phone: the worker's table without its breakdown rows,
-/// the tables' lines wrapped to the @ref stats_lines' width, and, in a work
-/// area wider than tall, the renderer's table beside the worker's.
+/// each table's window stated on a shorter line ("per stream frame · 30/30
+/// timed"), and, in a work area wider than tall, the renderer's table beside
+/// the worker's.
 ///
 /// @code
 /// StatsPanel panel(/*compact=*/is_phone);

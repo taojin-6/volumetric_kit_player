@@ -103,6 +103,11 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   view->camera_.set_target({0.0f, 0.85f, 0.0f});
   view->camera_.set_distance(3.0f);
   view->source_button_ = config.source_button;
+  view->stats_panel_ = StatsPanel(config.compact_stats);
+  // The panel opens at launch, so its frames are timed from the first.
+  view->device_timing_ = config.device_timing;
+  view->player_->set_device_timing(
+      config.device_timing.value_or(DeviceTiming::kAll));
   VKC_TRY(view->player_->start(view->recon_device_, view->recon_allocator_,
                                wiring.mc, view->exchange_));
   return view;
@@ -150,9 +155,14 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   if (source_button_ && draw_source()) {
     source_request_ = true;
   }
-  stats_panel_.draw(stats_, shown_, shown_triangles_,
-                    profiler_.metrics().sections, PlaybackStats::Clock::now(),
-                    player_->live());
+  stats_panel_.draw(stats_, shown_, shown_triangles_, profiler_.metrics(),
+                    PlaybackStats::Clock::now(), player_->live());
+  // The worker times its frames' device work while the panel shows it,
+  // unless a measurement fixed the timing.
+  if (!device_timing_) {
+    player_->set_device_timing(stats_panel_.open() ? DeviceTiming::kAll
+                                                   : DeviceTiming::kOff);
+  }
   // 3. The newest mesh, an empty one included; the slot's last frame has
   // completed. Each frame published is taken here once, and counted.
   exchange_.begin_frame(frame.slot, [this](const recon::mesh::DeviceMesh& mesh,
@@ -160,6 +170,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
     stats_.add_frame(stamp, PlaybackStats::Clock::now());
     shown_triangles_ = mesh.triangle_count;
     shown_ = std::move(stamp);
+    ++frames_taken_;
     player_->taken();
     return true;
   });
