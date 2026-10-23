@@ -543,7 +543,8 @@ TEST_F(ControlsTest, PauseAndNormalsFitTheirButtons) {
 // frame and a line tall and as wide as the line, which a row with
 // Play/Pause, Step and Loop would outgrow. A tap on Normals flips the view's
 // shading, and one on Deblock the player's deblock.
-TEST_F(ControlsTest, ALivePlayersControlsAreNormalsOverItsStatusLine) {
+TEST_F(ControlsTest,
+       ALivePlayersControlsAreNormalsAndDeblockOverItsStatusLine) {
   core::Result<std::unique_ptr<StreamPlayer>> live =
       StreamPlayer::connect({"127.0.0.1", 47801});  // never started: no I/O
   ASSERT_TRUE(live.ok()) << live.status().message();
