@@ -123,11 +123,11 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 ///         else P), payload and triangles (each `-` before the first); what
 ///         the deblock did to it (FrameStamp::deblock): `off` with the
 ///         deblock off, the filter recon ran (`LF`, `LG` or `R`), or
-///         `skipped` with the deblock on but no filter run, for a frame whose
-///         masks gate it (one with an unobserved voxel) or whose T is finer
-///         than every filter's, then its T to the micrometre (each `-` before
-///         the first); and the rate frames are taken at, over the nominal
-///         when it is known, or live beside the records a second.
+///         `skipped` with the deblock on but no filter run, for a frame
+///         recon's mask gate skips (`codec::Decoder::set_deblock`) or whose
+///         T is finer than every filter's, then its T to the micrometre (each
+///         `-` before the first); and the rate frames are taken at, over the
+///         nominal when it is known, or live beside the records a second.
 std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
