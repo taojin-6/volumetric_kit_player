@@ -8,6 +8,7 @@
 ///        sender: a worker thread decodes and meshes its frames on the GPU,
 ///        and hands each mesh to the thread that draws it.
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -92,6 +93,21 @@ struct LiveStatus {
 ///         convention); whole with neither, as a bare "out of memory".
 std::string live_reason(const core::Status& ended, const std::string& address);
 
+/// @brief How often the worker times its frames' device work
+///        (@ref StreamPlayer::set_device_timing).
+enum class DeviceTiming : std::uint8_t {
+  kOff,      ///< Never: recon gets no metrics, so it writes no timestamp.
+  kSampled,  ///< One frame in @ref kSampleEvery: the first, then every
+             ///< kSampleEvery-th.
+  kAll,      ///< Every frame.
+};
+
+/// The frames @ref DeviceTiming::kSampled takes one of.
+inline constexpr std::uint64_t kSampleEvery = 10;
+
+/// @return @p timing as a measurement names it: "off", "sampled" or "all".
+const char* to_string(DeviceTiming timing) noexcept;
+
 /// @brief What the worker publishes with each frame's mesh.
 struct FrameStamp {
   /// A file's frame: its place among the track's records read in this pass,
@@ -103,13 +119,16 @@ struct FrameStamp {
   std::uint64_t pts_ns = 0;  ///< Its pts, on its track's clock.
   std::uint64_t bytes = 0;   ///< Its record's payload bytes.
   bool key = false;          ///< A key record: an intra (I) frame; else P.
-  /// Host ms of its "read" (its record's header and payload, CRC included,
-  /// and other tracks' records passed on the way), "decode" (the first
-  /// frame's grid included) and "mesh"; decode and mesh each block on their
-  /// fence, so the device's work is inside. "decode" also has the codec
-  /// kernels' device ms where its queue can time; the grid's remove and
-  /// allocate are not timed. Live, there is no "read" (the wait for the
-  /// network is no stage), and "decode" is this record's alone.
+  /// Its stages, each with its host time and the part of it blocked on the
+  /// device (`core::StageRow::wait_ms`): "read" (its record's header and
+  /// payload, CRC included, and other tracks' records passed on the way),
+  /// "decode" (the first frame's grid included) and "mesh"; decode and mesh
+  /// each block on their fences. Live, there is no "read" (the wait for the
+  /// network is no stage), and "decode" is this record's alone. A @ref timed
+  /// frame's "decode" and "mesh" have device halves too, each over recon's
+  /// breakdown rows that follow it: decode's "  ..rans decode", "  ..apply"
+  /// and "  ..inverse", mesh's "  ..active set" (when it compacts) and
+  /// "  ..dispatch".
   core::StageMetrics stages;
   /// The records received since the frame before was published, this one's
   /// included: 1 for a file; live, more when only the newest was meshed.
@@ -117,6 +136,14 @@ struct FrameStamp {
   std::uint64_t record_bytes = 0;  ///< Their payload bytes.
   /// When the worker published it, so when its records had all come.
   Playback::Clock::time_point published{};
+  /// Whether its device work was timed (@ref DeviceTiming).
+  bool timed = false;
+  /// The pass of a file's track it was read in, from 1; live, 1.
+  std::uint64_t pass = 1;
+  /// What the worker's device did since the frame before was published, up
+  /// to this one's publish (`core::Device::counters`): the submits, the
+  /// waits that blocked and their time, and the staging buffers.
+  core::DeviceCounters counters;
 };
 
 /// @brief The handoff of the worker's meshes to the thread that draws them.
@@ -148,6 +175,10 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 /// shows no frame (its first refusal in the message), stops the worker, and
 /// @ref status reports it. Live, a network or protocol failure is none
 /// (@ref connect).
+///
+/// **Timing.** Each frame's stamp has its stages' host and wait times, and
+/// the worker's device counts, always; its device times only as
+/// @ref set_device_timing asks, off until then.
 ///
 /// **Threads.** The controls (@ref play, @ref pause, @ref step,
 /// @ref set_loop), their reads, @ref park, @ref unpark and @ref taken lock the
@@ -227,6 +258,8 @@ class StreamPlayer {
   bool live() const noexcept { return reader_ == nullptr; }
   /// @return The geometry track's records: the frames it plays; 0 live.
   std::uint64_t frame_count() const noexcept;
+  /// @return The geometry track's index in a file's session; 0 live.
+  std::uint16_t track() const noexcept { return track_; }
   /// @return The geometry track's counts, from the footer or the open scan;
   ///         none live.
   const recon::stream::TrackStats& track_stats() const noexcept;
@@ -281,6 +314,24 @@ class StreamPlayer {
   ///        grid. A no-op when not parked.
   void unpark();
 
+  /// @brief Time the device work of the frames the worker starts from now on
+  ///        as @p timing says; safe from any thread. A timed frame's recon
+  ///        writes timestamps, which cost the device time: a first one in a
+  ///        command buffer about 0.13 ms on Apple GPUs.
+  ///
+  /// @code
+  /// player.set_device_timing(panel.open() ? DeviceTiming::kAll
+  ///                                       : DeviceTiming::kOff);
+  /// @endcode
+  /// @param timing  How often.
+  void set_device_timing(DeviceTiming timing) noexcept {
+    timing_.store(timing, std::memory_order_relaxed);
+  }
+  /// @return What @ref set_device_timing last set; kOff before.
+  DeviceTiming device_timing() const noexcept {
+    return timing_.load(std::memory_order_relaxed);
+  }
+
   /// @brief Tell the worker the consumer has taken a mesh: call it from the
   ///        commit of each FrameExchange::begin_frame that takes one. The
   ///        worker sleeps until then before it meshes the next frame, rather
@@ -319,16 +370,21 @@ class StreamPlayer {
   // Build grid_ for the stream of `payload`, the first frame read.
   core::Status make_grid(const std::vector<std::uint8_t>& payload);
   // Decode `payload` into grid_, built from it if there is none, timed into
-  // `stages`' "decode" row.
+  // `stages`' "decode" row, and with `timed` its device half and recon's
+  // breakdowns.
   core::Status decode(const std::vector<std::uint8_t>& payload,
-                      core::StageMetrics& stages);
+                      core::StageMetrics& stages, bool timed);
+  // Whether the next frame's device work is timed, as timing_ asks.
+  bool time_next_frame();
   // Wait until the frame at pts_ns is due, and count it shown: false on quit.
   bool wait_due(std::uint64_t pts_ns);
   // Once the consumer took the last mesh, mesh the grid and publish it with
   // @p stamp, the extract timed into its "mesh" row: false on quit.
   core::Result<bool> publish(FrameStamp stamp);
   // Mesh grid_ and publish it with `stamp`, the extract timed into its "mesh"
-  // row, within a step, once the consumer took the last mesh.
+  // row (its device half too when `stamp.timed`) and the device's counts
+  // since the last publish into its counters, within a step, once the
+  // consumer took the last mesh.
   core::Status mesh_and_publish(FrameStamp stamp);
   // At the end of a pass that showed a frame: true to play the track again,
   // false on quit.
@@ -357,6 +413,10 @@ class StreamPlayer {
   std::optional<recon::volume::VoxelBlockGrid> grid_;
   std::optional<recon::mesh::MarchingCubes> extractor_;
   std::thread worker_;
+  std::uint64_t frames_started_ = 0;  // for kSampled
+  core::DeviceCounters counted_;      // the device's, at the last publish
+
+  std::atomic<DeviceTiming> timing_{DeviceTiming::kOff};
 
   // The controls, the park, the connection and the worker's outcome, under
   // mutex_; changed_ wakes the worker on each change, and a park at each

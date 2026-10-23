@@ -14,6 +14,8 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/gfx/core/frame_metrics.hpp"
+#include "volumetric_kit/gfx/ui/metrics_panel.hpp"
 #include "volumetric_kit/player/playback.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
@@ -125,11 +127,23 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      Playback::Clock::time_point now,
                                      bool live);
 
+/// @brief The line over the stats' render table.
+///
+/// @code
+/// // "display 59.9 fps"
+/// const std::string line = display_line(profiler.metrics());
+/// @endcode
+/// @param render  The renderer's frame (gfx::Profiler::metrics).
+/// @return "display <fps> fps", to one place: the rate frames are drawn at.
+std::string display_line(const gfx::FrameMetrics& render);
+
 /// @brief The "Stats" panel, at the top left of the main viewport's work
 ///        area: a header (gfx::ui::begin_collapsible_panel) and below it, while
-///        open, the @ref stats_lines and a stage table
-///        (gfx::ui::draw_stage_table) on a 60 % background. Only the header
-///        takes input: a finger or the mouse on the body reaches the camera.
+///        open, on a 60 % background, the @ref stats_lines, the worker's stage
+///        table, per stream frame, and the renderer's, per display frame under
+///        its @ref display_line (gfx::ui::draw_stage_table, each under a line
+///        stating its gfx::ui::StageWindow). Only the header takes input: a
+///        finger or the mouse on the body reaches the camera.
 ///
 /// It opens at launch, and a tap or click on the header closes and opens it.
 /// While it is open its figures are rebuilt every @ref kRefresh, so the
@@ -137,9 +151,14 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
 /// @ref PlaybackStats it reads keeps counting, so it reopens with current
 /// figures. Not thread-safe: the drawing thread owns it.
 ///
+/// **Compact**, for a phone: the worker's table without its breakdown rows,
+/// the tables' lines wrapped to the @ref stats_lines' width, and, in a work
+/// area wider than tall, the renderer's table beside the worker's.
+///
 /// @code
+/// StatsPanel panel(/*compact=*/is_phone);
 /// overlay.new_frame();
-/// panel.draw(stats, shown, triangles, profiler.metrics().sections,
+/// panel.draw(stats, shown, triangles, profiler.metrics(),
 ///            PlaybackStats::Clock::now(), player.live());
 /// @endcode
 class StatsPanel {
@@ -147,34 +166,57 @@ class StatsPanel {
   /// How often the figures are rebuilt while it is open.
   static constexpr std::chrono::milliseconds kRefresh{250};
 
+  /// @param compact  Whether it is drawn compact (above), for a phone.
+  explicit StatsPanel(bool compact = false) : compact_(compact) {}
+
   /// @brief Draw it; a tap or click on the header closes or opens it. Open
   ///        after the header, it first rebuilds the figures if @ref kRefresh
   ///        has passed since their last rebuild.
   /// @param stats      The figures.
   /// @param shown      The newest frame drawn, for @ref stats_lines.
   /// @param triangles  Its mesh's triangles.
-  /// @param render     The rows after the stage means: the renderer's
-  ///                   (gfx::Profiler::metrics).
+  /// @param render     The renderer's frame (gfx::Profiler::metrics): its
+  ///                   rate and its rows, the render loop's included.
   /// @param now        The time, for the rates and the rebuild.
   /// @param live       Whether they are a live player's, for
   ///                   @ref stats_lines.
   /// @pre An ImGui frame is open on the view's context.
   void draw(const PlaybackStats& stats, const std::optional<FrameStamp>& shown,
-            std::uint32_t triangles, const std::vector<core::StageRow>& render,
+            std::uint32_t triangles, const gfx::FrameMetrics& render,
             Playback::Clock::time_point now, bool live);
 
   /// @return Whether it is open.
   bool open() const noexcept { return open_; }
+  /// @return Whether it is drawn compact.
+  bool compact() const noexcept { return compact_; }
   /// @return Its lines, as of their last rebuild.
   const std::vector<std::string>& lines() const noexcept { return lines_; }
-  /// @return Its table's rows, as of their last rebuild: the stage means
-  ///         (PlaybackStats::stage_means), then the renderer's.
+  /// @return The worker's table's rows, as of their last rebuild: the stage
+  ///         means (PlaybackStats::stage_means), breakdowns included, which
+  ///         compact leaves undrawn.
   const std::vector<core::StageRow>& rows() const noexcept { return rows_; }
+  /// @return What they cover: the window's frames and how many were timed,
+  ///         per "stream frame".
+  const gfx::ui::StageWindow& window() const noexcept { return window_; }
+  /// @return The renderer's table's rows, as of their last rebuild: one
+  ///         display frame's.
+  const std::vector<core::StageRow>& render_rows() const noexcept {
+    return render_rows_;
+  }
+  /// @return What they cover: one "display frame", timed or not.
+  const gfx::ui::StageWindow& render_window() const noexcept {
+    return render_window_;
+  }
 
  private:
   bool open_ = true;
+  bool compact_ = false;
   std::vector<std::string> lines_;
   std::vector<core::StageRow> rows_;
+  gfx::ui::StageWindow window_;
+  std::string display_;
+  std::vector<core::StageRow> render_rows_;
+  gfx::ui::StageWindow render_window_;
   std::optional<Playback::Clock::time_point> rebuilt_;
 };
 
