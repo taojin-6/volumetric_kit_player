@@ -54,7 +54,7 @@ log". Nothing in the data flow changes; today's costs become measurable.
   ctest runs are validated where the tests are.
 - **A measure launch that cannot log writes why** into a `.failed` file
   beside the logs. Why: the runner cannot see the phone's screen.
-- **The runner, `tools/measure/measure`, runs from the Mac, which only
+- **The runner, `tools/measure/measure`, runs from the Mac, which
   orchestrates.** On the lab it keeps its own clone of the player in the
   lab's scratch, holds a lock for the whole run, and builds with
   `VP_DESKTOP_APP=OFF`. Why: it leaves the owner's checkout alone, two runs
@@ -63,6 +63,13 @@ log". Nothing in the data flow changes; today's costs become measurable.
   Two passes, the first a warm-up, and timing off then all, as M0 reads host
   rows untimed and device rows timed. A phone run starts an app on the
   owner's device, so it runs only with the owner's go-ahead.
+- **`mac` measures on the Mac itself, with the owner's go-ahead,** once the
+  Mac is idle, its load written beside each log. Why: the owner allowed it
+  with the iPhone away (2026-10-23: "you can measure on a mac"), and its GPU
+  is Apple's under MoltenVK, as a phone's is; the Mac is otherwise shared
+  and only orchestrates, so a run waits for it to be idle and says how busy
+  it was. It builds on the siblings' checkouts clean at their pins, as
+  `vp_build_info` reads clean, so it fetches only what no checkout has.
 - **iOS builds Release,** in CI's iOS step and the README: a measurement and
   the owner's checks run what ships, not an `-O0` build.
 

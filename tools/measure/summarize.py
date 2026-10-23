@@ -7,7 +7,9 @@ usage: summarize.py LOG.csv [LOG.csv ...]
 
 A log is the player's (src/volumetric_kit/player/measure_log.hpp, format 1),
 as vp_probe and the iOS app's measure launch write it. Per log, under what it
-measured: per stage, the mean, p50 and p95 of its host (busy), wait and GPU
+measured, and after its device the machine's load before the run if a
+<log>.load beside it says (the runner's mac mode writes one): per stage, the
+mean, p50 and p95 of its host (busy), wait and GPU
 milliseconds, and how many of its frames had the GPU measured; then the
 worker's device counts per frame. Given two logs, a before/after diff of the
 first and the second follows. A log of several passes leaves out its first,
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import csv
 import math
+import os
 import sys
 from dataclasses import dataclass, field
 
@@ -84,6 +87,17 @@ class Log:
     order: list = field(default_factory=list)  # stage names (place)
     stages: dict = field(default_factory=dict)
     counts: dict = field(default_factory=lambda: {key: [] for key in COUNTS})
+    load: str = ""  # the machine's load before the run (read_load)
+
+
+def read_load(path):
+    """The load in the <log>.load beside the log at path, or empty."""
+    load = os.path.splitext(path)[0] + ".load"
+    try:
+        with open(load, encoding="utf-8") as file:
+            return file.read().strip()
+    except FileNotFoundError:
+        return ""
 
 
 def quantile(values, q):
@@ -136,7 +150,8 @@ def read_log(path):
     if not rows:
         raise LogError(f"{path}: no frames")
     passes = sorted({number(row, "pass", path, int) for row in rows})
-    log = Log(path, header, passes, passes[1:] if len(passes) > 1 else passes)
+    log = Log(path, header, passes, passes[1:] if len(passes) > 1 else passes,
+              load=read_load(path))
     at = 0  # where the frame's next new stage goes in log.order
     for row in rows:
         if number(row, "pass", path, int) not in log.kept:
@@ -198,6 +213,7 @@ def summary(log):
         f"## {h['stream']} · timing {h['timing']} · {h['device'].split(';')[0]}",
         "",
         f"- device: {h['device']}",
+        *([f"- load: {log.load}"] if log.load else []),
         f"- run: {h['run']}",
         f"- build: player {h['player']} ({h['build']}), core {h['core']}, "
         f"recon {h['recon']}, gfx {h['gfx']}",

@@ -207,6 +207,7 @@ prints their summary; its header lists the options and settings:
 
 ```bash
 tools/measure/measure lab <ref>      # the lab's RTX 4090 (a branch, a commit, pr/<n>)
+tools/measure/measure mac <ref>      # this Mac's GPU, with the owner's go-ahead
 tools/measure/measure iphone <ref>   # or ipad: VP_DEVELOPMENT_TEAM set, unlocked
 tools/measure/measure summarize before.csv after.csv
 tools/measure/measure --dry-run lab <ref>   # prints the commands, runs none
@@ -214,11 +215,14 @@ tools/measure/measure --dry-run lab <ref>   # prints the commands, runs none
 
 Each runs two passes of rafa2.vrst, the first a warm-up, with timing off and
 then all. `lab` builds `vp_probe` in its own clone of the player on the lab
-and runs it under `uvrun --time`. `iphone` and `ipad` build the signed
-Release app, install it, copy rafa2.vrst into its Documents if missing, then
-launch it once per timing; they start an app on the device, so they run only
-with the owner's go-ahead. `summarize` gives per stage the mean, p50 and p95
-of host, wait and GPU, the counts per frame, and with two logs their diff.
+and runs it under `uvrun --time`. `mac` builds it in the Mac's worktree for
+runs, on the siblings' checkouts that are clean at their pins, and runs it
+once the Mac is idle, its load written beside each log. `iphone` and `ipad`
+build the signed Release app in that worktree, install it, copy rafa2.vrst
+into its Documents if missing, then launch it once per timing; they start an
+app on the device, so they run only with the owner's go-ahead. `summarize`
+gives per stage the mean, p50 and p95 of host, wait and GPU, the counts per
+frame, a run's load, and with two logs their diff.
 
 ## Development
 

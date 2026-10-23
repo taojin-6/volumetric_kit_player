@@ -75,9 +75,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with `--worker` the worker alone, validated as the core's test policy
   asks; the iOS app does with `--measure` (`parse_measure_args`, with
   `--passes`), or writes why it cannot into a `.failed` file.
-- `tools/measure/measure`: from the Mac, a measurement on the lab's RTX 4090
-  or the owner's iPhone or iPad, its logs copied home, and `summarize.py`'s
-  markdown of them (mean, p50, p95; counts per frame; a diff of two).
+- `tools/measure/measure`: from the Mac, a measurement on the lab's RTX 4090,
+  the Mac itself or the owner's iPhone or iPad, its logs copied home, and
+  `summarize.py`'s markdown of them (mean, p50, p95; counts per frame; a
+  Mac run's load; a diff of two).
 - `PlayerViewConfig::compact_stats`, which the iOS app sets on an iPhone: no
   breakdown rows, and in landscape the two tables side by side.
 - build: `VP_DESKTOP_APP` (ON on a desktop): OFF builds the library, the

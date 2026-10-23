@@ -5,7 +5,8 @@
 
 Summarize: on the fixtures in testdata/, it keeps a log's passes after the
 first, takes nearest-rank p50 and p95, takes the GPU over measured rows alone
-and says why the rest were not, counts the device per frame, diffs two logs,
+and says why the rest were not, counts the device per frame, shows the load
+in a <log>.load beside a log after its device, diffs two logs,
 keeps a breakdown that a later frame or the second log alone has under its
 stage, and refuses what is not a log of its format.
 
@@ -74,6 +75,19 @@ class Summarize(unittest.TestCase):
         self.assertIn("| host waits | 4.00 | 4.00 | 4.00 |", rows)
         self.assertIn("| blocked ms | 2.00 | 2.00 | 3.00 |", rows)
         self.assertIn("| staging buffers | 3.00 | 3.00 | 3.00 |", rows)
+
+    def test_a_runs_load_beside_its_log_follows_its_device(self):
+        with open(BEFORE, encoding="utf-8") as file:
+            path = self.write(file.read())
+        load = os.path.splitext(path)[0] + ".load"
+        with open(load, "w", encoding="utf-8") as file:
+            file.write("load averages 2.34 2.23 2.07; memory free 84%\n")
+        self.addCleanup(os.remove, load)
+        rows = summarize.summary(summarize.read_log(path)).splitlines()
+        at = rows.index("- load: load averages 2.34 2.23 2.07; memory free 84%")
+        self.assertTrue(rows[at - 1].startswith("- device: Test GPU;"))
+        self.assertNotIn("- load:",
+                         summarize.summary(summarize.read_log(BEFORE)))
 
     def test_two_logs_are_diffed(self):
         text = summarize.summarize([BEFORE, AFTER])
