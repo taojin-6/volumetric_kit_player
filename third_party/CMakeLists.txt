@@ -13,10 +13,11 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first, and the
 # config tier: its Source, which the library's open_source takes on every
 # platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
-# is core #50's head (9b64ebb, 0.20.0): rows with busy, wait and device halves
+# is core #50's head (d65dacd, 0.20.0): rows with busy, wait and device halves
 # (core::DeviceTime), tiled device time and Device::counters, which the stats
 # and the measure log read, and scopes that close on the thread that opened
-# them; gfx and recon pin it too. Its iOS module, cmake/vkc_ios.cmake, links
+# them, with dropped-pool lifetime and calibration fixes. Declared first, it
+# also supplies gfx and recon. Its iOS module, cmake/vkc_ios.cmake, links
 # MoltenVK's iOS release (MoltenVK_ROOT) and answers glm. The floor below is the
 # pin's version, which gfx and recon need too, so an older
 # FETCHCONTENT_SOURCE_DIR override is refused.
@@ -31,7 +32,7 @@ endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 9b64ebbd109ccb6dc3d7928d1278a01d6a08084e)
+  GIT_TAG d65dacd2885650bd194db1cabe4d202cc3660aed)
 FetchContent_MakeAvailable(volumetric_kit_core)
 vkc_require_core(0.20.0 VULKAN CONFIG)
 
