@@ -598,6 +598,39 @@ TEST_F(StreamPlayerTest, PlayingNoFrameArrivesBeforeItsPts) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
+// A frame counts as shown when it was due, not when its decode ends, so a
+// slow decode does not push the frames after it back: the frame before the
+// pause, its decode held past the next one's due time, lets the next go at
+// once rather than the pause after that decode.
+TEST_F(StreamPlayerTest, ASlowDecodeDoesNotDelayTheFramesAfterIt) {
+  constexpr std::uint64_t kHeld = vp_test::kGapAt - 1;
+  // Frame kHeld is due at play, and the next this long after it.
+  const auto next_due =
+      std::chrono::nanoseconds(pts_of(kHeld + 1) - pts_of(kHeld));
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  for (std::uint64_t i = 0; i < kHeld; ++i) {
+    ASSERT_NO_FATAL_FAILURE(step_to(*player, i));
+  }
+  {
+    // Held here, the device's submit mutex keeps frame kHeld's decode from
+    // ending until the next frame is due.
+    std::unique_lock<std::mutex> queue(*device().submit_mutex());
+    player->play();
+    std::this_thread::sleep_for(next_due + 200ms);
+  }
+  const std::optional<FrameStamp> held = next_frame();
+  ASSERT_TRUE(held.has_value()) << "no frame " << kHeld;
+  EXPECT_EQ(held->index, kHeld);
+  const std::optional<FrameStamp> next = next_frame();
+  ASSERT_TRUE(next.has_value()) << "no frame " << kHeld + 1;
+  EXPECT_EQ(next->index, kHeld + 1);
+  EXPECT_LT(next->published - held->published, next_due / 2)
+      << "the next frame waited out its pts gap after the held decode";
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
 TEST_F(StreamPlayerTest, WithLoopOnAStepPastTheEndWraps) {
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);

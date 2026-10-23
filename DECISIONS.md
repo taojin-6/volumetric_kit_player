@@ -28,8 +28,9 @@ desktop's D key, over recon #264's `Decoder::set_deblock`, `rebuild` and
   until then the grid holds the frame published last, which is the frame
   `rebuild` redoes, the one decoded last. A frame reaches the screen a
   decode after it is due, at the same pace, as each is due from the last
-  one's due time; the clock counts a frame shown only once it decodes, so a
-  frame that fails takes no step, as before.
+  one's due time; the clock counts a frame shown as of when it was due, so a
+  slow decode does not push the frames after it back, but only once it
+  decodes, so a frame that fails takes no step, as before.
 - **The stats name what the deblock did to the frame drawn:** off, the filter
   recon ran (LF, LG or R), or skipped: on, but no filter run, for a frame
   recon's gate skips (one with an unobserved voxel, as a fused room's are)

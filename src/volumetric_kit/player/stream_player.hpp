@@ -353,8 +353,9 @@ class StreamPlayer {
   // Wait until the frame at pts_ns is due, rebuilding last_ meanwhile when
   // rebuild_wanted: false on quit.
   core::Result<bool> wait_due(std::uint64_t pts_ns);
-  // Count the frame at pts_ns shown, once decoded: the clock takes a step.
-  void count_shown(std::uint64_t pts_ns);
+  // Count the frame at pts_ns shown as of due_at, when wait_due found it due,
+  // once it decoded: the clock takes a step.
+  void count_shown(std::uint64_t pts_ns, Playback::Clock::time_point due_at);
   // Under the lock: whether a paused toggle asks for last_ to be rebuilt.
   bool rebuild_wanted() const;
   // Rebuild last_ under the deblock as now set, and publish it again

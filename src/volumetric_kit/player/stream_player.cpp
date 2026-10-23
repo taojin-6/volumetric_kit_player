@@ -371,11 +371,13 @@ core::Status StreamPlayer::play_track() {
       }
       // Decoded once due, so the grid holds the frame published last until
       // then (DECISIONS.md).
+      Clock::time_point due_at{};
       if (status.ok()) {
         VKC_ASSIGN(const bool due, wait_due(record.info.pts_ns));
         if (!due) {
           return {};
         }
+        due_at = Clock::now();
         const Step step(*this);  // the decode
         if (!step) {
           return {};
@@ -392,7 +394,7 @@ core::Status StreamPlayer::play_track() {
         stages.clear();
         continue;
       }
-      count_shown(record.info.pts_ns);
+      count_shown(record.info.pts_ns, due_at);
       FrameStamp stamp{frame,           record.info.pts_ns,        record.size,
                        record.info.key, std::exchange(stages, {}), 1,
                        record.size};
@@ -604,14 +606,14 @@ core::Result<bool> StreamPlayer::wait_due(std::uint64_t pts_ns) {
   }
 }
 
-void StreamPlayer::count_shown(std::uint64_t pts_ns) {
+void StreamPlayer::count_shown(std::uint64_t pts_ns, Clock::time_point due_at) {
   std::lock_guard<std::mutex> lock(mutex_);
-  const Clock::time_point now = Clock::now();
   last_by_step_ = !clock_.playing();
-  // Due when its decode began; a pause since, with no step to take, leaves
-  // the clock as it is (Playback::shown's precondition).
-  if (clock_.due(pts_ns, now)) {
-    clock_.shown(pts_ns, now);
+  // Shown as of when it was due, so a slow decode does not push the frames
+  // after it back; a pause since, with no step to take, leaves the clock as
+  // it is (Playback::shown's precondition).
+  if (clock_.due(pts_ns, due_at)) {
+    clock_.shown(pts_ns, due_at);
   }
   last_pts_ns_ = pts_ns;
 }
