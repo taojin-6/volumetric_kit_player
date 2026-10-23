@@ -10,6 +10,7 @@ add_library(
   player STATIC
   volumetric_kit/player/command_line.cpp
   volumetric_kit/player/controls.cpp
+  volumetric_kit/player/measure_log.cpp
   volumetric_kit/player/mesh_wiring.cpp
   volumetric_kit/player/playback.cpp
   volumetric_kit/player/playback_stats.cpp
@@ -31,3 +32,5 @@ target_link_libraries(
          volumetric_kit::gfx_ui
          Threads::Threads)
 vp_target_warnings(player)
+# The commits and the configuration the measure log's header states.
+vp_build_info(player volumetric_kit/player/measure_log.cpp)

@@ -8,7 +8,9 @@
 // unparks the worker. The Source button, at the top right, opens iOS's
 // dialog, which chooses a sender by host and port, or the first .vrst in the
 // app's Documents folder, which the Files app and Finder show (Info.plist.in);
-// the choice is kept for the next launch.
+// the choice is kept for the next launch. A measure launch (--measure, the
+// runner's, tools/measure/) plays the stream it names instead and logs its
+// frames into Documents/measure/.
 
 #import "PlayerViewController.h"
 
@@ -29,6 +31,8 @@
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
+#include "volumetric_kit/player/command_line.hpp"
+#include "volumetric_kit/player/measure_log.hpp"
 #include "volumetric_kit/player/player_view.hpp"
 #include "volumetric_kit/player/scenario.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
@@ -54,14 +58,19 @@ NSString* const kPortKey = @"live.port";
 // `text`, empty for nil.
 std::string Utf8(NSString* text) { return text != nil ? text.UTF8String : ""; }
 
+// The app's Documents folder, which the Files app and Finder show.
+NSString* DocumentsFolder() {
+  return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,
+                                             NSUserDomainMask, YES)
+      .firstObject;
+}
+
 // The first .vrst in Documents, by name in Finder's order
 // (localizedStandardCompare:). With none, a note is left there, as the Files
 // app may hide an empty app folder (DECISIONS.md).
 std::optional<cfg::Source> DocumentsStream() {
   NSFileManager* files = NSFileManager.defaultManager;
-  NSString* documents = NSSearchPathForDirectoriesInDomains(
-                            NSDocumentDirectory, NSUserDomainMask, YES)
-                            .firstObject;
+  NSString* documents = DocumentsFolder();
   NSArray<NSString*>* listed = [files contentsOfDirectoryAtPath:documents
                                                           error:nil];
   std::vector<std::string> names;
@@ -96,10 +105,25 @@ vkc::Result<std::optional<cfg::Source>> ChosenSource() {
   return DocumentsStream();
 }
 
-// The view over `source`, on `layer`, with fingertip-sized controls and the
-// Source button. No validation: iOS has no layer to load (DECISIONS.md).
+// The stream a measure launch names (vkp::parse_measure_args), in Documents.
+vkc::Result<std::optional<cfg::Source>> MeasureSource(
+    const vkp::MeasureArgs& measure) {
+  std::optional<cfg::Source> source =
+      vkp::folder_source(Utf8(DocumentsFolder()), {measure.stream});
+  if (!source) {
+    return vkc::Status::invalid_argument("--measure " + measure.stream +
+                                         ": not a .vrst");
+  }
+  return source;
+}
+
+// The view over `source`, on `layer`, with fingertip-sized controls, the
+// Source button, and on an iPhone the compact stats; the worker's device
+// timing fixed by a measurement, or else the stats panel's. No validation:
+// iOS has no layer to load (DECISIONS.md).
 vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
-    CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source) {
+    CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source,
+    std::optional<vkp::DeviceTiming> timing) {
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
              vkp::open_source(source));
   VKC_ASSIGN(const vg::windowing::SurfaceSource surface,
@@ -108,6 +132,9 @@ vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
   config.ui_scale = 1.3f;              // 17-pt text, near iOS body text
   config.ui_min_frame_height = 44.0f;  // Apple's least touch target
   config.source_button = true;
+  config.compact_stats =
+      UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
+  config.device_timing = timing;
   return vkp::PlayerView::create(surface, pixels, std::move(player), config);
 }
 
@@ -183,9 +210,28 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   BOOL _rebuild;   // a park timed out, so the device may be lost
   BOOL _appeared;  // on screen, so the dialog can be presented
   BOOL _askDue;    // nothing to play before then: ask once it is
+  // A measure launch's (README.md), until it is done; or why its arguments
+  // were refused. Its log is open while a view measures.
+  std::optional<vkp::MeasureArgs> _measure;
+  vkc::Status _measureRefused;
+  std::unique_ptr<vkp::MeasureLog> _log;
+  std::uint64_t _logged;  // the view's frames taken, as of the last logged
 }
 
 - (void)loadView {
+  std::vector<std::string> arguments;
+  NSArray<NSString*>* launched = NSProcessInfo.processInfo.arguments;
+  for (NSUInteger i = 1; i < launched.count; ++i) {
+    arguments.push_back(Utf8(launched[i]));
+  }
+  vkc::Result<std::optional<vkp::MeasureArgs>> measure =
+      vkp::parse_measure_args(arguments);
+  if (measure.ok()) {
+    _measure = std::move(measure).value();
+  } else {
+    _measureRefused = measure.status();
+  }
+
   _metal = [[MetalView alloc] init];
   _metal.backgroundColor = UIColor.blackColor;
   _metal.multipleTouchEnabled = YES;  // for the recognizers' second finger
@@ -263,7 +309,13 @@ glm::vec2 At(UITouch* touch, UIView* view) {
     return;
   }
   const CFTimeInterval start = CACurrentMediaTime();
-  const vkc::Result<std::optional<cfg::Source>> chosen = ChosenSource();
+  if (!_measureRefused.ok()) {
+    [self fail:_measureRefused];
+    return;
+  }
+  // A measure launch plays the stream it names, not the choice kept.
+  const vkc::Result<std::optional<cfg::Source>> chosen =
+      _measure ? MeasureSource(*_measure) : ChosenSource();
   if (!chosen.ok()) {
     [self fail:chosen.status()];
     return;
@@ -277,7 +329,9 @@ glm::vec2 At(UITouch* touch, UIView* view) {
     return;
   }
   vkc::Result<std::unique_ptr<vkp::PlayerView>> made =
-      MakeView((CAMetalLayer*)_metal.layer, pixels, **chosen);
+      MakeView((CAMetalLayer*)_metal.layer, pixels, **chosen,
+               _measure ? std::optional<vkp::DeviceTiming>(_measure->timing)
+                        : std::nullopt);
   if (!made.ok()) {
     [self fail:made.status()];
     return;
@@ -293,7 +347,81 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   _failure.hidden = YES;
   NSLog(@"volumetric_kit_player: view up in %.0f ms",
         (CACurrentMediaTime() - start) * 1e3);
+  if (_measure && ![self startMeasure]) {
+    return;
+  }
   [self startLink];
+}
+
+// A measure launch's log, in Documents/measure/, named by when it starts and
+// the player's commit (vkp::measure_file_name); NO, with the label up, when it
+// cannot be written.
+- (BOOL)startMeasure {
+  NSString* folder =
+      [DocumentsFolder() stringByAppendingPathComponent:@"measure"];
+  [NSFileManager.defaultManager createDirectoryAtPath:folder
+                          withIntermediateDirectories:YES
+                                           attributes:nil
+                                                error:nil];
+  vkp::MeasureContext context;
+  context.device = vkp::device_line(_view->compute_device());
+  context.stream =
+      _measure->stream + ", track " + std::to_string(_view->player().track());
+  context.timing = _measure->timing;
+  context.started = std::chrono::system_clock::now();
+  vkc::Result<std::unique_ptr<vkp::MeasureLog>> log = vkp::MeasureLog::open(
+      Utf8(folder) + "/" + vkp::measure_file_name(context.started), context);
+  if (!log.ok()) {
+    [self fail:log.status()];
+    return NO;
+  }
+  _log = std::move(log).value();
+  _logged = _view->frames_taken();
+  NSLog(@"volumetric_kit_player: measuring into %s", _log->path().c_str());
+  return YES;
+}
+
+// After each frame of a measure launch: log the frame the view took, if a new
+// one, until --frames, or the end of the track's first pass without it: the
+// next pass's first frame, which is not logged.
+- (void)measureFrame {
+  if (!_log || _view->frames_taken() == _logged) {
+    return;
+  }
+  _logged = _view->frames_taken();
+  const vkp::FrameStamp& stamp = *_view->shown();
+  const bool past = !_measure->frames && stamp.pass > 1;
+  if (!past) {
+    const vkc::Status added = _log->add(stamp, _view->mesh().triangle_count);
+    if (!added.ok()) {
+      [self fail:added];
+      return;
+    }
+  }
+  if (past || (_measure->frames && _log->frames() >= *_measure->frames)) {
+    [self finishMeasure];
+  }
+}
+
+// The log is whole: it goes to its name, the view goes, and the label says
+// so. A later bring-up plays as chosen.
+- (void)finishMeasure {
+  const vkc::Status finished = _log->finish();
+  NSString* done = [NSString
+      stringWithFormat:@"measure done: %llu frames in %s",
+                       static_cast<unsigned long long>(_log->frames()),
+                       _log->path().c_str()];
+  _measure.reset();
+  if (!finished.ok()) {
+    [self fail:finished];
+    return;
+  }
+  [self dropView];
+  _failed = YES;  // the label stays until the next activation or a choice
+  _failure.text =
+      [done stringByAppendingString:@"\n\nTap here to choose what to play."];
+  _failure.hidden = NO;
+  NSLog(@"volumetric_kit_player: %@", done);
 }
 
 - (void)tick:(CADisplayLink*)link {
@@ -313,7 +441,10 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   const vkc::Result<bool> presented = _view->frame(pixels);
   if (!presented.ok()) {
     [self drop:presented.status()];
-  } else if (_view->take_source_request()) {
+    return;
+  }
+  [self measureFrame];
+  if (_view && _view->take_source_request()) {
     [self ask];  // after the UI's frame: no UIKit runs inside it
   }
 }
@@ -443,6 +574,7 @@ glm::vec2 At(UITouch* touch, UIView* view) {
 
 - (void)dropView {
   [self stopLink];
+  _log.reset();    // a measurement under way is left as its .part
   _touch.reset();  // the platform half first; the view waits for the GPU
   _view.reset();
 }

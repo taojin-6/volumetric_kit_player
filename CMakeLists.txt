@@ -32,6 +32,7 @@ option(VP_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
 
 include(vp_warnings)
 include(vp_link_closure)
+include(vp_build_info)
 
 add_subdirectory(third_party)
 add_subdirectory(src)

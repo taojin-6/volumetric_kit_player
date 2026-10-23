@@ -5,6 +5,7 @@
 
 #include <charconv>
 #include <system_error>
+#include <utility>
 
 namespace volumetric_kit::player {
 
@@ -16,6 +17,64 @@ std::optional<std::uint64_t> parse_count(std::string_view text) {
     return std::nullopt;
   }
   return count;
+}
+
+std::optional<DeviceTiming> parse_device_timing(std::string_view text) {
+  for (const DeviceTiming timing :
+       {DeviceTiming::kOff, DeviceTiming::kSampled, DeviceTiming::kAll}) {
+    if (text == to_string(timing)) {
+      return timing;
+    }
+  }
+  return std::nullopt;
+}
+
+core::Result<std::optional<MeasureArgs>> parse_measure_args(
+    const std::vector<std::string>& args) {
+  MeasureArgs measure;
+  bool named = false;  // --measure came
+  bool other = false;  // --frames or --timing came
+  for (std::size_t i = 0; i < args.size(); ++i) {
+    const std::string& arg = args[i];
+    if (arg != "--measure" && arg != "--frames" && arg != "--timing") {
+      continue;  // the system's
+    }
+    if (i + 1 == args.size()) {
+      return core::Status::invalid_argument(arg + " needs a value");
+    }
+    const std::string& value = args[++i];
+    if (arg == "--measure") {
+      if (value.empty() || value.find('/') != std::string::npos) {
+        return core::Status::invalid_argument("--measure '" + value +
+                                              "': a file's name in Documents");
+      }
+      measure.stream = value;
+      named = true;
+    } else if (arg == "--frames") {
+      measure.frames = parse_count(value);
+      if (!measure.frames) {
+        return core::Status::invalid_argument("--frames '" + value +
+                                              "': a count from 1");
+      }
+      other = true;
+    } else {
+      const std::optional<DeviceTiming> timing = parse_device_timing(value);
+      if (!timing) {
+        return core::Status::invalid_argument("--timing '" + value +
+                                              "': off, sampled or all");
+      }
+      measure.timing = *timing;
+      other = true;
+    }
+  }
+  if (!named) {
+    if (other) {
+      return core::Status::invalid_argument(
+          "--frames and --timing need --measure");
+    }
+    return std::optional<MeasureArgs>();
+  }
+  return std::optional<MeasureArgs>(std::move(measure));
 }
 
 }  // namespace volumetric_kit::player

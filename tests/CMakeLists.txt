@@ -78,14 +78,55 @@ target_link_libraries(
           volumetric_kit::recon_tsdf volumetric_kit::core_test_policy
           GTest::gtest)
 vp_target_warnings(vp_write_stream)
-# A sender's live stream played through the view with no window, its status and
-# stats printed once a second, for agents on a Mac (DECISIONS.md): a tool, not a
-# test.
+# The measure log, its file name and the iOS app's measure launch arguments, on
+# the host, and the device line on a device (the core's fixtures).
+vp_add_test(measure_log volumetric_kit::player
+            volumetric_kit::core_test_support)
+# A file or a sender's live stream played through the view with no window, or by
+# the worker alone (--worker), its status and stats printed once a second, and
+# each frame logged with --csv: the measurement runner's (tools/measure/,
+# DECISIONS.md), a tool. ctest runs it on the tests' stream, two passes of every
+# frame timed: the worker alone everywhere, and the view where the loader has a
+# headless surface, as MoltenVK does; then it checks the logs, as the summarizer
+# reads them.
+add_executable(vp_probe vp_probe.cpp)
+target_link_libraries(vp_probe PRIVATE volumetric_kit::player)
+vp_target_warnings(vp_probe)
+set(VP_PROBE_DIR "${CMAKE_CURRENT_BINARY_DIR}/probe")
+file(MAKE_DIRECTORY "${VP_PROBE_DIR}")
+set(VP_PROBE_CSV "${VP_PROBE_DIR}/worker.csv")
+set(probes vp_probe_worker_csv)
+add_test(NAME vp_probe_worker_csv
+         COMMAND vp_probe --worker --file "${VP_TEST_STREAMS}/sphere.vrst"
+                 --passes 2 --timing all --csv "${VP_PROBE_DIR}/worker.csv")
 if(APPLE)
-  add_executable(vp_live_probe vp_live_probe.cpp)
-  target_link_libraries(vp_live_probe PRIVATE volumetric_kit::player)
-  vp_target_warnings(vp_live_probe)
+  add_test(NAME vp_probe_view_csv
+           COMMAND vp_probe --file "${VP_TEST_STREAMS}/sphere.vrst" --passes 2
+                   --timing all --csv "${VP_PROBE_DIR}/view.csv")
+  list(APPEND probes vp_probe_view_csv)
+  string(APPEND VP_PROBE_CSV ":${VP_PROBE_DIR}/view.csv")
 endif()
+set_tests_properties(
+  ${probes} PROPERTIES FIXTURES_REQUIRED vp_streams FIXTURES_SETUP vp_probe_csv
+                       TIMEOUT 300)
+# The summarizer (tools/measure/summarize.py) on its fixtures, and on the log
+# above, whose check fails rather than skips without it.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(VP_MEASURE_TESTS "${PROJECT_SOURCE_DIR}/tools/measure/test_summarize.py")
+add_test(NAME vp_measure_summarize COMMAND Python3::Interpreter
+                                           "${VP_MEASURE_TESTS}" Summarize)
+add_test(NAME vp_probe_csv_check COMMAND Python3::Interpreter
+                                         "${VP_MEASURE_TESTS}" ProbeLog)
+set_tests_properties(
+  vp_probe_csv_check
+  PROPERTIES ENVIRONMENT
+             "VP_PROBE_CSV=${VP_PROBE_CSV}"
+             FIXTURES_REQUIRED
+             vp_probe_csv
+             FAIL_REGULAR_EXPRESSION
+             "skipped"
+             TIMEOUT
+             60)
 # MoltenVK has a headless surface and several queue families, so on Apple the
 # view's tests cross families rather than skip: on MoltenVK's default families
 # above, and again on its specialized ones, as the core's cross-family tests do,
