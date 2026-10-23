@@ -13,54 +13,54 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first, and the
 # config tier: its Source, which the library's open_source takes on every
 # platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
-# is core main at #47's merge (f133d41, 0.17.0), which adds that profile; its
+# is core main at #49's merge (ff44a98, 0.19.0), gfx's and recon's pin too; its
 # iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT)
-# and answers glm. gfx's pin (7757c13, 0.12.0) and recon's (b992f12, 0.15.0) are
-# older and yield to it, as the player declares the core first. The floor below
-# is the pin's version (0.17.0), so an older FETCHCONTENT_SOURCE_DIR override is
-# refused. The player installs nothing, so the core's install rules are off too.
+# and answers glm. The floor below is the oldest core the player and its
+# siblings build with: gfx's 0.18.0, for Device::pipeline_cache (the Player
+# profile is 0.17.0's), so an older FETCHCONTENT_SOURCE_DIR override is refused.
 set(VKC_WITH_VULKAN ON)
 set(VKC_WITH_CONFIG ON)
-set(VKC_INSTALL OFF)
 if(VP_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
 endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG f133d418dce30159bd002dc360c152bbdec4759a)
+  GIT_TAG ff44a981055d505590e295ff6a943bb1b6e96109)
 FetchContent_MakeAvailable(volumetric_kit_core)
-vkc_require_core(0.17.0 VULKAN CONFIG)
+vkc_require_core(0.18.0 VULKAN CONFIG)
 
 # --- volumetric_kit_recon ----------------------------------------------------
 # The stream reader, the codec's decode grid, Marching Cubes, the mesh exchange
-# and the live stream's client. Its tests, examples, install and -Werror stay
-# off in a subproject, so its library's core floor (0.2.0) is the one checked.
-# The pin adds StreamClient::next's progress output (51ef686) to #260's merge
-# (b6fa928): networking::StreamClient and StreamServer, beside #256's empty mesh
-# payload at MeshExchange's commit, #255's volume::kDefaultBucketSize /
-# kDefaultMaxChain and #253's codec::make_decode_grid and decode_growing.
+# and the live stream's client. Its tests, examples and -Werror stay off in a
+# subproject, so its library's core floor (0.2.0) is the one checked. The pin is
+# recon main at #269's merge (ab8d01c): #269's StreamClient::next progress
+# output and #266's block ceiling for codec::make_decode_grid and
+# decode_growing, beside #260's networking::StreamClient and StreamServer,
+# #256's empty mesh payload at MeshExchange's commit and #255's
+# volume::kDefaultBucketSize / kDefaultMaxChain.
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG 51ef686e72b0a0793c6bc23100e37267ee41b6a1)
+  GIT_TAG ab8d01c58a0907c5ab0475620a87ccdfddb2a56b)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------
 # The swapchain on a shared device, the mesh pipeline, the orbit camera, the
 # controls and stats panels (ImGui) and the profiler that times the draw. Its
-# tests, examples, install and -Werror stay off in a subproject. Its GLFW tier
-# is built with the desktop app alone, so not on iOS: the library links no
-# window system (the top-level CMakeLists.txt checks). The pin is gfx main at
-# #148's merge (b35520f): ImGuiOverlayConfig's min_frame_height, and
-# ui::begin_collapsible_panel and ui::draw_stage_table for the stats, beside
-# #146's windowing::SurfaceSource and glfw::Library, #145's ImGuiTouch, #144's
-# sRGB ImGui fix and #143's orbit drag gestures.
+# tests, examples and -Werror stay off in a subproject. Its GLFW tier is built
+# with the desktop app alone, so not on iOS: the library links no window system
+# (the top-level CMakeLists.txt checks). The pin is gfx main at #152's merge
+# (f147e00): #150's FIFO present by default, which the view takes, beside #148's
+# ImGuiOverlayConfig::min_frame_height, ui::begin_collapsible_panel and
+# ui::draw_stage_table for the stats, #146's windowing::SurfaceSource and
+# glfw::Library, #145's ImGuiTouch, #144's sRGB ImGui fix and #143's orbit drag
+# gestures.
 set(VG_WITH_GLFW ${VP_DESKTOP_APP})
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  GIT_TAG b35520f5c6068e93bef0dccadd3ef1fa10fa9c6b)
+  GIT_TAG f147e00e7fb45382da8874198684656496f09b7c)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
 if(VP_BUILD_TESTS)

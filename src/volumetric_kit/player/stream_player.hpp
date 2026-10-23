@@ -122,6 +122,12 @@ struct FrameStamp {
 /// @brief The handoff of the worker's meshes to the thread that draws them.
 using FrameExchange = recon::mesh::MeshExchange<FrameStamp>;
 
+/// The most blocks a frame may hold: the ceiling the worker passes recon's
+/// `codec::make_decode_grid` and `decode_growing`, which bounds the decode
+/// grid (DECISIONS.md). A frame past it, or a grow past the grid for it, is
+/// skipped as a damaged record is.
+inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
+
 /// @brief Plays the first geometry track of a `.vrst` file, like a video
 ///        player, or of a sender's live stream (@ref connect): one worker
 ///        thread decodes and meshes its frames on the GPU and publishes each

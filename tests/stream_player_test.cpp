@@ -10,7 +10,8 @@
 // loop on a step past the end wraps, with loop off the last frame holds until
 // play restarts; a corrupt P-frame, a damaged record header or a record this
 // version cannot read resyncs at the next key, and a stream with no key left
-// stops the worker with the reason; quit is prompt, playing, paused or
+// stops the worker with the reason, one of keys past kMaxFrameBlocks blocks
+// with recon's refusal naming that ceiling; quit is prompt, playing, paused or
 // waiting for a consumer that takes nothing; the worker sleeps until taken()
 // rather than polling for the take; a fatal error stops the worker,
 // a failed build on it included; start is refused once started or stopped.
@@ -124,12 +125,15 @@ constexpr std::uint32_t kFramesInFlight = 2;
 constexpr auto kArrival = 10s;
 constexpr auto kQuiet = 300ms;
 constexpr auto kPrompt = 1s;
-// A RECD chunk's header (session.hpp): its flags, its pts, and its CRC of the
-// bytes before it.
+// A RECD chunk's header (session.hpp): its payload's CRC, its flags, its pts,
+// and its CRC of the bytes before it.
 constexpr std::size_t kRecordHeader = 56;
+constexpr std::size_t kBodyCrcAt = 16;
 constexpr std::size_t kFlagsAt = 22;
 constexpr std::size_t kPtsAt = 24;
 constexpr std::size_t kHeaderCrcAt = 52;
+// A codec frame's block count, in its header (recon's codec/bitstream.hpp).
+constexpr std::size_t kBlockCountAt = 32;
 
 // zlib's CRC-32, which a chunk's header carries (session.hpp).
 std::uint32_t crc32(const std::uint8_t* data, std::size_t size) {
@@ -141,6 +145,15 @@ std::uint32_t crc32(const std::uint8_t* data, std::size_t size) {
     }
   }
   return ~crc;
+}
+
+// Writes `value` little-endian at `bytes[at]`, as the stream and the codec
+// lay out every field.
+void put_u32(std::vector<std::uint8_t>& bytes, std::size_t at,
+             std::uint32_t value) {
+  for (std::size_t i = 0; i < 4; ++i) {
+    bytes[at + i] = static_cast<std::uint8_t>(value >> (8 * i));
+  }
 }
 
 // How long `player.stop()` takes. One that is not back within kPrompt fails
@@ -379,12 +392,23 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   void set_unknown_flag(const stream::Record& record) {
     std::vector<std::uint8_t> header = read_at(record.offset, kRecordHeader);
     header[kFlagsAt + 1] |= 0x80;  // little-endian u16: bit 15
-    const std::uint32_t crc = crc32(header.data(), kHeaderCrcAt);
-    for (std::size_t i = 0; i < 4; ++i) {
-      header[kHeaderCrcAt + i] = static_cast<std::uint8_t>(crc >> (8 * i));
-    }
+    put_u32(header, kHeaderCrcAt, crc32(header.data(), kHeaderCrcAt));
     ASSERT_NO_FATAL_FAILURE(write_at(record.offset, header));
     EXPECT_EQ(reread(record).domain(), Code::Unsupported);
+  }
+
+  // Sets the block count `record`'s frame claims to `blocks`, with its
+  // payload's and its header's CRCs rewritten, so the record still reads.
+  void set_block_count(const stream::Record& record, std::uint32_t blocks) {
+    const auto payload = static_cast<std::size_t>(record.size);
+    std::vector<std::uint8_t> chunk =
+        read_at(record.offset, kRecordHeader + payload);
+    put_u32(chunk, kRecordHeader + kBlockCountAt, blocks);
+    put_u32(chunk, kBodyCrcAt, crc32(chunk.data() + kRecordHeader, payload));
+    put_u32(chunk, kHeaderCrcAt, crc32(chunk.data(), kHeaderCrcAt));
+    ASSERT_NO_FATAL_FAILURE(write_at(record.offset, chunk));
+    const core::Status reread_status = reread(record);
+    EXPECT_TRUE(reread_status.ok()) << reread_status.message();
   }
 
   // Steps once and checks the frame that comes is the stream's frame
@@ -669,6 +693,38 @@ TEST_F(StreamPlayerTest, WithNoFrameToShowTheWorkerStopsWithTheReason) {
   EXPECT_EQ(status.domain(), Code::InvalidArgument) << status.message();
   EXPECT_NE(status.message().find("no frame of the geometry track decodes"),
             std::string::npos)
+      << status.message();
+  EXPECT_FALSE(next_frame(kQuiet).has_value());
+  EXPECT_LT(stop_time(*player), kPrompt);
+}
+
+// Every key claims one block past the ceiling: recon refuses each before it
+// allocates for it, as a frame to skip, so the pass shows nothing and the
+// worker stops with the first refusal, which names the ceiling the player
+// passed.
+TEST_F(StreamPlayerTest, KeysPastTheBlockCeilingStopTheWorkerWithTheReason) {
+  using volumetric_kit::player::kMaxFrameBlocks;
+  const std::vector<stream::Record> all = records();
+  ASSERT_EQ(all.size(), kFrames);
+  for (const stream::Record& record : all) {
+    if (record.info.key) {
+      ASSERT_NO_FATAL_FAILURE(set_block_count(record, kMaxFrameBlocks + 1));
+    }
+  }
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  const SteadyClock::time_point deadline = SteadyClock::now() + kArrival;
+  while (player->status().ok() && SteadyClock::now() < deadline) {
+    std::this_thread::sleep_for(1ms);
+  }
+  const core::Status status = player->status();
+  EXPECT_EQ(status.domain(), Code::InvalidArgument) << status.message();
+  EXPECT_NE(status.message().find("no frame of the geometry track decodes"),
+            std::string::npos)
+      << status.message();
+  EXPECT_NE(
+      status.message().find("ceiling of " + std::to_string(kMaxFrameBlocks)),
+      std::string::npos)
       << status.message();
   EXPECT_FALSE(next_frame(kQuiet).has_value());
   EXPECT_LT(stop_time(*player), kPrompt);
@@ -977,6 +1033,8 @@ TEST_F(StreamPlayerTest, AParkBeforeStartOrAfterStopReturnsAtOnce) {
 constexpr auto kClosed = 50ms;
 // Between two records of a steady flow.
 constexpr auto kFlow = 20ms;
+// The most StreamClient takes in one receive (recon's StreamClient::next).
+constexpr std::size_t kClientReceive = std::size_t{2} << 20;
 
 #ifdef __APPLE__
 constexpr int kSendFlags = 0;  // SO_NOSIGPIPE is set on the socket
@@ -1402,7 +1460,9 @@ class LivePlayerTest : public StreamPlayerTest {
   // work depends on the GPU. Framing and allocation precede the timer too.
   // For a large record, time the sender getting its bytes out through bounded
   // socket buffers, holding its last byte back until afterwards: the record's
-  // CRC, expensive under TSan, cannot start within the timed interval.
+  // CRC, expensive under TSan, cannot start within the timed interval. Its
+  // send buffer holds a receive, so on Linux a worker that drains promptly
+  // seldom finds the socket empty, where it may wait a slice.
   void measure_burst_drain(std::size_t count, std::size_t payload_size,
                            bool untaken, bool time_sender,
                            SteadyClock::duration* elapsed) {
@@ -1478,7 +1538,7 @@ class LivePlayerTest : public StreamPlayerTest {
           }
           return Bytes();
         },
-        1ms, time_sender ? 256 * 1024 : 0);
+        1ms, time_sender ? static_cast<int>(kClientReceive) : 0);
     StreamPlayer* player = start_live(peer.port());
     ASSERT_NE(player, nullptr);
     if (untaken) {
@@ -1638,21 +1698,29 @@ TEST_F(LivePlayerTest, AnUntakenMeshDoesNotDelayBufferedRecords) {
 }
 
 TEST_F(LivePlayerTest, AnUntakenMeshDoesNotDelayAPartialRecord) {
-  // At most 256 KiB is received by each nonblocking next(): one record
-  // spanning 128 receives must also keep draining while no record is ready.
-  // Bounded socket buffers cannot hold more than a small fraction of it.
-  // Compare against the same receive/parser work without a pending frame,
-  // so sanitizer overhead is paid in both timings rather than mistaken for
-  // waits between receives.
+  // One record of 16 receives must keep draining while no record is ready.
+  // A worker that waited its 10 ms slice after each partial receive would
+  // add at least 120 ms: when the sender finishes, the socket buffers, which
+  // Linux doubles, hold at most 4 receives' bytes. The limit is 80 ms over
+  // the same receive/parser work without a pending frame, plus a quarter of
+  // that work's time, so a sanitizer's slower, more variable receives are
+  // not mistaken for waits; there, where that work takes seconds, only
+  // longer waits fail. Linux alone checks it: on macOS a healthy worker can
+  // empty the socket at about every receive and wait a slice, as the
+  // regression would (CI run 39897310418, attempt 1, macos-26 Release, with
+  // a 256 KiB send buffer: 1,100 ms added, about a slice per 300 KiB).
+  constexpr std::size_t kRecord = 16 * kClientReceive;
   SteadyClock::duration baseline{};
-  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(
-      1, 32 * 1024 * 1024, /*untaken=*/false, /*time_sender=*/true, &baseline));
+  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(1, kRecord, /*untaken=*/false,
+                                              /*time_sender=*/true, &baseline));
   SteadyClock::duration elapsed{};
-  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(
-      1, 32 * 1024 * 1024, /*untaken=*/true, /*time_sender=*/true, &elapsed));
-  EXPECT_LT(elapsed, baseline + 750ms)
+  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(1, kRecord, /*untaken=*/true,
+                                              /*time_sender=*/true, &elapsed));
+#ifndef __APPLE__
+  EXPECT_LT(elapsed, baseline + baseline / 4 + 80ms)
       << std::chrono::duration<double, std::milli>(elapsed - baseline).count()
       << " ms added to socket draining by an untaken mesh";
+#endif
 }
 
 // Records one at a time, each published once the frame before is taken: each
