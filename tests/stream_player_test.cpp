@@ -1461,8 +1461,8 @@ class LivePlayerTest : public StreamPlayerTest {
   // For a large record, time the sender getting its bytes out through bounded
   // socket buffers, holding its last byte back until afterwards: the record's
   // CRC, expensive under TSan, cannot start within the timed interval. Its
-  // send buffer holds a receive, so a worker that drains promptly seldom
-  // finds the socket empty, where it may wait a slice.
+  // send buffer holds a receive, so on Linux a worker that drains promptly
+  // seldom finds the socket empty, where it may wait a slice.
   void measure_burst_drain(std::size_t count, std::size_t payload_size,
                            bool untaken, bool time_sender,
                            SteadyClock::duration* elapsed) {
@@ -1705,7 +1705,10 @@ TEST_F(LivePlayerTest, AnUntakenMeshDoesNotDelayAPartialRecord) {
   // the same receive/parser work without a pending frame, plus a quarter of
   // that work's time, so a sanitizer's slower, more variable receives are
   // not mistaken for waits; there, where that work takes seconds, only
-  // longer waits fail.
+  // longer waits fail. Linux alone checks it: on macOS a healthy worker can
+  // empty the socket at about every receive and wait a slice, as the
+  // regression would (CI run 39897310418, attempt 1, macos-26 Release, with
+  // a 256 KiB send buffer: 1,100 ms added, about a slice per 300 KiB).
   constexpr std::size_t kRecord = 16 * kClientReceive;
   SteadyClock::duration baseline{};
   ASSERT_NO_FATAL_FAILURE(measure_burst_drain(1, kRecord, /*untaken=*/false,
@@ -1713,9 +1716,11 @@ TEST_F(LivePlayerTest, AnUntakenMeshDoesNotDelayAPartialRecord) {
   SteadyClock::duration elapsed{};
   ASSERT_NO_FATAL_FAILURE(measure_burst_drain(1, kRecord, /*untaken=*/true,
                                               /*time_sender=*/true, &elapsed));
+#ifndef __APPLE__
   EXPECT_LT(elapsed, baseline + baseline / 4 + 80ms)
       << std::chrono::duration<double, std::milli>(elapsed - baseline).count()
       << " ms added to socket draining by an untaken mesh";
+#endif
 }
 
 // Records one at a time, each published once the frame before is taken: each
