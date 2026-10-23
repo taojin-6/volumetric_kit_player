@@ -64,7 +64,8 @@ jobs:
       # (gfx's _build.yml). libglfw3-dev is GLFW for the app's window, through
       # gfx's GLFW tier, which links the distro's GLFW and so needs no X11
       # headers; xvfb is the X server the smoke run draws to. The driver
-      # caches shaders only in a directory that exists.
+      # caches shaders only in a directory that exists. python3 runs the
+      # measure tools' tests.
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -73,7 +74,7 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates git \
             cmake build-essential libglm-dev libvulkan-dev \
             vulkan-validationlayers spirv-tools glslang-tools vulkan-tools \
-            libglfw3-dev libxext6 libegl1 xvfb
+            libglfw3-dev libxext6 libegl1 xvfb python3
 
       # A self-hosted workspace is readable by other repositories' jobs on the
       # host, so the token is not left in .git/config.
@@ -173,13 +174,13 @@ jobs:
             ctest --test-dir build --output-on-failure -LE stress ${skip} \
               --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
-      # The iOS app (DECISIONS.md), built unsigned (no team) from the sources
-      # the configure above fetched, on MoltenVK's iOS release, which the
-      # runner's .env names. It must be an iOS binary that loads only the
-      # system's libraries (MoltenVK and the siblings link statically), for
-      # iPhone and iPad.
+      # The iOS app (DECISIONS.md), built Release, as it ships, and unsigned
+      # (no team) from the sources the configure above fetched, on MoltenVK's
+      # iOS release, which the runner's .env names. It must be an iOS binary
+      # that loads only the system's libraries (MoltenVK and the siblings link
+      # statically), for iPhone and iPad.
       - name: iOS app build (macOS)
-        if: runner.os == 'macOS' && matrix.build_type == 'Debug' && !matrix.tsan
+        if: runner.os == 'macOS' && matrix.build_type == 'Release'
         run: |
           [ -n "${MoltenVK_ROOT:-}" ] || {
             echo "::error::MoltenVK_ROOT is not set: run the core's setup-runners.sh with it (its tools/runners/README.md)"
@@ -192,8 +193,8 @@ jobs:
           done
           rm -rf build-ios
           cmake --preset ios "${flags[@]}"
-          cmake --build build-ios --config Debug --target volumetric_kit_player
-          app=build-ios/apps/ios/Debug-iphoneos/volumetric_kit_player.app/volumetric_kit_player
+          cmake --build build-ios --config Release --target volumetric_kit_player
+          app=build-ios/apps/ios/Release-iphoneos/volumetric_kit_player.app/volumetric_kit_player
           platform=$(otool -l "$app" |
             awk '/LC_BUILD_VERSION/{f=1} f&&$1=="platform"{print $2; f=0}')
           if [ "$platform" != 2 ]; then
