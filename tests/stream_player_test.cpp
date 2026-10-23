@@ -103,6 +103,7 @@ namespace recon = volumetric_kit::recon;
 namespace networking = recon::networking;
 namespace stream = recon::stream;
 using namespace std::chrono_literals;
+using volumetric_kit::player::DeviceTiming;
 using volumetric_kit::player::FrameExchange;
 using volumetric_kit::player::FrameStamp;
 using volumetric_kit::player::LiveState;
@@ -242,6 +243,7 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     if (!playing) {
       player_->pause();
     }
+    player_->set_device_timing(timing_);
     const core::Status started = player_->start(
         device(), allocator(), extractor_config(slot_count), exchange_);
     EXPECT_TRUE(started.ok()) << started.message();
@@ -429,6 +431,8 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   std::string path_;
   // The stream's frame that meshes nothing, if any.
   std::optional<std::uint64_t> empty_frame_;
+  // The device timing start() sets.
+  DeviceTiming timing_ = DeviceTiming::kOff;
   FrameExchange exchange_;
   std::uint32_t slot_ = 0;
   // Destroyed first: its worker uses the exchange.
@@ -455,27 +459,29 @@ TEST_F(StreamPlayerTest, TheTracksCountsAndRateAreWhatWasWritten) {
   EXPECT_EQ((*opened)->rate().den, 1u);
 }
 
+// Untimed, as until set_device_timing asks: each frame's read, decode and
+// mesh have host time, decode and mesh their fences' waits inside it, and
+// none a device half; and the worker's device counts its submits and waits.
 TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
   const std::vector<stream::Record> all = records();
   ASSERT_EQ(all.size(), kFrames);
-  // The decoder's timer is private; one on the same device can time where it
-  // can (the core's StageRow::has_gpu).
-  core::Result<core::GpuTimer> timer = core::GpuTimer::create(device());
-  ASSERT_TRUE(timer.ok()) << timer.status().message();
-  const bool device_times = timer.value().available();
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
+  EXPECT_EQ(player->device_timing(), DeviceTiming::kOff);
   EXPECT_EQ(player->frame_count(), kFrames);
+  EXPECT_EQ(player->track(), 0u);
   EXPECT_FALSE(next_frame(kQuiet).has_value()) << "paused, nothing goes";
   for (std::uint64_t i = 0; i < kFrames; ++i) {
     player->step();
     const std::optional<FrameStamp> frame = next_frame();
     ASSERT_TRUE(frame.has_value()) << "no frame " << i;
     EXPECT_EQ(frame->index, i);
+    EXPECT_EQ(frame->pass, 1u);
     EXPECT_EQ(frame->pts_ns, pts_of(i));
     EXPECT_EQ(frame->bytes, all[i].size);
     EXPECT_EQ(frame->key, all[i].info.key);
     EXPECT_EQ(frame->key, i % kIntraPeriod == 0);
+    EXPECT_FALSE(frame->timed);
     const std::vector<core::StageRow>& rows = frame->stages.rows();
     ASSERT_EQ(rows.size(), 3u) << "frame " << i;
     EXPECT_STREQ(rows[0].name, "read");
@@ -483,13 +489,107 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
     EXPECT_STREQ(rows[2].name, "mesh");
     for (const core::StageRow& row : rows) {
       EXPECT_GT(row.cpu_ms, 0.0) << row.name << ", frame " << i;
+      EXPECT_LE(row.wait_ms, row.cpu_ms) << row.name << ", frame " << i;
+      EXPECT_EQ(row.device, core::DeviceTime::None) << row.name;
     }
-    EXPECT_FALSE(rows[0].has_gpu);
-    EXPECT_EQ(rows[1].has_gpu, device_times);
-    EXPECT_FALSE(rows[2].has_gpu) << "Marching Cubes has no device timer";
+    EXPECT_GT(rows[1].wait_ms, 0.0) << "decode waits for its fences";
+    EXPECT_GT(rows[2].wait_ms, 0.0) << "mesh waits for its fence";
+    // The test's own readback of the mesh counts too, so at least these.
+    EXPECT_GE(frame->counters.submits, 2u) << "frame " << i;
+    EXPECT_GE(frame->counters.host_waits, 1u) << "frame " << i;
+    EXPECT_GT(frame->counters.blocked_ns, 0u) << "frame " << i;
   }
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Timed, every frame's decode and mesh have a device half, where the queue
+// can time measured, each over recon's breakdowns, which follow its row and
+// whose tiles it holds; read has none.
+TEST_F(StreamPlayerTest, ATimedFramesDecodeAndMeshHoldReconsBreakdowns) {
+  // recon's timers are private; one on the same device times where they can.
+  core::Result<core::GpuTimer> timer = core::GpuTimer::create(device());
+  ASSERT_TRUE(timer.ok()) << timer.status().message();
+  const core::DeviceTime expected = timer.value().available()
+                                        ? core::DeviceTime::Measured
+                                        : core::DeviceTime::Unavailable;
+  timing_ = DeviceTiming::kAll;
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    SCOPED_TRACE(i);
+    player->step();
+    const std::optional<FrameStamp> frame = next_frame();
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_TRUE(frame->timed);
+    const std::vector<core::StageRow>& rows = frame->stages.rows();
+    ASSERT_GE(rows.size(), 5u);
+    EXPECT_STREQ(rows[0].name, "read");
+    EXPECT_EQ(rows[0].device, core::DeviceTime::None);
+    // Each stage, then its breakdowns, whose device time it holds.
+    std::size_t at = 1;
+    for (const char* stage : {"decode", "mesh"}) {
+      ASSERT_LT(at, rows.size());
+      const core::StageRow& row = rows[at++];
+      EXPECT_STREQ(row.name, stage);
+      EXPECT_EQ(row.device, expected) << stage;
+      double breakdowns_ms = 0.0;
+      int breakdowns = 0;
+      for (; at < rows.size() && std::strncmp(rows[at].name, "  ..", 4) == 0;
+           ++at) {
+        EXPECT_EQ(rows[at].device, expected) << rows[at].name;
+        breakdowns_ms += rows[at].gpu_ms;
+        ++breakdowns;
+      }
+      EXPECT_GE(breakdowns, 1) << stage;
+      if (expected == core::DeviceTime::Measured) {
+        EXPECT_GT(row.gpu_ms, 0.0) << stage;
+        EXPECT_GE(row.gpu_ms + 1e-9, breakdowns_ms) << stage;
+      }
+    }
+    EXPECT_EQ(at, rows.size()) << "nothing after mesh's breakdowns";
+    EXPECT_STREQ(rows[2].name, "  ..rans decode");
+  }
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Sampled, one frame in kSampleEvery is timed, from the first; and timing
+// set while playing applies from the next frame the worker starts.
+TEST_F(StreamPlayerTest, SampledTimesOneFrameInKSampleEveryFromTheFirst) {
+  timing_ = DeviceTiming::kSampled;
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    player->step();
+    const std::optional<FrameStamp> frame = next_frame();
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_EQ(frame->timed, i % volumetric_kit::player::kSampleEvery == 0)
+        << "frame " << i;
+    // A timed frame has recon's breakdowns too.
+    EXPECT_EQ(frame->stages.rows().size() > 3u, frame->timed) << "frame " << i;
+  }
+  // The worker may have decoded the next frame already, as sampled; the one
+  // after it is timed.
+  player->set_device_timing(DeviceTiming::kAll);
+  player->step();
+  ASSERT_TRUE(next_frame().has_value());
+  player->step();
+  const std::optional<FrameStamp> timed = next_frame();
+  ASSERT_TRUE(timed.has_value());
+  EXPECT_TRUE(timed->timed);
+}
+
+// Looping, each pass of the track counts from 1.
+TEST_F(StreamPlayerTest, EachPassOfTheTrackIsCounted) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  for (std::uint64_t i = 0; i < 2 * kFrames + 1; ++i) {
+    player->step();
+    const std::optional<FrameStamp> frame = next_frame();
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_EQ(frame->index, i % kFrames);
+    EXPECT_EQ(frame->pass, 1 + i / kFrames) << "frame " << i;
+  }
 }
 
 TEST_F(StreamPlayerTest, AFrameThatMeshesNothingReachesTheCommitWithItsStamp) {
