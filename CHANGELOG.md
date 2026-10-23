@@ -63,9 +63,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - build: the player pins core 0.19.0 (ff44a98, core #49's merge), gfx main
-  at #152's merge (f147e00) and recon #269's head (e9424a8, on main at
-  #270's merge), and requires core 0.18.0, gfx's floor. The view presents
-  FIFO as gfx's default (gfx #150), naming no mode.
+  at #152's merge (f147e00) and recon #269's head (e9424a8; #269 is open,
+  based on recon main at #270's merge), and requires core 0.18.0, gfx's
+  floor. The view presents FIFO as gfx's default (gfx #150), naming no mode.
 - The iOS app's controls fit a phone: 17-pt text (`ui_scale` 1.3) and every
   control at least 44 pt tall (`PlayerViewConfig::ui_min_frame_height`, over
   gfx's `min_frame_height`). Play/Pause and Step are `kButtonEms` (4.5) font

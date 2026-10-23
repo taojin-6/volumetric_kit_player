@@ -35,12 +35,13 @@ vkc_require_core(0.18.0 VULKAN CONFIG)
 # The stream reader, the codec's decode grid, Marching Cubes, the mesh exchange
 # and the live stream's client. Its tests, examples and -Werror stay off in a
 # subproject, so its library's core floor (0.2.0) is the one checked. The pin is
-# recon #269's head (e9424a8), StreamClient::next's progress output on main at
-# #270's merge (d7577df): #266's block ceiling for codec::make_decode_grid and
-# decode_growing, beside #260's networking::StreamClient and StreamServer,
-# #256's empty mesh payload at MeshExchange's commit and #255's
-# volume::kDefaultBucketSize / kDefaultMaxChain. Main's #271 after it moves only
-# recon's own core pin and docs.
+# recon #269's head (e9424a8), StreamClient::next's progress output, based on
+# main at #270's merge (d7577df): #266's block ceiling for
+# codec::make_decode_grid and decode_growing, beside #260's
+# networking::StreamClient and StreamServer, #256's empty mesh payload at
+# MeshExchange's commit and #255's volume::kDefaultBucketSize /
+# kDefaultMaxChain. recon main's #271, after it, changes nothing the player
+# builds.
 #
 # TODO: pin #269's merge once it lands on recon main.
 FetchContent_Declare(
