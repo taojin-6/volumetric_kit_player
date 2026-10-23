@@ -12,67 +12,57 @@ timing to be comprehensive and correct. No need for unnecessary copy or
 waits"; "you should automate the measurement process, how you get the data
 log". Nothing in the data flow changes; today's costs become measurable.
 
-- **Device timing on demand** (`StreamPlayer::set_device_timing`,
-  `DeviceTiming`): every frame while the stats panel is open, from launch,
-  and none while it is closed, unless a measurement fixes it
-  (`PlayerViewConfig::device_timing`). Untimed, recon gets null metrics and
-  writes no timestamp; the host and wait halves stay. Why: a timed command
-  buffer costs about 0.13 ms on an Apple GPU, and nobody reads a closed
-  panel. `kSampled` (one frame in 10) is for measuring that cost (M4). This
-  replaces "decode's device time is always on" (2026-10-20).
-- **recon's breakdowns are forwarded,** under "decode" (`  ..rans decode`,
-  `  ..apply`, `  ..inverse`) and "mesh" (`  ..active set`, `  ..dispatch`);
-  the player's scopes get recon's device time themselves, as core 0.20.0
-  counts a tile to every scope open around it, so the old loop that added
-  "codec decode"'s to "decode" would count it twice.
-- **Each stamp carries its pass, whether it was timed, and the worker's
-  device counts since the last publish** (`core::Device::counters`), counted
-  on the worker, so a frame's counts are its own read, decode and mesh, not
-  whatever the worker began after it.
+- **The device is timed only while the stats are open, or as a measurement
+  fixes it** (`StreamPlayer::set_device_timing`,
+  `PlayerViewConfig::device_timing`): the worker's frames, and the draw,
+  whose gfx profiler the view attaches only while the stats are open and the
+  timing is not off. Untimed, recon gets null metrics; the host and wait
+  halves stay. Why: a timestamp costs device time (recon's DECISIONS: a
+  command buffer's first costs about 0.13 ms on an M5 Max), and nobody reads
+  a closed panel; a measurement's "off" writes no timestamp anywhere.
+  gfx's profiler has no switch of its own: detached, the renderer's table is
+  empty rather than stale, and just after it reopens gfx's rate still
+  averages over the gap. `kSampled` is for measuring timing's cost (M4).
+  This replaces "decode's device time is always on" (2026-10-20).
+- **recon's breakdowns are forwarded** under the player's "decode" and
+  "mesh", which get recon's device time themselves, as core 0.20.0 counts a
+  tile to every scope open around it: the old loop that added "codec
+  decode"'s to "decode" would count it twice.
+- **Each stamp's device counts are the worker's since the last publish**,
+  counted on the worker, so a frame's counts are its own read, decode and
+  mesh, not whatever the worker began after it.
 - **The stage means are over the frames that have each row,** a row only
   timed frames have kept under its stage, and the device state the highest
-  of the frames', as the core folds one: with sampling, a breakdown's mean is
-  the timed frames', and a mean reads measured only when every frame that
-  timed the row measured it.
-- **Two tables, each under its window** (`gfx::ui::StageWindow`): the
-  worker's rows per stream frame, over the frames taken and how many were
-  timed, and the renderer's per display frame under its rate, gfx's frame
-  loop's `frame wait`, `submit` and `present` included. Why: one table mixed
-  the two units.
-- **Compact stats on an iPhone** (`PlayerViewConfig::compact_stats`): no
-  breakdown rows, each window on a shorter line than gfx's, and the tables
-  side by side in landscape, each a child window sized to its table. Why:
+  of the frames', as the core folds one. Why: with sampling, a breakdown's
+  mean is the timed frames', and a mean reads measured only when every frame
+  that timed the row measured it. The summarizer places rows by the same
+  rule.
+- **Two tables, each under its window** (`gfx::ui::StageWindow`). Why: one
+  table mixed stream frames and display frames.
+- **Compact stats on an iPhone** (`PlayerViewConfig::compact_stats`). Why:
   gfx's three loop rows alone took the panel past the controls on the
   shortest phone in landscape, and gfx's window line is wider than the
   narrowest in portrait; an iPad has room for the full panel.
-- **One log format, written by the player** (`MeasureLog`,
-  `measure_log.hpp`): a CSV under `# key: value` lines naming the commits,
-  read at configure time (`cmake/vp_build_info.cmake`), the build type, the
-  device (`device_line`), the stream, the timing and the UTC time; a row per
-  frame and stage, host as busy time, and one per frame of the device counts.
-  A run writes `<path>.part` and renames it once whole. Why: every
+- **One log format, written by the player** (`MeasureLog`). Why: every
   measurement, desktop or phone, before or after a change, compares row for
-  row, and a log says what it measured.
-- **`vp_probe`, `vp_live_probe` grown:** a file or a sender, `--frames`,
-  `--passes`, `--timing` and `--csv`, through the view on gfx's headless
-  surface, or with `--worker` the worker alone on the GPU the core picks (a
-  discrete one first) with nothing drawn. Why: NVIDIA's ICD has no headless
-  surface, so on the lab box the view runs on lavapipe; the render rows wait
-  for PL4, so the worker's rows lose nothing.
-- **The iOS app's measure launch** (`--measure <name> --frames N --timing
-  T`, `parse_measure_args`): it plays that stream from Documents, on screen
-  with the normal view, logs into `Documents/measure/<utc>-<commit>.csv`, and
-  shows "measure done". Without `--frames` it logs the track's first pass.
-- **The runner, `tools/measure/measure`, from the Mac, which only
-  orchestrates:** `lab` builds vp_probe in a detached worktree of the lab's
-  checkout and runs it under `uvrun --time` on rafa2.vrst, timing off then
-  all, two passes, the first a warm-up; `iphone` and `ipad` build the signed
-  Release app, install it, copy the stream, launch it with the measure
-  arguments and copy the log back, only with the owner's go-ahead; and
-  `summarize` (`summarize.py`) gives per stage the mean, p50 and p95 of host,
-  wait and GPU, the counts per frame, and two logs' diff, leaving out a
-  log's first pass when it has more. Logs go to
-  `~/ws/volumetric_kit/measurements/<date>/`.
+  row, and a log says what it measured and how it ran: through the view,
+  whose draw shares the GPU, or by the worker alone.
+- **`vp_probe --worker`**, the worker alone on the GPU the core picks, with
+  nothing drawn. Why: NVIDIA's ICD has no headless surface, so on the lab box
+  the view runs on lavapipe; the render rows wait for PL4, so the worker's
+  rows lose nothing. It validates as the core's test policy asks, so its
+  ctest runs are validated where the tests are.
+- **A measure launch that cannot log writes why** into a `.failed` file
+  beside the logs. Why: the runner cannot see the phone's screen.
+- **The runner, `tools/measure/measure`, runs from the Mac, which only
+  orchestrates.** On the lab it keeps its own clone of the player in the
+  lab's scratch, holds a lock for the whole run, and builds with
+  `VP_DESKTOP_APP=OFF`. Why: it leaves the owner's checkout alone, two runs
+  cannot mix their checkout, build and logs, and it needs no GLFW, which the
+  lab lacks; GLFW stays the desktop app's prerequisite, never a download.
+  Two passes, the first a warm-up, and timing off then all, as M0 reads host
+  rows untimed and device rows timed. A phone run starts an app on the
+  owner's device, so it runs only with the owner's go-ahead.
 - **iOS builds Release,** in CI's iOS step and the README: a measurement and
   the owner's checks run what ships, not an `-O0` build.
 

@@ -169,14 +169,16 @@ std::string utc_text(std::chrono::system_clock::time_point at, bool compact) {
   return text;
 }
 
-std::string measure_file_name(std::chrono::system_clock::time_point started) {
+std::string measure_file_name(std::chrono::system_clock::time_point started,
+                              std::string_view extension) {
   const std::string commit = build_info().player;
   const std::size_t dirty = commit.rfind("-dirty");
   std::string shown = commit.substr(0, std::min<std::size_t>(7, dirty));
   if (dirty != std::string::npos) {
     shown += "-dirty";
   }
-  return utc_text(started, /*compact=*/true) + "-" + shown + ".csv";
+  return utc_text(started, /*compact=*/true) + "-" + shown +
+         std::string(extension);
 }
 
 core::Result<std::unique_ptr<MeasureLog>> MeasureLog::open(
@@ -192,6 +194,7 @@ core::Result<std::unique_ptr<MeasureLog>> MeasureLog::open(
             << "# build: " << build.build_type << '\n'
             << "# device: " << one_line(context.device) << '\n'
             << "# stream: " << one_line(context.stream) << '\n'
+            << "# run: " << one_line(context.run) << '\n'
             << "# timing: " << to_string(context.timing) << '\n'
             << "# utc: " << utc_text(context.started) << '\n'
             << kColumns << '\n';

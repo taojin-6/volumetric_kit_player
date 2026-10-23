@@ -6,6 +6,7 @@
 # build: Release
 # device: Test GPU; vendor 0x1234; driver Test 1.0
 # stream: fixture.vrst, track 0
+# run: vp_probe --worker --passes 2
 # timing: all
 # utc: 2026-10-23T05:12:00Z
 pass,frame,type,bytes,triangles,stage,host_ms,wait_ms,gpu_ms,device,submits,host_waits,blocked_ns,staging_buffers

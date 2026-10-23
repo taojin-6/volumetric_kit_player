@@ -464,12 +464,13 @@ TEST_F(StreamPlayerTest, TheTracksCountsAndRateAreWhatWasWritten) {
 
 // Untimed, as until set_device_timing asks: each frame's read, decode and
 // mesh have host time, decode and mesh their fences' waits inside it, and
-// none a device half; and the worker's device counts its submits and waits.
+// none a device half; and the worker's device counts its submits, its waits
+// and their time, and its staging buffers, each frame's its own.
 TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
   const std::vector<stream::Record> all = records();
   ASSERT_EQ(all.size(), kFrames);
   const core::DeviceCounters before = device().counters();
-  std::uint64_t submits = 0;  // the frames' own
+  core::DeviceCounters frames;  // the frames' own, summed
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   EXPECT_EQ(player->device_timing(), DeviceTiming::kOff);
@@ -499,16 +500,27 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
     }
     EXPECT_GT(rows[1].wait_ms, 0.0) << "decode waits for its fences";
     EXPECT_GT(rows[2].wait_ms, 0.0) << "mesh waits for its fence";
-    // The test's own readback of the mesh counts too, so at least these.
-    EXPECT_GE(frame->counters.submits, 2u) << "frame " << i;
-    EXPECT_GE(frame->counters.host_waits, 1u) << "frame " << i;
-    EXPECT_GT(frame->counters.blocked_ns, 0u) << "frame " << i;
-    submits += frame->counters.submits;
+    // The test's own readback of the mesh counts too, so at least these;
+    // today's decode stages its payload.
+    const core::DeviceCounters& counted = frame->counters;
+    EXPECT_GE(counted.submits, 2u) << "frame " << i;
+    EXPECT_GE(counted.host_waits, 1u) << "frame " << i;
+    EXPECT_GT(counted.blocked_ns, 0u) << "frame " << i;
+    EXPECT_GE(counted.staging_buffers, 1u) << "frame " << i;
+    frames.submits += counted.submits;
+    frames.host_waits += counted.host_waits;
+    frames.blocked_ns += counted.blocked_ns;
+    frames.staging_buffers += counted.staging_buffers;
   }
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
   // Each frame's are its own, not the device's since it began.
-  EXPECT_LE(submits, device().counters().submits - before.submits);
+  const core::DeviceCounters after = device().counters();
+  EXPECT_LE(frames.submits, after.submits - before.submits);
+  EXPECT_LE(frames.host_waits, after.host_waits - before.host_waits);
+  EXPECT_LE(frames.blocked_ns, after.blocked_ns - before.blocked_ns);
+  EXPECT_LE(frames.staging_buffers,
+            after.staging_buffers - before.staging_buffers);
 }
 
 // Timed, every frame's decode and mesh have a device half, where the queue

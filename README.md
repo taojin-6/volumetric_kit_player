@@ -37,7 +37,9 @@ cmake --build "$root/build" --parallel
 ctest --test-dir "$root/build" --output-on-failure
 ```
 
-`VP_BUILD_TESTS` and `VP_WARNINGS_AS_ERRORS` default ON.
+`VP_BUILD_TESTS` and `VP_WARNINGS_AS_ERRORS` default ON, as does
+`VP_DESKTOP_APP`; `-DVP_DESKTOP_APP=OFF` builds everything but the app, with
+no GLFW.
 
 ## Run
 
@@ -176,10 +178,10 @@ are claimed.
 
 A measurement is one CSV log per run, which the player writes itself
 ([measure_log.hpp](src/volumetric_kit/player/measure_log.hpp) gives the
-format): a header naming the commits, the build, the device, the stream, the
-timing and the time, then each stream frame's stage rows (host, wait and GPU
-ms) and the worker's device counts (submits, waits, blocked time, staging
-buffers).
+format): a header naming the commits, the build, the device, the stream, how
+it ran, the timing and the time, then each stream frame's stage rows (host,
+wait and GPU ms) and the worker's device counts (submits, waits, blocked
+time, staging buffers).
 
 `vp_probe` writes one on a desktop, with no window:
 
@@ -190,33 +192,33 @@ buffers).
 
 It plays through the view on gfx's headless surface, or with `--worker` the
 worker alone on the GPU the core picks, for a GPU with no headless surface
-(NVIDIA's). `--timing` is `off`, `sampled` (one frame in 10) or `all`;
-`--frames N` stops after N frames; `--connect host[:port]` plays a sender.
+(NVIDIA's). `--timing` is `off`, `sampled` (one frame in `kSampleEvery`) or
+`all`; `--frames N` stops after N frames; `--connect host[:port]` plays a
+sender.
 
-The iOS app writes one when launched with
-`-- --measure <name in Documents> [--frames N] [--timing T]`: it plays that
-stream, logs into `Documents/measure/<utc>-<commit>.csv` (the track's first
-pass without `--frames`), and shows "measure done".
+The iOS app writes one when launched with `-- --measure <name in Documents>
+[--passes P] [--frames N] [--timing T]`: it plays that stream, logs into
+`Documents/measure/<utc>-<commit>.csv`, and shows "measure done"; a launch
+that cannot log writes why into a `.failed` file there instead.
 
 [tools/measure/measure](tools/measure/measure), run from the Mac, does it end
-to end and copies the logs into `~/ws/volumetric_kit/measurements/<date>/`:
+to end, copies the logs into `~/ws/volumetric_kit/measurements/<date>/` and
+prints their summary; its header lists the options and settings:
 
 ```bash
-tools/measure/measure lab <ref>      # the lab's RTX 4090: timing off, then all
+tools/measure/measure lab <ref>      # the lab's RTX 4090 (a branch, a commit, pr/<n>)
 tools/measure/measure iphone <ref>   # or ipad: VP_DEVELOPMENT_TEAM set, unlocked
 tools/measure/measure summarize before.csv after.csv
 tools/measure/measure --dry-run lab <ref>   # prints the commands, runs none
 ```
 
-`lab` builds `vp_probe` at `<ref>` (a branch, a commit or `pr/<n>`) in a
-detached worktree of the lab's checkout and runs it under `uvrun --time` on
-rafa2.vrst, two passes, the first a warm-up. `iphone` and `ipad` build the
-signed Release app, install it, copy rafa2.vrst into its Documents if
-missing, launch it with the measure arguments, and copy the log back; they
-start an app on the device, so they run only with the owner's go-ahead. Each
-prints the summary, which `summarize` makes of any logs: per stage the mean,
-p50 and p95 of host, wait and GPU, the counts per frame, and with two logs
-their diff.
+Each runs two passes of rafa2.vrst, the first a warm-up, with timing off and
+then all. `lab` builds `vp_probe` in its own clone of the player on the lab
+and runs it under `uvrun --time`. `iphone` and `ipad` build the signed
+Release app, install it, copy rafa2.vrst into its Documents if missing, then
+launch it once per timing; they start an app on the device, so they run only
+with the owner's go-ahead. `summarize` gives per stage the mean, p50 and p95
+of host, wait and GPU, the counts per frame, and with two logs their diff.
 
 ## Development
 

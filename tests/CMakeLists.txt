@@ -63,13 +63,15 @@ vp_add_test(player_view STREAMS volumetric_kit::player
 # (parse_live_source) and its folder's first stream (folder_source): host only.
 vp_add_test(scenario volumetric_kit::player)
 # The desktop app's entry point, the app run with VP_NO_WINDOW set (AGENTS.md),
-# and the scenarios in config/examples/; host only.
-vp_add_test(cli volumetric_kit::player volumetric_kit::core_config)
-target_compile_definitions(
-  vp_cli_test
-  PRIVATE VP_PLAYER_APP="$<TARGET_FILE:volumetric_kit_player>"
-          VP_CONFIG_EXAMPLES="${PROJECT_SOURCE_DIR}/config/examples")
-add_dependencies(vp_cli_test volumetric_kit_player)
+# and the scenarios in config/examples/; host only, with the app.
+if(VP_DESKTOP_APP)
+  vp_add_test(cli volumetric_kit::player volumetric_kit::core_config)
+  target_compile_definitions(
+    vp_cli_test
+    PRIVATE VP_PLAYER_APP="$<TARGET_FILE:volumetric_kit_player>"
+            VP_CONFIG_EXAMPLES="${PROJECT_SOURCE_DIR}/config/examples")
+  add_dependencies(vp_cli_test volumetric_kit_player)
+endif()
 # The command of vp_test_streams, above.
 add_executable(vp_write_stream vp_write_stream.cpp)
 target_link_libraries(
@@ -88,9 +90,10 @@ vp_add_test(measure_log volumetric_kit::player
 # DECISIONS.md), a tool. ctest runs it on the tests' stream, two passes of every
 # frame timed: the worker alone everywhere, and the view where the loader has a
 # headless surface, as MoltenVK does; then it checks the logs, as the summarizer
-# reads them.
+# reads them. It validates as the core's test policy asks, as the tests do.
 add_executable(vp_probe vp_probe.cpp)
-target_link_libraries(vp_probe PRIVATE volumetric_kit::player)
+target_link_libraries(vp_probe PRIVATE volumetric_kit::player
+                                       volumetric_kit::core_test_policy)
 vp_target_warnings(vp_probe)
 set(VP_PROBE_DIR "${CMAKE_CURRENT_BINARY_DIR}/probe")
 file(MAKE_DIRECTORY "${VP_PROBE_DIR}")
@@ -110,12 +113,13 @@ set_tests_properties(
   ${probes} PROPERTIES FIXTURES_REQUIRED vp_streams FIXTURES_SETUP vp_probe_csv
                        TIMEOUT 300)
 # The summarizer (tools/measure/summarize.py) on its fixtures, and on the log
-# above, whose check fails rather than skips without it.
+# above, whose check fails rather than skips without it; -B leaves no bytecode
+# in the source tree.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(VP_MEASURE_TESTS "${PROJECT_SOURCE_DIR}/tools/measure/test_summarize.py")
-add_test(NAME vp_measure_summarize COMMAND Python3::Interpreter
+add_test(NAME vp_measure_summarize COMMAND Python3::Interpreter -B
                                            "${VP_MEASURE_TESTS}" Summarize)
-add_test(NAME vp_probe_csv_check COMMAND Python3::Interpreter
+add_test(NAME vp_probe_csv_check COMMAND Python3::Interpreter -B
                                          "${VP_MEASURE_TESTS}" ProbeLog)
 set_tests_properties(
   vp_probe_csv_check

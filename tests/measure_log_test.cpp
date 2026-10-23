@@ -2,21 +2,24 @@
 // Copyright (c) 2026 Tao Jin
 
 // The measure log on the host: its header names the build, the device, the
-// stream, the timing and the time, then the columns; each frame is its stage
-// rows, host as busy time, GPU only where measured and each device state by
-// name, a breakdown's name kept and a name with a comma quoted, then its
-// device counts; nothing is at the path until finish renames the part file,
-// and after it nothing more is written; a folder that is not there is
-// refused. The time reads as UTC, and a log's file name is it and the
-// player's commit. The iOS app's measure arguments parse with the system's
-// left alone, and what is wrong is named; the timings' names round-trip. On
-// a device: its line names it, its driver, its memory and its timestamps.
+// stream, how it ran, the timing and the time, then the columns; each frame
+// is its stage rows, host as busy time, GPU only where measured and each
+// device state by name, a breakdown's name kept and a name with a comma
+// quoted, then its device counts; nothing is at the path until finish
+// renames the part file, and after it nothing more is written; a folder that
+// is not there is refused. The time reads as UTC, and a log's file name, or
+// a failed launch's, is it and the player's commit. The iOS app's measure
+// arguments parse with the system's left alone, and what is wrong is named;
+// the timings' names round-trip. On a device: its line names it, its driver,
+// its memory, its timestamps and its clocks' calibration, each as the device
+// says.
 
 #include "volumetric_kit/player/measure_log.hpp"
 
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -53,6 +56,7 @@ MeasureContext context() {
   MeasureContext context;
   context.device = "Test GPU; vendor 0x1234";
   context.stream = "fixture.vrst, track 0";
+  context.run = "vp_probe --worker --passes 2";
   context.timing = DeviceTiming::kSampled;
   context.started = kStarted;
   return context;
@@ -108,7 +112,8 @@ TEST(MeasureLog, TheHeaderNamesWhatWasMeasuredThenTheColumns) {
                    std::string("# gfx: ") + build.gfx,
                    std::string("# build: ") + build.build_type,
                    "# device: Test GPU; vendor 0x1234",
-                   "# stream: fixture.vrst, track 0", "# timing: sampled",
+                   "# stream: fixture.vrst, track 0",
+                   "# run: vp_probe --worker --passes 2", "# timing: sampled",
                    "# utc: 2026-10-23T05:12:00Z",
                    "pass,frame,type,bytes,triangles,stage,host_ms,wait_ms,"
                    "gpu_ms,device,submits,host_waits,blocked_ns,staging_"
@@ -130,8 +135,8 @@ TEST(MeasureLog, AFrameIsItsStageRowsThenItsDeviceCounts) {
   EXPECT_EQ((*log)->frames(), 2u);
   ASSERT_TRUE((*log)->finish().ok());
   const Lines lines = read_lines(path);
-  ASSERT_EQ(lines.size(), 11u + 5u + 2u);
-  EXPECT_EQ(Lines(lines.begin() + 11, lines.end()),
+  ASSERT_EQ(lines.size(), 12u + 5u + 2u);
+  EXPECT_EQ(Lines(lines.begin() + 12, lines.end()),
             (Lines{"2,7,P,600,510,read,0.2500,0.0000,,none,,,,",
                    "2,7,P,600,510,decode,2.0000,1.0000,0.5000,measured,,,,",
                    "2,7,P,600,510,  ..rans decode,1.0000,0.0000,,not_timed,,,,",
@@ -183,6 +188,8 @@ TEST(MeasureLog, TheTimeReadsAsUtcAndAFileIsNamedByItAndTheCommit) {
             commit.find("-dirty") != std::string::npos)
       << name;
   EXPECT_EQ(name.substr(name.size() - 4), ".csv");
+  const std::string failed = vkp::measure_file_name(kStarted, ".failed");
+  EXPECT_EQ(failed, name.substr(0, name.size() - 4) + ".failed");
   EXPECT_STRNE(vkp::build_info().build_type, "");
 }
 
@@ -195,13 +202,15 @@ TEST(MeasureArgs, NoneWithoutMeasureAndTheSystemsAreLeftAlone) {
       vkp::parse_measure_args({"--measure", "rafa2.vrst"});
   ASSERT_TRUE(plain.ok() && plain.value().has_value());
   EXPECT_EQ(plain.value()->stream, "rafa2.vrst");
-  EXPECT_FALSE(plain.value()->frames.has_value()) << "one pass";
+  EXPECT_EQ(plain.value()->passes, 1u) << "one pass";
+  EXPECT_FALSE(plain.value()->frames.has_value()) << "all of it";
   EXPECT_EQ(plain.value()->timing, DeviceTiming::kAll);
-  const core::Result<std::optional<MeasureArgs>> full =
-      vkp::parse_measure_args({"--timing", "sampled", "-AppleLanguages", "(en)",
-                               "--frames", "300", "--measure", "rafa2.vrst"});
+  const core::Result<std::optional<MeasureArgs>> full = vkp::parse_measure_args(
+      {"--timing", "sampled", "-AppleLanguages", "(en)", "--frames", "300",
+       "--measure", "rafa2.vrst", "--passes", "2"});
   ASSERT_TRUE(full.ok() && full.value().has_value()) << full.status().message();
   EXPECT_EQ(full.value()->stream, "rafa2.vrst");
+  EXPECT_EQ(full.value()->passes, 2u);
   EXPECT_EQ(full.value()->frames, 300u);
   EXPECT_EQ(full.value()->timing, DeviceTiming::kSampled);
 }
@@ -213,8 +222,10 @@ TEST(MeasureArgs, WhatIsWrongIsNamed) {
            {{"--measure", "a/b.vrst"}, "--measure 'a/b.vrst'"},
            {{"--measure", ""}, "--measure ''"},
            {{"--measure", "a.vrst", "--frames", "0"}, "--frames '0'"},
+           {{"--measure", "a.vrst", "--passes", "x"}, "--passes 'x'"},
            {{"--measure", "a.vrst", "--timing", "some"}, "--timing 'some'"},
-           {{"--frames", "10"}, "need --measure"}}) {
+           {{"--frames", "10"}, "need --measure"},
+           {{"--passes", "2"}, "need --measure"}}) {
     const core::Result<std::optional<MeasureArgs>> parsed =
         vkp::parse_measure_args(args);
     ASSERT_FALSE(parsed.ok()) << named;
@@ -245,12 +256,33 @@ TEST_F(DeviceLineTest, ItNamesTheDeviceItsDriverMemoryAndTimestamps) {
   const std::string line = vkp::device_line(device());
   const std::string name = device().caps().properties().deviceName;
   EXPECT_EQ(line.rfind(name + "; vendor 0x", 0), 0u) << line;
+  // The memory facts and the calibration, as the device states them.
+  const VkPhysicalDeviceMemoryProperties& memory =
+      device().caps().memory_properties();
+  constexpr VkMemoryPropertyFlags kMapped =
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+  bool mapped = false;
+  bool cached = false;
+  for (std::uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
+    const VkMemoryPropertyFlags flags = memory.memoryTypes[i].propertyFlags;
+    if ((flags & kMapped) == kMapped) {
+      mapped = true;
+      cached = cached || (flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0;
+    }
+  }
+  const std::string facts = std::string("; local and mapped ") +
+                            (mapped ? "yes" : "no") + ", cached " +
+                            (cached ? "yes" : "no") + "; timestamps ";
+  EXPECT_NE(line.find(facts), std::string::npos) << line;
+  const std::string calibrated = device().calibrate().ok()
+                                     ? "; calibrated yes, within \\d+ ns$"
+                                     : "; calibrated no$";
+  EXPECT_TRUE(std::regex_search(line, std::regex(calibrated))) << line;
   EXPECT_TRUE(std::regex_search(
       line, std::regex("; driver [^;]+; Vulkan \\d+\\.\\d+\\.\\d+; heaps "
                        "\\d+ MiB( local)?(, \\d+ MiB( local)?)*; local and "
                        "mapped (yes|no), cached (yes|no); timestamps \\d+ "
-                       "bits, [0-9.e+-]+ ns a tick; calibrated (yes, within "
-                       "\\d+ ns|no)$")))
+                       "bits, [0-9.e+-]+ ns a tick; calibrated")))
       << line;
   EXPECT_EQ(line.find('\n'), std::string::npos);
 }

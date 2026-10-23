@@ -209,7 +209,7 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
 }
 
 std::string display_line(const gfx::FrameMetrics& render) {
-  return "display " + fixed(render.fps, 1) + " fps";
+  return "display " + (render.fps > 0.0 ? fixed(render.fps, 1) : "-") + " fps";
 }
 
 void StatsPanel::draw(const PlaybackStats& stats,
@@ -233,7 +233,8 @@ void StatsPanel::draw(const PlaybackStats& stats,
                     [](const core::StageRow& row) {
                       return row.device == core::DeviceTime::Measured;
                     });
-    render_window_ = {1, timed ? 1u : 0u, "display frame"};
+    render_window_ = {render_rows_.empty() ? 0u : 1u, timed ? 1u : 0u,
+                      "display frame"};
     rebuilt_ = now;
   }
   if (!compact_) {

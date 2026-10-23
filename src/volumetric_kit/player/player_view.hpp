@@ -56,7 +56,9 @@ struct PlayerViewConfig {
   bool compact_stats = false;
   /// The worker's device timing (StreamPlayer::set_device_timing), fixed, as
   /// a measurement sets it. Empty, the default: every frame while the stats
-  /// panel is open, and none while it is closed.
+  /// panel is open, and none while it is closed. The draw is timed, every
+  /// display frame, only while the panel is open and the worker's timing is
+  /// not off.
   std::optional<DeviceTiming> device_timing;
 };
 
@@ -100,8 +102,10 @@ class PlayerView {
   /// @brief Make the shared device on @p surface (gfx::app::make_shared_device)
   ///        and adopt it for gfx (@ref view_swapchain, 2 frames in flight)
   ///        and for recon. Build the mesh pipeline, the overlay (no imgui.ini)
-  ///        and a gfx::Profiler for the stats' "draw" row, attached to the
-  ///        frame loop. Aim the camera at the first view: target (0, 0.85, 0),
+  ///        and a gfx::Profiler for the stats' "draw" row, which @ref frame
+  ///        attaches to the frame loop while the draw is timed
+  ///        (PlayerViewConfig::device_timing). Aim the camera at the first
+  ///        view: target (0, 0.85, 0),
   ///        3 m. Then start @p player; its worker builds its kernels, and it
   ///        plays unless the caller paused it.
   /// @param surface  The window system's source; its window or layer must

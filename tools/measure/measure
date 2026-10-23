@@ -5,29 +5,33 @@
 # measure: run a measurement of the player and bring its logs home, from the
 # Mac, which only orchestrates (README.md, "Measure"; DECISIONS.md).
 #
-#   measure [--dry-run] lab <ref> [--frames N] [--passes P] [--timing T,...]
-#       On the lab's RTX 4090: keep a detached worktree of the player at <ref>
-#       in the lab's checkout (.worktrees/measure-run), build vp_probe Release
-#       in the lab's scratch under uvrun, run it on rafa2.vrst under
-#       `uvrun --time` once per timing (default off,all; 2 passes, the first
-#       a warm-up), and copy the logs into ~/ws/volumetric_kit/measurements/.
-#   measure [--dry-run] iphone|ipad <ref> [--frames N] [--timing T]
+#   measure [--dry-run] lab <ref> [--passes P] [--frames N] [--timing T,...]
+#       On the lab's RTX 4090, in its own clone of the player under LAB_ROOT
+#       (one run at a time): check out <ref>, build vp_probe Release with no
+#       desktop app (so no GLFW) under uvrun, run it on rafa2.vrst under
+#       `uvrun --time` once per timing, and copy the logs home.
+#   measure [--dry-run] iphone|ipad <ref> [--passes P] [--frames N]
+#                                         [--timing T,...]
 #       Build the signed Release app at <ref> on the Mac, install it on the
-#       device, copy rafa2.vrst into its Documents if missing, launch it with
-#       the measure arguments (the device must be unlocked), wait for the log,
-#       and copy it home. It starts an app on the owner's device: run it only
+#       device, copy rafa2.vrst into its Documents if missing, then once per
+#       timing launch it with the measure arguments (the device must be
+#       unlocked), wait for its log, and copy it home. A launch that logs
+#       nothing stops the run with the app's reason (a .failed file), or when
+#       the app is gone. It starts an app on the owner's device: run it only
 #       with the owner's go-ahead.
 #   measure summarize <log.csv>...
 #       The logs as markdown (summarize.py): two give a before/after diff.
 #
-# <ref> is a branch, a tag, a commit, or pr/<n>. --dry-run prints the commands
-# and runs none. Settings come from the environment, after
-# ${MEASURE_CONFIG:-~/.config/volumetric_kit/measure.env} if it exists:
+# Defaults: 2 passes, the first a warm-up that the summary leaves out; every
+# frame of them; timing off, then all. <ref> is a branch, a tag, a commit, or
+# pr/<n>. --dry-run prints the commands and runs none. Settings come from the
+# environment, after ${MEASURE_CONFIG:-~/.config/volumetric_kit/measure.env}
+# if it exists:
 #   VP_DEVELOPMENT_TEAM  the Apple team that signs the app (phones; required)
 #   MEASURE_DEVICE       a devicectl device; default the first iPhone or iPad
 #   MEASURE_AGENT        uvrun's agent name on the lab (default measure)
 #   MEASURE_OUT          where logs go (default ~/ws/volumetric_kit/measurements)
-#   LAB_HOST, LAB_REPO, LAB_ROOT, LAB_STREAM, MAC_REPO, MAC_STREAM,
+#   LAB_HOST, LAB_ROOT, LAB_STREAM, PLAYER_URL, MAC_REPO, MAC_STREAM,
 #   MoltenVK_ROOT, VP_BUNDLE_ID  as defaulted below.
 set -euo pipefail
 
@@ -38,10 +42,10 @@ if [ -f "$config" ]; then
   . "$config"
 fi
 LAB_HOST="${LAB_HOST:-taojin@taojin-desktop.arena.andrew.cmu.edu}"
-LAB_REPO="${LAB_REPO:-/home/taojin/ws/volumetric_kit/volumetric_kit_player}"
 LAB_ROOT="${LAB_ROOT:-/home/taojin/claude_scratch/dataflow/measure}"
 LAB_UVRUN="${LAB_UVRUN:-/home/taojin/claude_scratch/dataflow/bin/uvrun}"
 LAB_STREAM="${LAB_STREAM:-/home/taojin/ws/volumetric_kit/streams/rafa2.vrst}"
+PLAYER_URL="${PLAYER_URL:-https://github.com/taojin-6/volumetric_kit_player.git}"
 MAC_REPO="${MAC_REPO:-$HOME/ws/volumetric_kit/volumetric_kit_player}"
 MAC_STREAM="${MAC_STREAM:-$HOME/ws/volumetric_kit/streams/rafa2.vrst}"
 MoltenVK_ROOT="${MoltenVK_ROOT:-$HOME/ws/volumetric_kit/third_party/MoltenVK_ios_v1.4.2/MoltenVK}"
@@ -51,7 +55,7 @@ MEASURE_OUT="${MEASURE_OUT:-$HOME/ws/volumetric_kit/measurements}"
 
 dry=0
 usage() {
-  sed -n '8,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '8,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 fail() {
@@ -69,19 +73,19 @@ run() {
   fi
 }
 
-# The commit <ref> names in the checkout at $1, after fetching branches and
-# PR heads; with --dry-run, <ref> itself.
-resolve() {
+# The commit <ref> names in the checkout at $1, once it is fetched: a PR's
+# head alone for pr/<n>, else origin's branches. The lab runs it too.
+commit_of() {
   local repo="$1" ref="$2"
-  if [ "$dry" = 1 ]; then
-    echo "$ref"
-    return
-  fi
-  git -C "$repo" fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*' \
-    '+refs/pull/*/head:refs/remotes/origin/pr/*'
+  case "$ref" in
+    pr/*)
+      git -C "$repo" fetch --quiet origin \
+        "+refs/pull/${ref#pr/}/head:refs/remotes/origin/$ref"
+      ;;
+    *) git -C "$repo" fetch --quiet origin ;;
+  esac
   git -C "$repo" rev-parse --verify --quiet "origin/$ref^{commit}" ||
-    git -C "$repo" rev-parse --verify --quiet "$ref^{commit}" ||
-    fail "no commit $ref in $repo"
+    git -C "$repo" rev-parse --verify --quiet "$ref^{commit}"
 }
 
 summarize() {
@@ -89,56 +93,54 @@ summarize() {
   python3 -I "$here/summarize.py" "$@"
 }
 
+# The options both modes take, into passes, frames and timings.
+options() {
+  passes=2
+  frames=""
+  timings="off,all"
+  while [ "$#" -gt 0 ]; do
+    [ "$#" -ge 2 ] || usage
+    case "$1" in
+      --passes) passes="$2" ;;
+      --frames) frames="$2" ;;
+      --timing) timings="$2" ;;
+      *) usage ;;
+    esac
+    shift 2
+  done
+}
+
 # The lab: one script over ssh, so the lab does the work and the Mac waits.
 lab() {
   local ref="$1"
   shift
-  local frames="" passes=2 timings="off,all"
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --frames) frames="$2"; shift 2 ;;
-      --passes) passes="$2"; shift 2 ;;
-      --timing) timings="$2"; shift 2 ;;
-      *) usage ;;
-    esac
-  done
-  local stamp day out
+  local passes frames timings
+  options "$@"
+  local stamp out
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  day="$(date +%Y-%m-%d)"
-  out="$MEASURE_OUT/$day"
+  out="$MEASURE_OUT/$(date +%Y-%m-%d)"
   local script
   script="$(cat <<EOF
 set -euo pipefail
-exec 3>&1 1>&2  # the logs' paths alone go to the Mac's stdout
-repo=$(printf %q "$LAB_REPO"); root=$(printf %q "$LAB_ROOT")
+exec 3>&1 1>&2  # only the paths of the logs go to stdout, to the Mac
+# (no quote marks in this script: bash 3.2 misparses them in a heredoc in \$())
+root=$(printf %q "$LAB_ROOT"); url=$(printf %q "$PLAYER_URL")
 uvrun=$(printf %q "$LAB_UVRUN"); agent=$(printf %q "$MEASURE_AGENT")
 stream=$(printf %q "$LAB_STREAM"); ref=$(printf %q "$ref")
-worktree="\$repo/.worktrees/measure-run"
+$(declare -f commit_of)
 mkdir -p "\$root/out"
-git -C "\$repo" fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*' \
-  '+refs/pull/*/head:refs/remotes/origin/pr/*'
-sha=\$(git -C "\$repo" rev-parse --verify --quiet "origin/\$ref^{commit}" ||
-  git -C "\$repo" rev-parse --verify "\$ref^{commit}")
-if [ -e "\$worktree" ]; then
-  git -C "\$worktree" checkout --quiet --detach "\$sha"
-else
-  git -C "\$repo" worktree add --quiet --detach "\$worktree" "\$sha"
+# One run at a time: the clone, the build and the logs are under the root.
+exec 4>"\$root/run.lock"
+if ! flock -n 4; then
+  echo "measure: another run holds \$root/run.lock; waiting"
+  flock 4
 fi
-# GLFW for the desktop app, which the configure asks for: built once, with no
-# window system (the null platform), into the measure folder.
-if [ ! -d "\$root/glfw/lib" ]; then
-  [ -d "\$root/glfw-src" ] || git clone --quiet --depth 1 --branch 3.4 \
-    https://github.com/glfw/glfw.git "\$root/glfw-src"
-  "\$uvrun" "\$agent" -- cmake -S "\$root/glfw-src" -B "\$root/glfw-build" \
-    -DCMAKE_BUILD_TYPE=Release -DGLFW_BUILD_X11=OFF -DGLFW_BUILD_WAYLAND=OFF \
-    -DGLFW_BUILD_EXAMPLES=OFF -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_DOCS=OFF \
-    -DCMAKE_INSTALL_PREFIX="\$root/glfw"
-  "\$uvrun" "\$agent" -- cmake --build "\$root/glfw-build" --parallel 8 \
-    --target install
-fi
-"\$uvrun" "\$agent" -- cmake -S "\$worktree" -B "\$root/build" \
-  -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH="\$root/glfw"
+repo="\$root/player"
+[ -d "\$repo/.git" ] || git clone --quiet "\$url" "\$repo"
+sha=\$(commit_of "\$repo" "\$ref") || { echo "measure: no commit \$ref"; exit 1; }
+git -C "\$repo" checkout --quiet --detach "\$sha"
+"\$uvrun" "\$agent" -- cmake -S "\$repo" -B "\$root/build" -G "Unix Makefiles" \
+  -DCMAKE_BUILD_TYPE=Release -DVP_DESKTOP_APP=OFF
 "\$uvrun" "\$agent" -- cmake --build "\$root/build" --parallel 8 \
   --target vp_probe
 for timing in \$(echo $(printf %q "$timings") | tr , ' '); do
@@ -177,7 +179,8 @@ devicectl_json() {
 }
 
 # Every string in a devicectl JSON file at $1 that ends with $2, one a line:
-# the file names in a listing, whatever its layout.
+# the file names in a listing, or the processes' executables, whatever its
+# layout.
 json_strings() {
   python3 -I - "$1" "$2" <<'PY'
 import json, sys
@@ -224,22 +227,77 @@ PY
   rm -f "$list"
 }
 
+# The names in the app's Documents/measure on $device, one a line, into the
+# file $1; false when devicectl cannot list it (none yet).
+measure_files() {
+  devicectl_json "$listing" device info files --device "$device" \
+    --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
+    --subdirectory Documents/measure &&
+    { json_strings "$listing" .csv; json_strings "$listing" .failed; } >"$1"
+}
+
+# A file of the app's Documents/measure on $device, $1, copied to $2.
+copy_measure_file() {
+  xcrun devicectl device copy from --device "$device" \
+    --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
+    --source "Documents/measure/$(basename "$1")" --destination "$2"
+}
+
+# One launch at timing $1 on $device: its log, copied into $out, its path on
+# stdout. The app renames its log from .part once it is whole, and writes a
+# .failed with its reason instead when it cannot log.
+launch() {
+  local timing="$1"
+  local before="$tmp_before" now="$tmp_now"
+  measure_files "$before" || : >"$before"
+  echo "measure: launching the player on $kind $device, timing $timing:" \
+    "keep it unlocked" >&2
+  xcrun devicectl device process launch --device "$device" \
+    --terminate-existing "$VP_BUNDLE_ID" -- --measure "$name" \
+    --passes "$passes" ${frames:+--frames "$frames"} --timing "$timing" \
+    >/dev/null
+  local deadline=$((SECONDS + 1200)) seen=0 file=""
+  while [ -z "$file" ]; do
+    [ "$SECONDS" -lt "$deadline" ] || fail "no log after 20 min"
+    sleep 5
+    measure_files "$now" || continue
+    file="$(grep -vxF -f "$before" "$now" | head -n 1 || true)"
+    if [ -z "$file" ] && devicectl_json "$listing" device info processes \
+      --device "$device"; then
+      # Gone, once seen, with nothing written: it crashed or was stopped.
+      if [ -n "$(json_strings "$listing" \
+        volumetric_kit_player.app/volumetric_kit_player)" ]; then
+        seen=1
+      elif [ "$seen" = 1 ]; then
+        measure_files "$now" || :
+        file="$(grep -vxF -f "$before" "$now" | head -n 1 || true)"
+        [ -n "$file" ] || fail "the app exited with no log (Console.app says why)"
+      fi
+    fi
+  done
+  local copy="$out/$mode-$(basename "$file")"
+  copy_measure_file "$file" "$copy" >/dev/null
+  case "$file" in
+    *.failed) fail "the app logged nothing: $(cat "$copy")" ;;
+  esac
+  echo "$copy"
+}
+
 # $1 the mode (iphone, ipad), $2 the device kind devicectl names (iPhone,
 # iPad), $3 the ref, then the options.
 phone() {
   local mode="$1" kind="$2" ref="$3"
   shift 3
-  local frames="300" timing="all"
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --frames) frames="$2"; shift 2 ;;
-      --timing) timing="$2"; shift 2 ;;
-      *) usage ;;
-    esac
-  done
+  local passes frames timings
+  options "$@"
   [ -n "${VP_DEVELOPMENT_TEAM:-}" ] || fail "set VP_DEVELOPMENT_TEAM (README.md, iOS)"
-  local sha worktree app device name out
-  sha="$(resolve "$MAC_REPO" "$ref")"
+  local sha worktree app stamp device name out
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  if [ "$dry" = 1 ]; then
+    sha="$ref"
+  else
+    sha="$(commit_of "$MAC_REPO" "$ref")" || fail "no commit $ref in $MAC_REPO"
+  fi
   worktree="$MAC_REPO/.worktrees/measure-run"
   if [ -e "$worktree" ]; then
     run git -C "$worktree" checkout --quiet --detach "$sha"
@@ -254,55 +312,41 @@ phone() {
   device="$(pick_device "$kind")"
   run xcrun devicectl device install app --device "$device" "$app"
   name="$(basename "$MAC_STREAM")"
-  local before
-  listing="$(mktemp)"  # global, for the trap
-  trap 'rm -f "$listing"' EXIT
-  if [ "$dry" = 1 ] || ! {
-    devicectl_json "$listing" device info files --device "$device" \
-      --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
-      --subdirectory Documents &&
-      json_strings "$listing" "$name" | grep -q .
-  }; then
-    run xcrun devicectl device copy to --device "$device" \
-      --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
-      --source "$MAC_STREAM" --destination "Documents/$name"
-  fi
-  before=""
-  if [ "$dry" = 0 ] && devicectl_json "$listing" device info files \
-    --device "$device" --domain-type appDataContainer \
-    --domain-identifier "$VP_BUNDLE_ID" --subdirectory Documents/measure; then
-    before="$(json_strings "$listing" .csv)"
-  fi
-  echo "measure: launching the player on $kind $device: keep it unlocked" >&2
-  run xcrun devicectl device process launch --device "$device" \
-    --terminate-existing "$VP_BUNDLE_ID" -- --measure "$name" \
-    --frames "$frames" --timing "$timing"
   out="$MEASURE_OUT/$(date +%Y-%m-%d)"
   run mkdir -p "$out"
   if [ "$dry" = 1 ]; then
-    echo "+ (every 5 s, up to 20 min: list Documents/measure, until a new .csv)"
-    run xcrun devicectl device copy from --device "$device" \
+    run xcrun devicectl device copy to --device "$device" \
       --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
-      --source "Documents/measure/<new>.csv" \
-      --destination "$out/$mode-<new>.csv"
+      --source "$MAC_STREAM" --destination "Documents/$name"
+    local timing
+    for timing in $(echo "$timings" | tr , ' '); do
+      run xcrun devicectl device process launch --device "$device" \
+        --terminate-existing "$VP_BUNDLE_ID" -- --measure "$name" \
+        --passes "$passes" ${frames:+--frames "$frames"} --timing "$timing"
+      echo "+ (every 5 s, up to 20 min: list Documents/measure until a new" \
+        ".csv or .failed, or the app is gone; copy it into $out/)"
+    done
     return
   fi
-  # The app renames its log from .part once it is whole.
-  local deadline=$((SECONDS + 1200)) log=""
-  while [ -z "$log" ]; do
-    [ "$SECONDS" -lt "$deadline" ] || fail "no log after 20 min"
-    sleep 5
-    devicectl_json "$listing" device info files --device "$device" \
-      --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
-      --subdirectory Documents/measure || continue
-    log="$(json_strings "$listing" .csv | grep -vxF -f <(printf '%s\n' "$before") |
-      head -n 1 || true)"
-  done
-  local file="$out/$mode-$(basename "$log")"
-  xcrun devicectl device copy from --device "$device" \
+  # Globals, for the helpers and the trap.
+  listing="$(mktemp)"
+  tmp_before="$(mktemp)"
+  tmp_now="$(mktemp)"
+  trap 'rm -f "$listing" "$tmp_before" "$tmp_now"' EXIT
+  if ! devicectl_json "$listing" device info files --device "$device" \
     --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
-    --source "Documents/measure/$(basename "$log")" --destination "$file"
-  summarize "$file" | tee "${file%.csv}.md"
+    --subdirectory Documents ||
+    [ -z "$(json_strings "$listing" "$name")" ]; then
+    xcrun devicectl device copy to --device "$device" \
+      --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
+      --source "$MAC_STREAM" --destination "Documents/$name"
+  fi
+  local fetched=() timing copy
+  for timing in $(echo "$timings" | tr , ' '); do
+    copy="$(launch "$timing")"
+    fetched+=("$copy")
+  done
+  summarize "${fetched[@]}" | tee "$out/$stamp-${sha:0:7}-$mode.md"
 }
 
 [ "$#" -ge 1 ] || usage

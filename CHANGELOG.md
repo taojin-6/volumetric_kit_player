@@ -62,29 +62,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Device timing on demand: `StreamPlayer::set_device_timing` (`DeviceTiming`
   off, sampled one frame in `kSampleEvery`, or all), set by the view every
   frame while the stats are open, or fixed by a measurement
-  (`PlayerViewConfig::device_timing`). A timed frame's "decode" and "mesh"
-  carry recon's breakdown rows. `FrameStamp` gains `timed`, `pass` and
-  `counters`, the worker's device counts over the frame;
+  (`PlayerViewConfig::device_timing`); the view's draw is timed only while
+  the stats are open and the timing is not off. A timed frame's "decode" and
+  "mesh" carry recon's breakdown rows. `FrameStamp` gains `timed`, `pass`
+  and `counters`, the worker's device counts over the frame;
   `StreamPlayer::track`, `PlayerView::frames_taken` and `compute_device`.
 - The measure log (`MeasureLog`, `device_line`, `build_info`,
   `measure_file_name`): one CSV per run, its header naming the commits, the
-  build, the device, the stream and the timing, then each frame's stage rows
-  and device counts. `tests/vp_probe` (once `vp_live_probe`) writes one of a
-  file or a sender, through the view or with `--worker` the worker alone;
-  the iOS app does with `--measure` (`parse_measure_args`).
+  build, the device, the stream, how it ran and the timing, then each
+  frame's stage rows and device counts. `tests/vp_probe` (once
+  `vp_live_probe`) writes one of a file or a sender, through the view or
+  with `--worker` the worker alone, validated as the core's test policy
+  asks; the iOS app does with `--measure` (`parse_measure_args`, with
+  `--passes`), or writes why it cannot into a `.failed` file.
 - `tools/measure/measure`: from the Mac, a measurement on the lab's RTX 4090
   or the owner's iPhone or iPad, its logs copied home, and `summarize.py`'s
   markdown of them (mean, p50, p95; counts per frame; a diff of two).
 - `PlayerViewConfig::compact_stats`, which the iOS app sets on an iPhone: no
   breakdown rows, and in landscape the two tables side by side.
+- build: `VP_DESKTOP_APP` (ON on a desktop): OFF builds the library, the
+  tests but `cli_test`, and `vp_probe` with no GLFW, as the runner does on
+  the lab.
 
 ### Changed
 
-- build: the player pins core #50's head (e4d00f1, 0.20.0), gfx #153's
-  (e5da2bb) and recon ca8d7ea, #272's head merged with #269's (on recon main
-  at ab8d01c), and requires core 0.20.0. TODO(timing): re-pin to their merge
-  commits. The view presents FIFO as gfx's default (gfx #150), naming no
-  mode.
+- build: the player pins core #50's head (9b64ebb, 0.20.0), gfx #153's
+  (a0a7a01) and recon #272's (75c51bb, on recon main at #262's merge), and
+  requires core 0.20.0. TODO(timing): re-pin to their merge commits. The
+  view presents FIFO as gfx's default (gfx #150), naming no mode.
 - The stats show two tables, each under the window it covers: the worker's
   stages per stream frame and the renderer's per display frame, under its
   rate, each as host (busy), wait and GPU ms (gfx #153). `StatsPanel::draw`
@@ -94,8 +99,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   highest of theirs (`PlaybackStats::stage_means`); `window_frames` and
   `timed_frames` count them.
 - The iOS app builds Release, in CI and in the README.
-- Decode's device time is no longer always on: with the stats closed, recon
-  writes no timestamp.
 - The iOS app's controls fit a phone: 17-pt text (`ui_scale` 1.3) and every
   control at least 44 pt tall (`PlayerViewConfig::ui_min_frame_height`, over
   gfx's `min_frame_height`). Play/Pause and Step are `kButtonEms` (4.5) font

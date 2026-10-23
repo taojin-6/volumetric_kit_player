@@ -10,7 +10,7 @@
 // app's Documents folder, which the Files app and Finder show (Info.plist.in);
 // the choice is kept for the next launch. A measure launch (--measure, the
 // runner's, tools/measure/) plays the stream it names instead and logs its
-// frames into Documents/measure/.
+// frames into Documents/measure/, or there why it could not.
 
 #import "PlayerViewController.h"
 
@@ -103,6 +103,17 @@ vkc::Result<std::optional<cfg::Source>> ChosenSource() {
     return std::optional<cfg::Source>(std::move(live));
   }
   return DocumentsStream();
+}
+
+// Documents/measure/, made if missing: where a measure launch writes.
+NSString* MeasureFolder() {
+  NSString* folder =
+      [DocumentsFolder() stringByAppendingPathComponent:@"measure"];
+  [NSFileManager.defaultManager createDirectoryAtPath:folder
+                          withIntermediateDirectories:YES
+                                           attributes:nil
+                                                error:nil];
+  return folder;
 }
 
 // The stream a measure launch names (vkp::parse_measure_args), in Documents.
@@ -357,16 +368,15 @@ glm::vec2 At(UITouch* touch, UIView* view) {
 // the player's commit (vkp::measure_file_name); NO, with the label up, when it
 // cannot be written.
 - (BOOL)startMeasure {
-  NSString* folder =
-      [DocumentsFolder() stringByAppendingPathComponent:@"measure"];
-  [NSFileManager.defaultManager createDirectoryAtPath:folder
-                          withIntermediateDirectories:YES
-                                           attributes:nil
-                                                error:nil];
+  NSString* folder = MeasureFolder();
   vkp::MeasureContext context;
   context.device = vkp::device_line(_view->compute_device());
   context.stream =
       _measure->stream + ", track " + std::to_string(_view->player().track());
+  context.run = "ios --passes " + std::to_string(_measure->passes);
+  if (_measure->frames) {
+    context.run += " --frames " + std::to_string(*_measure->frames);
+  }
   context.timing = _measure->timing;
   context.started = std::chrono::system_clock::now();
   vkc::Result<std::unique_ptr<vkp::MeasureLog>> log = vkp::MeasureLog::open(
@@ -382,15 +392,15 @@ glm::vec2 At(UITouch* touch, UIView* view) {
 }
 
 // After each frame of a measure launch: log the frame the view took, if a new
-// one, until --frames, or the end of the track's first pass without it: the
-// next pass's first frame, which is not logged.
+// one, until --frames, or the end of the passes asked for: the next pass's
+// first frame, which is not logged.
 - (void)measureFrame {
   if (!_log || _view->frames_taken() == _logged) {
     return;
   }
   _logged = _view->frames_taken();
   const vkp::FrameStamp& stamp = *_view->shown();
-  const bool past = !_measure->frames && stamp.pass > 1;
+  const bool past = stamp.pass > _measure->passes;
   if (!past) {
     const vkc::Status added = _log->add(stamp, _view->mesh().triangle_count);
     if (!added.ok()) {
@@ -411,11 +421,11 @@ glm::vec2 At(UITouch* touch, UIView* view) {
       stringWithFormat:@"measure done: %llu frames in %s",
                        static_cast<unsigned long long>(_log->frames()),
                        _log->path().c_str()];
-  _measure.reset();
   if (!finished.ok()) {
     [self fail:finished];
     return;
   }
+  _measure.reset();
   [self dropView];
   _failed = YES;  // the label stays until the next activation or a choice
   _failure.text =
@@ -469,6 +479,25 @@ glm::vec2 At(UITouch* touch, UIView* view) {
       [message stringByAppendingString:@"\n\nTap here to choose what to play."];
   _failure.hidden = NO;
   NSLog(@"volumetric_kit_player: %@", message);
+  [self failMeasure:message];
+}
+
+// A measure launch that ends with no log: its reason goes into
+// Documents/measure/<utc>-<commit>.failed, which the runner stops on and
+// prints, and the launch is over, so a later choice plays as chosen.
+- (void)failMeasure:(NSString*)message {
+  if (!_measure && _measureRefused.ok()) {
+    return;
+  }
+  _measure.reset();
+  _measureRefused = vkc::Status();
+  NSString* name =
+      @(vkp::measure_file_name(std::chrono::system_clock::now(), ".failed")
+            .c_str());
+  [message writeToFile:[MeasureFolder() stringByAppendingPathComponent:name]
+            atomically:YES
+              encoding:NSUTF8StringEncoding
+                 error:nil];
 }
 
 // The dialog over what to play, with the last sender's host and port.

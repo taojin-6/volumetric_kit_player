@@ -127,7 +127,7 @@ struct FrameStamp {
   /// network is no stage), and "decode" is this record's alone. A @ref timed
   /// frame's "decode" and "mesh" have device halves too, each over recon's
   /// breakdown rows that follow it: decode's "  ..rans decode", "  ..apply"
-  /// and "  ..inverse", mesh's "  ..active set" (when it compacts) and
+  /// and "  ..inverse", mesh's "  ..compact" (when it compacts) and
   /// "  ..dispatch".
   core::StageMetrics stages;
   /// The records received since the frame before was published, this one's
@@ -316,8 +316,7 @@ class StreamPlayer {
 
   /// @brief Time the device work of the frames the worker starts from now on
   ///        as @p timing says; safe from any thread. A timed frame's recon
-  ///        writes timestamps, which cost the device time: a first one in a
-  ///        command buffer about 0.13 ms on Apple GPUs.
+  ///        writes timestamps, which cost device time (DECISIONS.md).
   ///
   /// @code
   /// player.set_device_timing(panel.open() ? DeviceTiming::kAll

@@ -13,9 +13,12 @@
 // run ends. A file plays P passes of its track, 1 unless given. It exits 0
 // once N stream frames are taken, or once the last pass ends; 1 on a GPU or
 // log failure; 2 for its usage; and never on a network error, which the
-// status line shows. The measurement runner's (tools/measure/, DECISIONS.md),
-// and agents'. A tool, not a test.
+// status line shows. It validates in Debug and as the core's test policy asks
+// (VKC_TEST_VALIDATION), and then exits 1 on any error the layer reports or
+// on a layer that did not load. The measurement runner's (tools/measure/,
+// DECISIONS.md), and agents'. A tool, not a test.
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -30,6 +33,7 @@
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/testing/vulkan_policy.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
@@ -49,6 +53,7 @@ namespace {
 
 namespace core = volumetric_kit::core;
 namespace gfx = volumetric_kit::gfx;
+namespace test = volumetric_kit::core::test;
 namespace vkp = volumetric_kit::player;
 using Clock = std::chrono::steady_clock;
 
@@ -78,6 +83,16 @@ struct Args {
   std::string csv;
   bool worker = false;
 };
+
+// The validation the run asks for: the core's test policy's, and the layer at
+// least in Debug.
+test::Validation validation() {
+#ifndef NDEBUG
+  return std::max(test::requested_validation(), test::Validation::On);
+#else
+  return test::requested_validation();
+#endif
+}
 
 // The command line, or none for the usage.
 std::optional<Args> parse(int argc, char** argv) {
@@ -130,6 +145,22 @@ std::optional<Args> parse(int argc, char** argv) {
   return args;
 }
 
+// How the run drives its frames, for its log's `run`: its options, less the
+// stream, the timing and the log, which the log states apart.
+std::string run_text(const Args& args) {
+  std::string text = "vp_probe";
+  if (args.worker) {
+    text += " --worker";
+  }
+  if (args.passes) {
+    text += " --passes " + std::to_string(*args.passes);
+  }
+  if (args.frames) {
+    text += " --frames " + std::to_string(*args.frames);
+  }
+  return text;
+}
+
 // A row's busy, wait and device times, as the stats' tables show them.
 std::string row_text(const core::StageRow& row) {
   char text[128];
@@ -180,6 +211,7 @@ class Run {
     vkp::MeasureContext context;
     context.device = vkp::device_line(device);
     context.stream = std::move(stream);
+    context.run = run_text(args_);
     context.timing = args_.timing;
     context.started = started;
     VKC_ASSIGN(log_, vkp::MeasureLog::open(args_.csv, context));
@@ -255,9 +287,7 @@ core::Status run_view(const Args& args,
   VKC_ASSIGN(const gfx::windowing::SurfaceSource surface,
              gfx::windowing::headless_surface());
   vkp::PlayerViewConfig config;
-#ifndef NDEBUG
-  config.validation = true;
-#endif
+  config.validation = validation() != test::Validation::Off;
   config.device_timing = args.timing;
   const std::chrono::system_clock::time_point started =
       std::chrono::system_clock::now();
@@ -317,13 +347,11 @@ core::Status run_worker(const Args& args,
                         std::unique_ptr<vkp::StreamPlayer> player) {
   Run run(args, player->live());
   const std::string stream = stream_of(args, *player);
-  core::InstanceConfig instance_config;
+  core::InstanceConfig instance_config = test::instance_config(validation());
   instance_config.app_name = "vp_probe";
-#ifndef NDEBUG
-  instance_config.enable_validation = true;
-#endif
   VKC_ASSIGN(const core::Instance instance,
              core::Instance::create(instance_config));
+  VKC_TRY(test::check_layer_loaded(instance));
   const core::DeviceRequirements requirements =
       volumetric_kit::recon::device_requirements();
   VKC_ASSIGN(const core::PhysicalDeviceInfo physical,
@@ -396,13 +424,30 @@ int main(int argc, char** argv) {
     std::fputs(kUsage, stderr);
     return 2;
   }
+  // The layer's settings for the run, and its errors counted; everything on
+  // the device is gone when run returns.
+  const test::ValidationSession session(validation());
+  const test::LogCapture log;
   const core::Status status = run(*args);
+  int code = 0;
   if (!status.ok()) {
     const std::string_view domain = core::to_string(status.domain());
     std::fprintf(stderr, "vp_probe: %.*s: %s\n",
                  static_cast<int>(domain.size()), domain.data(),
                  status.message().c_str());
-    return 1;
+    code = 1;
   }
-  return 0;
+  // A layer the policy asks for that is missing or would not load is the
+  // instance's warning: what shows it for the view's instance, which the
+  // view keeps (the worker's is checked as it is made).
+  if (test::requested_validation() != test::Validation::Off) {
+    for (const std::string& warning : log.warnings()) {
+      if (warning.find("continuing without it") != std::string::npos) {
+        std::fprintf(stderr, "vp_probe: validation asked for: %s\n",
+                     warning.c_str());
+        code = 1;
+      }
+    }
+  }
+  return log.exit_code(code);
 }

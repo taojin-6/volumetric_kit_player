@@ -676,7 +676,7 @@ TEST(DisplayLine, StatesTheRateFramesAreDrawnAt) {
   gfx::FrameMetrics render;
   render.fps = 59.94;
   EXPECT_EQ(display_line(render), "display 59.9 fps");
-  EXPECT_EQ(display_line({}), "display 0.0 fps");
+  EXPECT_EQ(display_line({}), "display - fps") << "no rate yet, or no profiler";
 }
 
 // Two tables, each under its window: the stage means per stream frame, over
@@ -713,7 +713,14 @@ TEST_F(ControlsTest,
   render_.sections[0].device = core::DeviceTime::NotTimed;
   seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
   frame();
+  EXPECT_EQ(panel_.render_window().frames, 1u);
   EXPECT_EQ(panel_.render_window().timed, 0u);
+  // With no rows, as with no profiler attached, it covers no frame.
+  render_.sections.clear();
+  seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  frame();
+  EXPECT_TRUE(panel_.render_rows().empty());
+  EXPECT_EQ(panel_.render_window().frames, 0u);
 }
 
 // Full, the worker's table holds its breakdowns, and the renderer's is below

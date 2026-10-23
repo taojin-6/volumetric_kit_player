@@ -11,7 +11,10 @@ measured: per stage, the mean, p50 and p95 of its host (busy), wait and GPU
 milliseconds, and how many of its frames had the GPU measured; then the
 worker's device counts per frame. Given two logs, a before/after diff of the
 first and the second follows. A log of several passes leaves out its first,
-which warms up. p50 and p95 are nearest-rank.
+which warms up. p50 and p95 are nearest-rank. A stage first seen in a later
+frame, or only in the second log, goes after the row it follows there, so a
+breakdown stays under its stage, as the player's stats place it
+(PlaybackStats::stage_means).
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ HEADER_KEYS = (
     "build",
     "device",
     "stream",
+    "run",
     "timing",
     "utc",
 )
@@ -77,7 +81,7 @@ class Log:
     passes: list  # every pass in the log
     kept: list  # the passes the figures are over
     frames: int = 0
-    order: list = field(default_factory=list)  # stage names, first seen first
+    order: list = field(default_factory=list)  # stage names (place)
     stages: dict = field(default_factory=dict)
     counts: dict = field(default_factory=lambda: {key: [] for key in COUNTS})
 
@@ -90,6 +94,15 @@ def quantile(values, q):
 
 def mean(values):
     return sum(values) / len(values)
+
+
+def place(order, name, at):
+    """Place a frame's stage `name` in `order`: if new, at index `at`, just
+    after the stage before it in its frame. Returns the index after it."""
+    if name in order:
+        return order.index(name) + 1
+    order.insert(at, name)
+    return at + 1
 
 
 def number(row, key, path, kind=float):
@@ -120,15 +133,19 @@ def read_log(path):
     if reader.fieldnames != COLUMNS:
         raise LogError(f"{path}: columns {reader.fieldnames}, not {COLUMNS}")
     rows = list(reader)
+    if not rows:
+        raise LogError(f"{path}: no frames")
     passes = sorted({number(row, "pass", path, int) for row in rows})
     log = Log(path, header, passes, passes[1:] if len(passes) > 1 else passes)
+    at = 0  # where the frame's next new stage goes in log.order
     for row in rows:
         if number(row, "pass", path, int) not in log.kept:
             continue
-        if row["stage"] == "":
+        if row["stage"] == "":  # a frame's counts end it
             log.frames += 1
             for key in COUNTS:
                 log.counts[key].append(number(row, key, path, int))
+            at = 0
             continue
         device = row["device"]
         if device not in DEVICES:
@@ -139,10 +156,8 @@ def read_log(path):
                 f"with device {device}"
             )
         name = row["stage"]
-        if name not in log.stages:
-            log.order.append(name)
-            log.stages[name] = Stage()
-        stage = log.stages[name]
+        at = place(log.order, name, at)
+        stage = log.stages.setdefault(name, Stage())
         stage.host.append(number(row, "host_ms", path))
         stage.wait.append(number(row, "wait_ms", path))
         if device == "measured":
@@ -183,6 +198,7 @@ def summary(log):
         f"## {h['stream']} · timing {h['timing']} · {h['device'].split(';')[0]}",
         "",
         f"- device: {h['device']}",
+        f"- run: {h['run']}",
         f"- build: player {h['player']} ({h['build']}), core {h['core']}, "
         f"recon {h['recon']}, gfx {h['gfx']}",
         f"- {h['utc']} · {passes_text(log)} · {log.frames} frames · {log.path}",
@@ -229,15 +245,17 @@ def change(before, after):
 
 def diff(before, after):
     """The markdown comparing two logs' means, stage by stage."""
-    names = before.order + [name for name in after.order
-                            if name not in before.stages]
+    names = list(before.order)
+    at = 0
+    for name in after.order:
+        at = place(names, name, at)
     out = [
         "## Before -> after (means)",
         "",
         f"- before: {before.path} (player {before.header['player']}, "
-        f"timing {before.header['timing']})",
+        f"{before.header['run']}, timing {before.header['timing']})",
         f"- after: {after.path} (player {after.header['player']}, "
-        f"timing {after.header['timing']})",
+        f"{after.header['run']}, timing {after.header['timing']})",
         "",
         "| stage (ms per stream frame) | host | wait | GPU |",
         "|---|---|---|---|",

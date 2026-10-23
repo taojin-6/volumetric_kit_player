@@ -12,9 +12,10 @@
 // sizes, its controls fit a phone and a fingertip, as does Source, clear of
 // them, and so do the compact stats, clear of both, with the profiler's draw
 // row and its loop's in the renderer's table, the draw's device half timing
-// the whole pass; the worker is device-timed while the stats are open, not
-// while they are closed, and as a measurement fixes it whatever they show,
-// each frame taken counted once; Source is off by
+// the whole pass; the worker and the draw are device-timed while the stats
+// are open, not while they are closed, and the worker as a measurement fixes
+// it whatever they show, the draw then only while they are open and the
+// timing is not off, each frame taken counted once; Source is off by
 // default, and a tap on it is one request; ui_wants_pointer() follows a finger
 // on the panel, which controls_test.cpp checks on the stats' header and body;
 // and teardown mid-playback, the profiler attached, is clean. A live view
@@ -273,6 +274,27 @@ class PlayerViewTest : public core::test::VulkanTest {
     for (int i = 0; i < 4; ++i) {
       EXPECT_TRUE(present());
     }
+  }
+
+  // A tap on the stats' header, which closes or opens them, as the last
+  // frame laid it out.
+  void tap_stats_header() {
+    ImGui::SetCurrentContext(view_->ui_context());
+    const ImGuiWindow* const header = ImGui::FindWindowByName(kStatsWindow);
+    ASSERT_NE(header, nullptr);
+    tap({header->Pos.x + 0.5f * header->Size.x,
+         header->Pos.y + 0.5f * header->Size.y});
+  }
+
+  // Whether the renderer's table holds the draw's row, as of its last
+  // rebuild.
+  bool draw_row_shown() const {
+    for (const core::StageRow& row : view_->stats_panel().render_rows()) {
+      if (std::string(row.name) == "draw") {
+        return true;
+      }
+    }
+    return false;
   }
 
   // The rows of the stats' table `id`, "stages" or "render", after its
@@ -721,19 +743,19 @@ TEST_F(PlayerViewTest, TheDrawRowTimesTheWholePass) {
   EXPECT_GT(sum_ms / readings, 0.012) << "ms, the mean";
 }
 
-// The worker's device is timed while the stats are open, from the first
-// frame, and not while they are closed: a frame's stamp says which, and only
-// a timed one's rows have device halves.
-TEST_F(PlayerViewTest, TheWorkerIsTimedWhileTheStatsAreOpen) {
+// The worker's device and the draw are timed while the stats are open, from
+// the first frame, and not while they are closed: a frame's stamp says which,
+// and only a timed one's rows have device halves; the renderer's table holds
+// the draw, and on reopening is empty, the profiler having been detached,
+// until its next rebuild.
+TEST_F(PlayerViewTest, TheWorkerAndTheDrawAreTimedWhileTheStatsAreOpen) {
   ASSERT_TRUE(make_view());
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
   EXPECT_TRUE(view_->shown()->timed);
   EXPECT_EQ(view_->player().device_timing(), DeviceTiming::kAll);
-  ImGui::SetCurrentContext(view_->ui_context());
-  const ImGuiWindow* const header = ImGui::FindWindowByName(kStatsWindow);
-  ASSERT_NE(header, nullptr);
-  tap({header->Pos.x + 0.5f * header->Size.x,
-       header->Pos.y + 0.5f * header->Size.y});
+  tick_for(2 * StatsPanel::kRefresh);
+  EXPECT_TRUE(draw_row_shown());
+  ASSERT_NO_FATAL_FAILURE(tap_stats_header());
   ASSERT_FALSE(view_->stats_panel().open());
   EXPECT_EQ(view_->player().device_timing(), DeviceTiming::kOff);
   // The worker may have decoded the next frame already, timed.
@@ -743,25 +765,51 @@ TEST_F(PlayerViewTest, TheWorkerIsTimedWhileTheStatsAreOpen) {
   for (const core::StageRow& row : view_->shown()->stages.rows()) {
     EXPECT_EQ(row.device, core::DeviceTime::None) << row.name;
   }
+  // Past a refresh, so the frame they open on rebuilds the figures.
+  tick_for(StatsPanel::kRefresh);
+  ASSERT_NO_FATAL_FAILURE(tap_stats_header());
+  ASSERT_TRUE(view_->stats_panel().open());
+  EXPECT_TRUE(view_->stats_panel().render_rows().empty());
+  EXPECT_EQ(view_->stats_panel().render_window().frames, 0u);
+  tick_for(2 * StatsPanel::kRefresh);
+  EXPECT_TRUE(draw_row_shown());
+  EXPECT_EQ(view_->player().device_timing(), DeviceTiming::kAll);
 }
 
-// A measurement's timing holds whatever the stats show; and each frame taken
+// A measurement's timing holds whatever the stats show; the draw is timed
+// only while they are open and that timing is not off; and each frame taken
 // counts once.
-TEST_F(PlayerViewTest, AMeasurementsTimingHoldsWithTheStatsOpen) {
-  device_timing_ = DeviceTiming::kOff;
-  ASSERT_TRUE(make_view());
-  std::vector<std::uint64_t> shown;
-  ASSERT_TRUE(tick_until([&] {
-    if (view_->shown() &&
-        (shown.empty() || shown.back() != view_->shown()->index)) {
-      shown.push_back(view_->shown()->index);
-    }
-    return shown.size() >= 2;
-  }));
-  EXPECT_EQ(view_->frames_taken(), shown.size());
-  EXPECT_TRUE(view_->stats_panel().open());
-  EXPECT_EQ(view_->player().device_timing(), DeviceTiming::kOff);
-  EXPECT_FALSE(view_->shown()->timed);
+TEST_F(PlayerViewTest, AMeasurementsTimingHoldsWhateverTheStatsShow) {
+  for (const DeviceTiming timing : {DeviceTiming::kOff, DeviceTiming::kAll}) {
+    SCOPED_TRACE(volumetric_kit::player::to_string(timing));
+    touch_.reset();
+    view_.reset();
+    device_timing_ = timing;
+    ASSERT_TRUE(make_view());
+    std::vector<std::uint64_t> shown;
+    ASSERT_TRUE(tick_until([&] {
+      if (view_->shown() &&
+          (shown.empty() || shown.back() != view_->shown()->index)) {
+        shown.push_back(view_->shown()->index);
+      }
+      return shown.size() >= 2;
+    }));
+    EXPECT_EQ(view_->frames_taken(), shown.size());
+    EXPECT_TRUE(view_->stats_panel().open());
+    EXPECT_EQ(view_->player().device_timing(), timing);
+    EXPECT_EQ(view_->shown()->timed, timing != DeviceTiming::kOff);
+    tick_for(2 * StatsPanel::kRefresh);
+    EXPECT_EQ(draw_row_shown(), timing != DeviceTiming::kOff);
+    // Closed, the worker's timing holds, and the draw is not timed: the
+    // frame they reopen on has nothing of the renderer's.
+    ASSERT_NO_FATAL_FAILURE(tap_stats_header());
+    ASSERT_FALSE(view_->stats_panel().open());
+    EXPECT_EQ(view_->player().device_timing(), timing);
+    tick_for(StatsPanel::kRefresh);
+    ASSERT_NO_FATAL_FAILURE(tap_stats_header());
+    ASSERT_TRUE(view_->stats_panel().open());
+    EXPECT_TRUE(view_->stats_panel().render_rows().empty());
+  }
 }
 
 TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {

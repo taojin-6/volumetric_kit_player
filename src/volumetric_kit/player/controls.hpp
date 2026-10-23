@@ -134,7 +134,9 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
 /// const std::string line = display_line(profiler.metrics());
 /// @endcode
 /// @param render  The renderer's frame (gfx::Profiler::metrics).
-/// @return "display <fps> fps", to one place: the rate frames are drawn at.
+/// @return "display <fps> fps", to one place: the rate frames are drawn at;
+///         "display - fps" with no rate, as before the profiler's first
+///         frame or with none attached.
 std::string display_line(const gfx::FrameMetrics& render);
 
 /// @brief The "Stats" panel, at the top left of the main viewport's work
@@ -204,7 +206,8 @@ class StatsPanel {
   const std::vector<core::StageRow>& render_rows() const noexcept {
     return render_rows_;
   }
-  /// @return What they cover: one "display frame", timed or not.
+  /// @return What they cover: one "display frame", timed or not; no frame
+  ///         with no rows.
   const gfx::ui::StageWindow& render_window() const noexcept {
     return render_window_;
   }

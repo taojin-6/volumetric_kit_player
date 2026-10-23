@@ -33,10 +33,11 @@ core::Result<std::optional<MeasureArgs>> parse_measure_args(
     const std::vector<std::string>& args) {
   MeasureArgs measure;
   bool named = false;  // --measure came
-  bool other = false;  // --frames or --timing came
+  bool other = false;  // --passes, --frames or --timing came
   for (std::size_t i = 0; i < args.size(); ++i) {
     const std::string& arg = args[i];
-    if (arg != "--measure" && arg != "--frames" && arg != "--timing") {
+    if (arg != "--measure" && arg != "--passes" && arg != "--frames" &&
+        arg != "--timing") {
       continue;  // the system's
     }
     if (i + 1 == args.size()) {
@@ -50,6 +51,14 @@ core::Result<std::optional<MeasureArgs>> parse_measure_args(
       }
       measure.stream = value;
       named = true;
+    } else if (arg == "--passes") {
+      const std::optional<std::uint64_t> passes = parse_count(value);
+      if (!passes) {
+        return core::Status::invalid_argument("--passes '" + value +
+                                              "': a count from 1");
+      }
+      measure.passes = *passes;
+      other = true;
     } else if (arg == "--frames") {
       measure.frames = parse_count(value);
       if (!measure.frames) {
@@ -70,7 +79,7 @@ core::Result<std::optional<MeasureArgs>> parse_measure_args(
   if (!named) {
     if (other) {
       return core::Status::invalid_argument(
-          "--frames and --timing need --measure");
+          "--passes, --frames and --timing need --measure");
     }
     return std::optional<MeasureArgs>();
   }

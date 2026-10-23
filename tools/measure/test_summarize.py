@@ -6,13 +6,15 @@
 Summarize: on the fixtures in testdata/, it keeps a log's passes after the
 first, takes nearest-rank p50 and p95, takes the GPU over measured rows alone
 and says why the rest were not, counts the device per frame, diffs two logs,
-and refuses what is not a log of its format.
+keeps a breakdown that a later frame or the second log alone has under its
+stage, and refuses what is not a log of its format.
 
 ProbeLog: each log vp_probe writes of the tests' stream (VP_PROBE_CSV, the
 paths joined by os.pathsep), two passes of its six frames with every frame
-timed, reads as one: each frame has its read, decode and mesh rows, the
-decode's breakdowns where measured, and its device counts; it skips without
-VP_PROBE_CSV, which ctest's check fails.
+timed, reads as one: its header says how it ran; each frame has its read,
+decode and mesh rows, the decode's breakdowns where measured, and its device
+counts, each frame's waits no more than its submits and some staging; it
+skips without VP_PROBE_CSV, which ctest's check fails.
 """
 
 import os
@@ -50,6 +52,7 @@ class Summarize(unittest.TestCase):
         self.assertIn("## fixture.vrst, track 0 · timing all · Test GPU", text)
         self.assertIn("passes 2-2 of 2 (pass 1 left out: warm-up) · 3 frames",
                       text)
+        self.assertIn("- run: vp_probe --worker --passes 2", text)
         self.assertIn("player 1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (Release)",
                       text)
         rows = text.splitlines()
@@ -81,7 +84,32 @@ class Summarize(unittest.TestCase):
         self.assertIn("|   ..rans decode | 0.500 -> - | 0.250 -> - "
                       "| 0.250 -> - |", rows)
         self.assertIn("| submits | 5.000 -> 1.000 (-80%) |", rows)
+        self.assertIn(f"- before: {BEFORE} (player 1111111"
+                      + "a" * 33 + ", vp_probe --worker --passes 2, "
+                      "timing all)", rows)
         self.assertNotIn("## Before", summarize.summarize([BEFORE]))
+
+    @staticmethod
+    def stage_names(rows):
+        """The stage column of a markdown table's rows, header left out."""
+        return [row.split(" | ")[0][2:] for row in rows
+                if row.startswith("| ") and not row.startswith("| stage")
+                and not row.startswith("| per frame")]
+
+    def test_a_breakdown_first_seen_later_stays_under_its_stage(self):
+        # A frame with no breakdown first, as when it was not timed.
+        with open(BEFORE, encoding="utf-8") as file:
+            sampled = file.read().replace(
+                "2,0,I,1000,500,  ..rans decode,0.5000,0.2500,0.2000,"
+                "measured,,,,\n", "")
+        log = summarize.read_log(self.write(sampled))
+        self.assertEqual(log.order, ["read", "decode", "  ..rans decode", "mesh"])
+        # A log with none diffed against one with it, as timing off then all.
+        diffed = summarize.summarize([AFTER, BEFORE])
+        # After the heading: its blank line, the logs, the stages, the counts.
+        table = diffed.split("## Before -> after (means)")[1].split("\n\n")[2]
+        self.assertEqual(self.stage_names(table.splitlines()),
+                         ["read", "decode", "  ..rans decode", "mesh"])
 
     def write(self, text):
         handle, path = tempfile.mkstemp(suffix=".csv")
@@ -93,9 +121,13 @@ class Summarize(unittest.TestCase):
     def test_what_is_not_a_log_of_this_format_is_refused(self):
         with open(BEFORE, encoding="utf-8") as file:
             good = file.read()
+        header_only = good[:good.index("\n1,0,I") + 1]
         for bad, why in (
             (good.replace("measure 1", "measure 2"), "format"),
             (good.replace("# timing: all\n", ""), "lacks timing"),
+            (good.replace("# run: vp_probe --worker --passes 2\n", ""),
+             "lacks run"),
+            (header_only, "no frames"),
             (good.replace("staging_buffers", "staging"), "columns"),
             (good.replace("2,0,I,1000,500,read,1.0000,0.0000,,none",
                           "2,0,I,1000,500,read,1.0000,0.0000,0.1,none"),
@@ -126,6 +158,8 @@ class ProbeLog(unittest.TestCase):
             with self.subTest(log=log.path):
                 header = log.header
                 self.assertEqual(header["stream"], "sphere.vrst, track 0")
+                self.assertRegex(header["run"],
+                                 r"^vp_probe( --worker)? --passes 2$")
                 self.assertEqual(header["timing"], "all")
                 self.assertNotEqual(header["build"], "none")
                 self.assertRegex(
@@ -155,9 +189,16 @@ class ProbeLog(unittest.TestCase):
             self.assertIn("  ..rans decode", log.order)
             self.assertIn("  ..dispatch", log.order)
             self.assertTrue(all(ms > 0 for ms in log.stages["decode"].gpu))
-        # Each frame's decode and mesh submit, and their fences block.
-        self.assertTrue(all(n >= 2 for n in log.counts["submits"]))
-        self.assertGreater(sum(log.counts["host_waits"]), 0)
+        # Each frame's decode and mesh submit, and their fences block, at
+        # most once a submit; and today's decode stages its payload.
+        counts = log.counts
+        self.assertTrue(all(n >= 2 for n in counts["submits"]))
+        self.assertGreater(sum(counts["host_waits"]), 0)
+        for frame, (waits, submits, staging) in enumerate(zip(
+                counts["host_waits"], counts["submits"],
+                counts["staging_buffers"])):
+            self.assertLessEqual(waits, submits, f"frame {frame}")
+            self.assertGreater(staging, 0, f"frame {frame}")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@
 ///
 /// The format, version 1. Header lines are `# key: value`: `format`, the
 /// commits of `player`, `core`, `recon` and `gfx`, `build`, `device`,
-/// `stream`, `timing` and `utc`. Then one CSV header and the rows:
+/// `stream`, `run`, `timing` and `utc`. Then one CSV header and the rows:
 ///
 /// ```
 /// pass,frame,type,bytes,triangles,stage,host_ms,wait_ms,gpu_ms,device,submits,host_waits,blocked_ns,staging_buffers
@@ -34,6 +34,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "volumetric_kit/core/base/result.hpp"
@@ -96,10 +97,13 @@ std::string utc_text(std::chrono::system_clock::time_point at,
 /// // "20261023T051200Z-1a2b3c4.csv"
 /// const std::string name = measure_file_name(started);
 /// @endcode
-/// @param started  When the measurement started.
-/// @return "<utc>-<player commit>.csv": @ref utc_text compact, and the first 7
-///         characters of build_info's player commit, "-dirty" kept.
-std::string measure_file_name(std::chrono::system_clock::time_point started);
+/// @param started    When the measurement started.
+/// @param extension  ".csv" for a log; ".failed" for the file a measure
+///                   launch that logs nothing writes its reason into.
+/// @return "<utc>-<player commit><extension>": @ref utc_text compact, and the
+///         first 7 characters of build_info's player commit, "-dirty" kept.
+std::string measure_file_name(std::chrono::system_clock::time_point started,
+                              std::string_view extension = ".csv");
 
 /// @brief What a log's header states beside the build.
 struct MeasureContext {
@@ -107,6 +111,10 @@ struct MeasureContext {
   /// What was played: a file's name and track ("rafa2.vrst, track 0"), or a
   /// sender's address.
   std::string stream;
+  /// How the frames were driven, as the writer's options: through the view
+  /// or by the worker alone, and the passes or frames asked for
+  /// ("vp_probe --worker --passes 2", "ios --passes 2").
+  std::string run;
   /// The worker's device timing.
   DeviceTiming timing = DeviceTiming::kOff;
   /// When it started, stated as UTC.
