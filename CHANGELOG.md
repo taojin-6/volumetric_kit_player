@@ -81,9 +81,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - build: the player pins core #50's head (e4d00f1, 0.20.0), gfx #153's
-  (e5da2bb) and recon ca8d7ea, #272's head merged with #269's, and requires
-  core 0.20.0. TODO(timing): re-pin to their merge commits. The view
-  presents FIFO as gfx's default (gfx #150), naming no mode.
+  (e5da2bb) and recon ca8d7ea, #272's head merged with #269's (on recon main
+  at ab8d01c), and requires core 0.20.0. TODO(timing): re-pin to their merge
+  commits. The view presents FIFO as gfx's default (gfx #150), naming no
+  mode.
 - The stats show two tables, each under the window it covers: the worker's
   stages per stream frame and the renderer's per display frame, under its
   rate, each as host (busy), wait and GPU ms (gfx #153). `StatsPanel::draw`
@@ -95,7 +96,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The iOS app builds Release, in CI and in the README.
 - Decode's device time is no longer always on: with the stats closed, recon
   writes no timestamp.
-
 - The iOS app's controls fit a phone: 17-pt text (`ui_scale` 1.3) and every
   control at least 44 pt tall (`PlayerViewConfig::ui_min_frame_height`, over
   gfx's `min_frame_height`). Play/Pause and Step are `kButtonEms` (4.5) font

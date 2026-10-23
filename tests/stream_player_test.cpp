@@ -1141,6 +1141,8 @@ TEST_F(StreamPlayerTest, AParkBeforeStartOrAfterStopReturnsAtOnce) {
 constexpr auto kClosed = 50ms;
 // Between two records of a steady flow.
 constexpr auto kFlow = 20ms;
+// The most StreamClient takes in one receive (recon's StreamClient::next).
+constexpr std::size_t kClientReceive = std::size_t{2} << 20;
 
 #ifdef __APPLE__
 constexpr int kSendFlags = 0;  // SO_NOSIGPIPE is set on the socket
@@ -1566,7 +1568,9 @@ class LivePlayerTest : public StreamPlayerTest {
   // work depends on the GPU. Framing and allocation precede the timer too.
   // For a large record, time the sender getting its bytes out through bounded
   // socket buffers, holding its last byte back until afterwards: the record's
-  // CRC, expensive under TSan, cannot start within the timed interval.
+  // CRC, expensive under TSan, cannot start within the timed interval. Its
+  // send buffer holds a receive, so on Linux a worker that drains promptly
+  // seldom finds the socket empty, where it may wait a slice.
   void measure_burst_drain(std::size_t count, std::size_t payload_size,
                            bool untaken, bool time_sender,
                            SteadyClock::duration* elapsed) {
@@ -1642,7 +1646,7 @@ class LivePlayerTest : public StreamPlayerTest {
           }
           return Bytes();
         },
-        1ms, time_sender ? 256 * 1024 : 0);
+        1ms, time_sender ? static_cast<int>(kClientReceive) : 0);
     StreamPlayer* player = start_live(peer.port());
     ASSERT_NE(player, nullptr);
     if (untaken) {
@@ -1802,21 +1806,29 @@ TEST_F(LivePlayerTest, AnUntakenMeshDoesNotDelayBufferedRecords) {
 }
 
 TEST_F(LivePlayerTest, AnUntakenMeshDoesNotDelayAPartialRecord) {
-  // At most 256 KiB is received by each nonblocking next(): one record
-  // spanning 128 receives must also keep draining while no record is ready.
-  // Bounded socket buffers cannot hold more than a small fraction of it.
-  // Compare against the same receive/parser work without a pending frame,
-  // so sanitizer overhead is paid in both timings rather than mistaken for
-  // waits between receives.
+  // One record of 16 receives must keep draining while no record is ready.
+  // A worker that waited its 10 ms slice after each partial receive would
+  // add at least 120 ms: when the sender finishes, the socket buffers, which
+  // Linux doubles, hold at most 4 receives' bytes. The limit is 80 ms over
+  // the same receive/parser work without a pending frame, plus a quarter of
+  // that work's time, so a sanitizer's slower, more variable receives are
+  // not mistaken for waits; there, where that work takes seconds, only
+  // longer waits fail. Linux alone checks it: on macOS a healthy worker can
+  // empty the socket at about every receive and wait a slice, as the
+  // regression would (CI run 39897310418, attempt 1, macos-26 Release, with
+  // a 256 KiB send buffer: 1,100 ms added, about a slice per 300 KiB).
+  constexpr std::size_t kRecord = 16 * kClientReceive;
   SteadyClock::duration baseline{};
-  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(
-      1, 32 * 1024 * 1024, /*untaken=*/false, /*time_sender=*/true, &baseline));
+  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(1, kRecord, /*untaken=*/false,
+                                              /*time_sender=*/true, &baseline));
   SteadyClock::duration elapsed{};
-  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(
-      1, 32 * 1024 * 1024, /*untaken=*/true, /*time_sender=*/true, &elapsed));
-  EXPECT_LT(elapsed, baseline + 750ms)
+  ASSERT_NO_FATAL_FAILURE(measure_burst_drain(1, kRecord, /*untaken=*/true,
+                                              /*time_sender=*/true, &elapsed));
+#ifndef __APPLE__
+  EXPECT_LT(elapsed, baseline + baseline / 4 + 80ms)
       << std::chrono::duration<double, std::milli>(elapsed - baseline).count()
       << " ms added to socket draining by an untaken mesh";
+#endif
 }
 
 // Records one at a time, each published once the frame before is taken: each

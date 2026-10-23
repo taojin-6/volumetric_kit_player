@@ -85,9 +85,9 @@ log". Nothing in the data flow changes; today's costs become measurable.
   slot for twice a frame's blocks, 4 KiB each (512 voxels of float `tsdf` and
   `weight`), and recon grows it no further. Why: a file's or a socket's bytes
   are untrusted, and a forged header could otherwise make a grid of
-  gigabytes; the largest streams the family codes, room0 at 5 mm (about
-  107,000 blocks) and the lab rig (about 58,000), fit; and one ceiling
-  serves every device, so it is sized for a phone, not the desktop's GPU.
+  gigabytes; the largest stream the family codes, room0 at 5 mm (about
+  107,000 blocks, recon's DECISIONS.md), fits; and one ceiling serves every
+  device, so it is sized for a phone, not the desktop's GPU.
 
 ## 2026-10-22 — A normal-coloured view, toggled from the panel
 

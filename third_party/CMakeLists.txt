@@ -40,11 +40,11 @@ vkc_require_core(0.20.0 VULKAN CONFIG)
 # subproject, so its library's core floor (0.20.0) is the one checked. The pin
 # (ca8d7ea, branch build/timing-client-progress) merges recon #272's head
 # (55e4b23: the extract's and the decode's breakdown rows, each with a device
-# half) with #269's (e9424a8: StreamClient::next's progress output), neither
-# merged yet; under them, main at #271's merge: #266's block ceiling for
-# codec::make_decode_grid and decode_growing, #260's networking::StreamClient
-# and StreamServer, #256's empty mesh payload and #255's
-# volume::kDefaultBucketSize / kDefaultMaxChain.
+# half), not merged yet, with #269's (e9424a8: StreamClient::next's progress
+# output), on main at ab8d01c; under them, main at #271's merge: #266's block
+# ceiling for codec::make_decode_grid and decode_growing, #260's
+# networking::StreamClient and StreamServer, #256's empty mesh payload and
+# #255's volume::kDefaultBucketSize / kDefaultMaxChain.
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
