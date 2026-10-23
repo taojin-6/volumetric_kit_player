@@ -9,7 +9,8 @@
 // have one, held while no frame comes; the rate frames are taken at over the
 // last second; and the bitrate and records a second their records brought,
 // over the frames published in the last second, so a pause in taking does
-// not crowd them into a moment.
+// not crowd them into a moment. A paused toggle's rebuild of the frame before
+// changes none of them.
 
 #include "volumetric_kit/player/playback_stats.hpp"
 
@@ -181,6 +182,24 @@ TEST(PlaybackStats, TheRateIsFramesTakenOverTheLastSecond) {
   stats.add_frame(frame(1.0), t0 + milliseconds(3000));
   stats.add_frame(frame(1.0), t0 + milliseconds(3050));
   EXPECT_DOUBLE_EQ(stats.frames_per_s(t0 + milliseconds(3050)), 20.0);
+}
+
+// Paused, as a deblock toggle's rebuilds come: the means and the rate hold.
+TEST(PlaybackStats, ARebuildOfTheFrameBeforeIsNoFrame) {
+  PlaybackStats stats({}, {3, 1});
+  for (int i = 0; i < 3; ++i) {
+    stats.add_frame(frame(1.0 + i), t0 + milliseconds(100 * i));
+  }
+  const TimePoint now = t0 + milliseconds(300);
+  ASSERT_DOUBLE_EQ(stats.frames_per_s(now), 10.0);
+  FrameStamp rebuild = frame(0.0, 50.0);
+  rebuild.rebuild = true;
+  rebuild.published = now;
+  stats.add_frame(rebuild, now);
+  stats.add_frame(rebuild, now + milliseconds(5));
+  EXPECT_DOUBLE_EQ(stats.frames_per_s(now + milliseconds(5)), 10.0);
+  EXPECT_DOUBLE_EQ(mean_of(stats, "read").cpu_ms, 2.0);
+  EXPECT_DOUBLE_EQ(mean_of(stats, "decode").cpu_ms, 1.0);
 }
 
 // A live stream's view passes no track and no rate.
