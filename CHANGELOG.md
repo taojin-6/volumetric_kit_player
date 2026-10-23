@@ -63,7 +63,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - build: the player pins core 0.19.0 (ff44a98, core #49's merge), gfx main
-  at #152's merge (f147e00) and recon main at #269's merge (ab8d01c), and
+  at #152's merge (f147e00) and recon main at #264's merge (6080263), and
   requires core 0.18.0, gfx's floor. The view presents FIFO as gfx's default
   (gfx #150), naming no mode.
 - The iOS app's controls fit a phone: 17-pt text (`ui_scale` 1.3) and every
