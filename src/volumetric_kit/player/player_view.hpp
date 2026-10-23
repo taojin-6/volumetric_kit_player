@@ -53,9 +53,9 @@ struct PlayerViewConfig {
   bool validation = false;
 };
 
-/// @brief The swapchain @ref PlayerView asks gfx for: FIFO and D32 depth;
-///        live, two images, so a mesh taken shows a vsync sooner, and a
-///        file's, gfx's default (the surface's least + 1).
+/// @brief The swapchain @ref PlayerView asks gfx for: gfx's FIFO default and
+///        D32 depth; live, two images, so a mesh taken shows a vsync sooner,
+///        and a file's, gfx's default (the surface's least + 1).
 ///
 /// @code
 /// app_config.swapchain = view_swapchain(extent, player->live());

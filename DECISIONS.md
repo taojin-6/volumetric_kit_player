@@ -332,9 +332,9 @@ How `PlayerView` shows playback; its header says what each call does.
   The library links no window system (gfx's GLFW tier is the app's). Why: one
   class under every shell, iOS links no GLFW, and the device test runs the
   real class with no window.
-- **FIFO present.** Why: the stream's pts paces playback, not the display,
-  so a faster mode only spends power; and FIFO is the one mode every surface
-  offers.
+- **FIFO present, gfx's default,** so `view_swapchain` names no mode. Why:
+  the stream's pts paces playback, not the display, so a faster mode only
+  spends power; and FIFO is the one mode every surface offers.
 - **The camera takes gfx's gestures.** The shells drive `OrbitCamera`'s
   `drag_orbit`, `drag_pan` and `zoom`, in viewport heights, unless
   `ui_wants_pointer()`; the player keeps the viewport: the first view,

@@ -40,7 +40,6 @@ pipelines::LiveMesh live_mesh(const recon::mesh::DeviceMesh& mesh) {
 gfx::windowing::SwapchainConfig view_swapchain(VkExtent2D extent, bool live) {
   gfx::windowing::SwapchainConfig config;
   config.extent = extent;
-  config.preferred_present_mode = VK_PRESENT_MODE_FIFO_KHR;
   config.depth_format = VK_FORMAT_D32_SFLOAT;
   if (live) {
     config.min_image_count = 2;

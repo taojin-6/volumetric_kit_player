@@ -748,8 +748,8 @@ TEST_F(PlayerViewTest, ALiveViewPresents) {
   EXPECT_FALSE(view_->shown().has_value());
 }
 
-// On the host: FIFO and D32 depth; live, two images, so a mesh taken shows a
-// vsync sooner, and a file's, gfx's default.
+// On the host: FIFO, gfx's default, and D32 depth; live, two images, so a mesh
+// taken shows a vsync sooner, and a file's, gfx's default.
 TEST(ViewSwapchain, LiveAsksForTwoImages) {
   for (const bool live : {false, true}) {
     const gfx::windowing::SwapchainConfig config =
