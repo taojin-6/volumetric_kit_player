@@ -62,6 +62,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: the player pins core 0.19.0 (ff44a98, core #49's merge), gfx main
+  at #152's merge (f147e00) and recon #269's head (e9424a8, on main at
+  #270's merge), and requires core 0.18.0, gfx's floor. The view presents
+  FIFO as gfx's default (gfx #150), naming no mode.
 - The iOS app's controls fit a phone: 17-pt text (`ui_scale` 1.3) and every
   control at least 44 pt tall (`PlayerViewConfig::ui_min_frame_height`, over
   gfx's `min_frame_height`). Play/Pause and Step are `kButtonEms` (4.5) font
@@ -94,6 +98,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A file's or a sender's frame can no longer make the decode grid gigabytes
+  large: one of more than `kMaxFrameBlocks` (131,072) blocks, or a grow past
+  the grid for it, is skipped as a damaged one is (recon #266's ceiling).
 - Live input drains before the worker waits for a consumer to take a mesh,
   including records spanning multiple receives, so an untaken mesh does not
   add a 10 ms delay to every queued record or partial receive.
