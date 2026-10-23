@@ -10,8 +10,11 @@
 // flags from lit to normals and back, and frames keep presenting; the panel
 // draws at a phone's scale; in portrait and in landscape, at the iOS shell's
 // sizes, its controls fit a phone and a fingertip, as does Source, clear of
-// them, and so do the stats, clear of both, with the profiler's draw row in
-// their table, whose device half times the whole pass; Source is off by
+// them, and so do the compact stats, clear of both, with the profiler's draw
+// row and its loop's in the renderer's table, the draw's device half timing
+// the whole pass; the worker is device-timed while the stats are open, not
+// while they are closed, and as a measurement fixes it whatever they show,
+// each frame taken counted once; Source is off by
 // default, and a tap on it is one request; ui_wants_pointer() follows a finger
 // on the panel, which controls_test.cpp checks on the stats' header and body;
 // and teardown mid-playback, the profiler attached, is clean. A live view

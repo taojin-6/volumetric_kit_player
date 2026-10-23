@@ -4,8 +4,11 @@
 // StreamPlayer on a device, over the tests' stream (test_stream.hpp). Its
 // track's counts and rate are what was written. Paused and stepped, so each
 // frame goes when the test says: frames arrive in order with their index,
-// pts, payload bytes, key and stage times (read, decode with the device's
-// half where it can time, mesh), each mesh non-empty on the device, and a
+// pts, payload bytes, key, stage times (read, decode and mesh, with their
+// fences' waits, and untimed no device half) and the worker's device counts
+// over the frame alone; timed, decode and mesh have device halves over
+// recon's breakdowns, every frame or one in kSampleEvery; each pass of the
+// track is counted; each mesh is non-empty on the device, and a
 // frame that meshes nothing still reaches the commit with its stamp; with
 // loop on a step past the end wraps, with loop off the last frame holds until
 // play restarts; a corrupt P-frame, a damaged record header or a record this
@@ -465,6 +468,8 @@ TEST_F(StreamPlayerTest, TheTracksCountsAndRateAreWhatWasWritten) {
 TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
   const std::vector<stream::Record> all = records();
   ASSERT_EQ(all.size(), kFrames);
+  const core::DeviceCounters before = device().counters();
+  std::uint64_t submits = 0;  // the frames' own
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   EXPECT_EQ(player->device_timing(), DeviceTiming::kOff);
@@ -498,9 +503,12 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
     EXPECT_GE(frame->counters.submits, 2u) << "frame " << i;
     EXPECT_GE(frame->counters.host_waits, 1u) << "frame " << i;
     EXPECT_GT(frame->counters.blocked_ns, 0u) << "frame " << i;
+    submits += frame->counters.submits;
   }
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
+  // Each frame's are its own, not the device's since it began.
+  EXPECT_LE(submits, device().counters().submits - before.submits);
 }
 
 // Timed, every frame's decode and mesh have a device half, where the queue
