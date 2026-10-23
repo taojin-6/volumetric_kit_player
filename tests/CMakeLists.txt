@@ -114,14 +114,19 @@ set_tests_properties(
                        TIMEOUT 300)
 # The summarizer (tools/measure/summarize.py) on its fixtures, and on the log
 # above, whose check fails rather than skips without it; the runner by its
-# --dry-run, with bash and git; -B leaves no bytecode in the source tree.
+# --dry-run and command stubs, with bash and git (no device or measurement); -B
+# leaves no bytecode in the source tree.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(VP_MEASURE_TOOLS "${PROJECT_SOURCE_DIR}/tools/measure")
 set(VP_MEASURE_TESTS "${VP_MEASURE_TOOLS}/test_summarize.py")
 add_test(NAME vp_measure_summarize COMMAND Python3::Interpreter -B
                                            "${VP_MEASURE_TESTS}" Summarize)
-add_test(NAME vp_measure_dry_run COMMAND Python3::Interpreter -B
-                                         "${VP_MEASURE_TOOLS}/test_measure.py")
+add_test(NAME vp_measure_dry_run
+         COMMAND Python3::Interpreter -B "${VP_MEASURE_TOOLS}/test_measure.py"
+                 DryRun)
+add_test(NAME vp_measure_runner
+         COMMAND Python3::Interpreter -B "${VP_MEASURE_TOOLS}/test_measure.py"
+                 Runner)
 add_test(NAME vp_probe_csv_check COMMAND Python3::Interpreter -B
                                          "${VP_MEASURE_TESTS}" ProbeLog)
 set_tests_properties(

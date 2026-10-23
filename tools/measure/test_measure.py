@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
-"""Tests of the runner, measure, by its --dry-run, which ctest runs
-(tests/CMakeLists.txt) with bash and git: each mode prints its commands, in
-the order it would run them, and runs and writes none.
+"""Tests of the runner, measure, which ctest runs with bash and git.
+Dry runs print commands without running them. Runner tests use temporary
+repositories and command stubs; no build, measurement or device is started.
 
 DryRun: lab sends a script bash can parse that builds vp_probe and runs it
 under uvrun once per timing; iphone builds and installs the app in the Mac's
@@ -13,14 +13,21 @@ a worktree of it too, fetches the others, and waits for the Mac to be idle
 before the build and each run, whose load goes beside its log; a worktree
 already there is checked out instead; a ref the checkout does not know
 fetches every sibling.
+
+Runner: failed fetches cannot use cached refs on the Mac or lab, a failed
+phone launch stops before polling, and lab logs with spaces in their paths
+are copied and summarized in order.
 """
 
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 
 MEASURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "measure")
@@ -37,7 +44,7 @@ def git(cwd, *args):
                  GIT_CONFIG_NOSYSTEM="1")).stdout.strip()
 
 
-class DryRun(unittest.TestCase):
+class MeasureCase(unittest.TestCase):
     def setUp(self):
         self.root = os.path.realpath(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root)
@@ -83,6 +90,8 @@ class DryRun(unittest.TestCase):
             f"volumetric_kit_{name})\n" for name, pin in pins.items())
         return self.commit(self.player, "third_party/CMakeLists.txt", text)
 
+
+class DryRun(MeasureCase):
     def measure(self, *args):
         done = subprocess.run(["bash", MEASURE, "--dry-run", *args],
                               env=self.env, capture_output=True, text=True)
@@ -202,6 +211,143 @@ class DryRun(unittest.TestCase):
         source = "FETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_"
         self.assertEqual(commands[2][-3:], [f"-U{source}{name.upper()}"
                                             for name in SIBLINGS])
+
+
+class Runner(MeasureCase):
+    def setUp(self):
+        super().setUp()
+        self.bin = os.path.join(self.root, "bin")
+        os.mkdir(self.bin)
+        self.calls = os.path.join(self.root, "calls.jsonl")
+        self.env.update(PATH=self.bin + os.pathsep + self.env["PATH"],
+                        TEST_CALLS=self.calls,
+                        TEST_CSV=os.path.join(os.path.dirname(MEASURE),
+                                              "testdata", "before.csv"))
+        # A missing stub must fail here, never reach a real build or device.
+        for name in ("cmake", "xcrun", "ssh", "scp", "sleep"):
+            self.command(name, "sys.exit(77)")
+        self.command("uptime", "print('load averages: 0.00 0.00 0.00')")
+        self.command("memory_pressure",
+                     "print('System-wide memory free percentage: 100%')")
+
+    def command(self, name, body):
+        """A logged command stub; bodies run in Python, preserving arguments."""
+        path = os.path.join(self.bin, name)
+        with open(path, "w", encoding="utf-8") as file:
+            file.write(f"#!{sys.executable}\n")
+            file.write("import json, os, shutil, subprocess, sys\n")
+            file.write("with open(os.environ['TEST_CALLS'], 'a') as log:\n"
+                       "    log.write(json.dumps(sys.argv) + '\\n')\n")
+            file.write(textwrap.dedent(body) + "\n")
+        os.chmod(path, 0o755)
+
+    def commands(self):
+        if not os.path.exists(self.calls):
+            return []
+        with open(self.calls, encoding="utf-8") as file:
+            return [[os.path.basename(args[0]), *args[1:]]
+                    for args in map(json.loads, file)]
+
+    def measure(self, *args):
+        return subprocess.run(["bash", MEASURE, *args], env=self.env,
+                              capture_output=True, text=True, timeout=15)
+
+    def test_failed_fetch_rejects_cached_branch_and_pr_on_mac_and_lab(self):
+        sha = self.repo("volumetric_kit_player")
+        git(self.player, "remote", "add", "origin",
+            os.path.join(self.root, "missing-origin"))
+        for ref in ("main", "pr/7"):
+            git(self.player, "update-ref", f"refs/remotes/origin/{ref}", sha)
+        lab = os.path.join(self.root, "lab with spaces")
+        os.mkdir(lab)
+        os.symlink(self.player, os.path.join(lab, "player"))
+        self.env["LAB_ROOT"] = lab
+        self.env["LAB_UVRUN"] = os.path.join(self.bin, "uvrun")
+        self.command("ssh", "sys.exit(subprocess.run(['bash', '-s']).returncode)")
+        self.command("flock", "pass")
+        self.command("uvrun", "sys.exit(77)")
+        for mode in ("mac", "lab"):
+            for ref in ("main", "pr/7"):
+                with self.subTest(mode=mode, ref=ref):
+                    done = self.measure(mode, ref)
+                    self.assertNotEqual(done.returncode, 0)
+                    self.assertIn(f"no commit {ref}", done.stderr)
+                    self.assertFalse(os.path.exists(os.path.join(
+                        self.player, ".worktrees", "measure-run")))
+                    self.assertFalse(any(args[0] in ("cmake", "uvrun")
+                                         for args in self.commands()))
+
+    def phone_stubs(self, launch_status):
+        sha = self.repo("volumetric_kit_player")
+        origin = os.path.join(self.root, "origin.git")
+        git(self.root, "clone", "--bare", "-q", self.player, origin)
+        git(self.player, "remote", "add", "origin", origin)
+        self.env["TEST_LAUNCH_STATUS"] = str(launch_status)
+        self.env["TEST_LAUNCHED"] = os.path.join(self.root, "launched")
+        self.command("cmake", "pass")
+        self.command("sleep", "pass")
+        self.command("xcrun", """
+            args = sys.argv[1:]
+            def value(flag):
+                return args[args.index(flag) + 1]
+            if args[:4] == ['devicectl', 'device', 'process', 'launch']:
+                with open(os.environ['TEST_LAUNCHED'], 'w') as marker:
+                    marker.write('launched')
+                print('mock launch diagnostic', file=sys.stderr)
+                sys.exit(int(os.environ['TEST_LAUNCH_STATUS']))
+            if args[:4] == ['devicectl', 'device', 'info', 'files']:
+                if value('--subdirectory') == 'Documents':
+                    names = ['rafa2.vrst']
+                else:
+                    names = (['result.csv'] if os.path.exists(
+                        os.environ['TEST_LAUNCHED']) else [])
+                with open(value('--json-output'), 'w') as output:
+                    json.dump({'result': names}, output)
+            elif args[:4] == ['devicectl', 'device', 'copy', 'from']:
+                shutil.copyfile(os.environ['TEST_CSV'], value('--destination'))
+            elif args[:4] != ['devicectl', 'device', 'install', 'app']:
+                sys.exit('unexpected device command: ' + repr(args))
+        """)
+        return sha
+
+    def test_failed_phone_launch_returns_its_status_without_polling(self):
+        sha = self.phone_stubs(42)
+        done = self.measure("iphone", sha, "--timing", "off")
+        self.assertEqual(done.returncode, 42, done.stderr)
+        self.assertIn("mock launch diagnostic", done.stderr)
+        self.assertFalse(any(args[0] == "sleep" for args in self.commands()))
+        self.assertFalse(any(args[1:5] == ['devicectl', 'device', 'copy', 'from']
+                             for args in self.commands()))
+
+    def test_successful_phone_launch_polls_and_copies_its_log(self):
+        sha = self.phone_stubs(0)
+        done = self.measure("iphone", sha, "--timing", "off")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertTrue(any(args[0] == "sleep" for args in self.commands()))
+        self.assertIn("fixture.vrst", done.stdout)
+
+    def test_lab_copies_whole_log_paths_in_order(self):
+        logs = ["/lab/measure runs/out/test-off.csv",
+                "/lab/measure runs/out/test-all.csv"]
+        self.env["LAB_ROOT"] = "/lab/measure runs"
+        self.env["TEST_LOGS"] = json.dumps(logs)
+        self.command("ssh", """
+            sys.stdin.read()
+            print('\\n'.join(json.loads(os.environ['TEST_LOGS'])))
+        """)
+        self.command("scp", """
+            if sys.argv[2] not in ['lab.example:' + path for path in
+                                   json.loads(os.environ['TEST_LOGS'])]:
+                sys.exit('split remote path: ' + repr(sys.argv[2]))
+            shutil.copyfile(os.environ['TEST_CSV'], os.path.join(
+                sys.argv[3], os.path.basename(sys.argv[2])))
+        """)
+        done = self.measure("lab", "main")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual([args[2] for args in self.commands() if args[0] == 'scp'],
+                         ['lab.example:' + path for path in logs])
+        self.assertLess(done.stdout.index("test-off.csv"),
+                        done.stdout.index("test-all.csv"))
 
 
 if __name__ == "__main__":

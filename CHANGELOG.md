@@ -132,6 +132,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The measurement runner stops when fetching a revision or launching the
+  phone app fails, and retrieves lab logs when `LAB_ROOT` contains spaces.
 - A file's or a sender's frame can no longer make the decode grid gigabytes
   large: one of more than `kMaxFrameBlocks` (131,072) blocks, or a grow past
   the grid for it, is skipped as a damaged one is (recon #266's ceiling).

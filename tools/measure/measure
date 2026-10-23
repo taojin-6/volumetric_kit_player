@@ -91,13 +91,14 @@ run() {
 # branches. The lab runs it too.
 commit_of() {
   local repo="$1" ref="$2"
+  # Callers handle failure in an OR-list, which disables errexit here.
   if [ "${dry:-0}" != 1 ]; then
     case "$ref" in
       pr/*)
         git -C "$repo" fetch --quiet origin \
-          "+refs/pull/${ref#pr/}/head:refs/remotes/origin/$ref"
+          "+refs/pull/${ref#pr/}/head:refs/remotes/origin/$ref" || return "$?"
         ;;
-      *) git -C "$repo" fetch --quiet origin ;;
+      *) git -C "$repo" fetch --quiet origin || return "$?" ;;
     esac
   fi
   git -C "$repo" rev-parse --verify --quiet "origin/$ref^{commit}" ||
@@ -197,11 +198,12 @@ EOF
   local logs
   logs="$(ssh -o BatchMode=yes "$LAB_HOST" bash -s <<<"$script")"
   mkdir -p "$out"
-  local fetched=()
-  for log in $logs; do
+  local log fetched=()
+  while IFS= read -r log; do
+    [ -n "$log" ] || continue
     scp -q "${LAB_HOST}:$log" "$out/"
     fetched+=("$out/$(basename "$log")")
-  done
+  done <<<"$logs"
   summarize "${fetched[@]}" | tee "$out/$stamp-lab.md"
 }
 
@@ -401,10 +403,11 @@ launch() {
   measure_files "$before" || : >"$before"
   echo "measure: launching the player on $kind $device, timing $timing:" \
     "keep it unlocked" >&2
+  # phone captures stdout in $(), where bash 3.2 clears errexit.
   xcrun devicectl device process launch --device "$device" \
     --terminate-existing "$VP_BUNDLE_ID" -- --measure "$name" \
     --passes "$passes" ${frames:+--frames "$frames"} --timing "$timing" \
-    >/dev/null
+    >/dev/null || return "$?"
   local deadline=$((SECONDS + 1200)) seen=0 file=""
   while [ -z "$file" ]; do
     [ "$SECONDS" -lt "$deadline" ] || fail "no log after 20 min"
