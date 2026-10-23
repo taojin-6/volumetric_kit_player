@@ -4,6 +4,19 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-22 — A frame holds at most 131,072 blocks
+
+`kMaxFrameBlocks`, the ceiling recon's `codec::make_decode_grid` and
+`decode_growing` take.
+
+- **2^17 blocks, so the decode grid's voxels stay within 1 GiB:** it has a
+  slot for twice a frame's blocks, 4 KiB each (512 voxels of float `tsdf` and
+  `weight`), and recon grows it no further. Why: a file's or a socket's bytes
+  are untrusted, and a forged header could otherwise make a grid of
+  gigabytes; the largest streams the family codes, room0 at 5 mm (about
+  107,000 blocks) and the lab rig (about 58,000), fit; and one ceiling
+  serves every device, so it is sized for a phone, not the desktop's GPU.
+
 ## 2026-10-22 — A normal-coloured view, toggled from the panel
 
 `PlayerView::normals`, `set_normals` and `mesh_flags`; the panel's Normals and

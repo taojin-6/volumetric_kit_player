@@ -516,7 +516,7 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
 core::Status StreamPlayer::make_grid(const std::vector<std::uint8_t>& payload) {
   VKC_ASSIGN(recon::volume::VoxelBlockGrid grid,
              codec::make_decode_grid(*device_, *allocator_, payload.data(),
-                                     payload.size()));
+                                     payload.size(), kMaxFrameBlocks));
   grid_.emplace(std::move(grid));
   return {};
 }
@@ -530,7 +530,7 @@ core::Status StreamPlayer::decode(const std::vector<std::uint8_t>& payload,
       VKC_TRY(make_grid(payload));
     }
     VKC_TRY(codec::decode_growing(*decoder_, payload.data(), payload.size(),
-                                  *grid_, &decoded));
+                                  *grid_, kMaxFrameBlocks, &decoded));
   }
   // "codec decode" alone has a device span; its breakdowns are host time.
   for (const core::StageRow& row : decoded.rows()) {
