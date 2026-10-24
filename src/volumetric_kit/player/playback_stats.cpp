@@ -37,6 +37,9 @@ PlaybackStats::PlaybackStats(const recon::stream::TrackStats& track,
 }
 
 void PlaybackStats::add_frame(const FrameStamp& stamp, Clock::time_point now) {
+  if (stamp.rebuild) {
+    return;  // the frame before, again
+  }
   // A frame taken over a second ago was published over a second ago too.
   while (!taken_.empty() && now - taken_.front().at >= kRateSpan) {
     taken_.pop_front();

@@ -51,7 +51,9 @@ class PlaybackStats {
   PlaybackStats(const recon::stream::TrackStats& track,
                 recon::stream::Rate rate);
 
-  /// @brief A frame taken for drawing (MeshExchange's commit), at @p now.
+  /// @brief A frame taken for drawing (MeshExchange's commit), at @p now; a
+  ///        rebuild (FrameStamp::rebuild) is the frame before again, so it
+  ///        changes nothing.
   /// @param stamp  Its stamp; its rows are copied.
   /// @param now    When it was taken; no earlier than the last frame's.
   void add_frame(const FrameStamp& stamp, Clock::time_point now);

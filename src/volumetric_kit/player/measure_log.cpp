@@ -208,6 +208,9 @@ core::Status MeasureLog::add(const FrameStamp& stamp, std::uint32_t triangles) {
   if (finished_) {
     return core::Status::io_error("MeasureLog: " + path_ + " is finished");
   }
+  if (stamp.rebuild) {
+    return {};  // the frame before, again
+  }
   const std::string frame =
       std::to_string(stamp.pass) + "," + std::to_string(stamp.index) + "," +
       (stamp.key ? "I" : "P") + "," + std::to_string(stamp.bytes) + "," +

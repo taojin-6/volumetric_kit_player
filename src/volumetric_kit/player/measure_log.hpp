@@ -28,6 +28,8 @@
 ///   it (`FrameStamp::counters`).
 /// - `type` is `I` or `P`; `frame` is `FrameStamp::index` and `pass`
 ///   `FrameStamp::pass`.
+/// - A paused deblock toggle's rebuild (`FrameStamp::rebuild`) is the frame
+///   before again, so no frame: it writes nothing.
 
 #include <chrono>
 #include <cstdint>
@@ -119,6 +121,8 @@ struct MeasureContext {
   DeviceTiming timing = DeviceTiming::kOff;
   /// When it started, stated as UTC.
   std::chrono::system_clock::time_point started{};
+  // TODO: the deblock (StreamPlayer::deblock), which format 1 has no header
+  // key or column for.
 };
 
 /// @brief Writes one measurement's log (the format above). Each frame is
@@ -151,7 +155,9 @@ class MeasureLog {
   MeasureLog(MeasureLog&&) = delete;
   MeasureLog& operator=(MeasureLog&&) = delete;
 
-  /// @brief Write a frame taken for drawing: its stage rows, then its counts.
+  /// @brief Write a frame taken for drawing: its stage rows, then its counts;
+  ///        a rebuild (`FrameStamp::rebuild`) writes nothing and counts in
+  ///        no @ref frames.
   /// @param stamp      Its stamp.
   /// @param triangles  Its mesh's triangles.
   /// @return OK; `core::Status::Code::IoError` once a write fails, or after

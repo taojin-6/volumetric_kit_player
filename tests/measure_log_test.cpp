@@ -5,7 +5,8 @@
 // stream, how it ran, the timing and the time, then the columns; each frame
 // is its stage rows, host as busy time, GPU only where measured and each
 // device state by name, a breakdown's name kept and a name with a comma
-// quoted, then its device counts; nothing is at the path until finish
+// quoted, then its device counts; a rebuild writes nothing and is no frame;
+// nothing is at the path until finish
 // renames the part file, and after it nothing more is written; a folder that
 // is not there is refused. The time reads as UTC, and a log's file name, or
 // a failed launch's, is it and the player's commit. The iOS app's measure
@@ -144,6 +145,22 @@ TEST(MeasureLog, AFrameIsItsStageRowsThenItsDeviceCounts) {
                    "2,7,P,600,510,,,,,,5,4,1288731,3",
                    "1,0,I,0,0,\"a, b\",1.0000,0.0000,,none,,,,",
                    "1,0,I,0,0,,,,,,0,0,0,0"}));
+}
+
+// A paused deblock toggle's rebuild is the frame before again.
+TEST(MeasureLog, ARebuildIsNoFrame) {
+  vp_test::Scratch scratch;
+  const std::string path = scratch.file("run.csv");
+  core::Result<std::unique_ptr<MeasureLog>> log =
+      MeasureLog::open(path, context());
+  ASSERT_TRUE(log.ok()) << log.status().message();
+  ASSERT_TRUE((*log)->add(stamp(), 510).ok());
+  FrameStamp rebuild = stamp();
+  rebuild.rebuild = true;
+  ASSERT_TRUE((*log)->add(rebuild, 510).ok());
+  EXPECT_EQ((*log)->frames(), 1u);
+  ASSERT_TRUE((*log)->finish().ok());
+  EXPECT_EQ(read_lines(path).size(), 12u + 5u);
 }
 
 TEST(MeasureLog, NothingIsAtThePathUntilFinishAndNothingAfter) {

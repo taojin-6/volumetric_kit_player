@@ -35,11 +35,14 @@ inline constexpr const char* kSourceWindow = "##player_source";
 /// stays inside 375 pt.
 inline constexpr float kButtonEms = 4.5f;
 
-/// @brief Draw Play/Pause, Step, Loop and Normals in a row, the status line
-///        below, at the bottom centre of the main viewport's work area, so
-///        they stay clear of a notch and a home indicator; a live player's
-///        (StreamPlayer::live), Normals over its @ref live_status_line. There
-///        is no text field, so touch needs no keyboard.
+/// @brief Draw Play/Pause, Step, Loop, Normals and Deblock in a row, the
+///        status line below, at the bottom centre of the main viewport's work
+///        area, so they stay clear of a notch and a home indicator; a live
+///        player's (StreamPlayer::live), Normals and Deblock over its
+///        @ref live_status_line. Deblock, a box that shows and sets
+///        StreamPlayer::deblock, takes a row of its own below the others when
+///        the row would not fit the work area with it, as on a phone in
+///        portrait. There is no text field, so touch needs no keyboard.
 ///
 /// @code
 /// overlay.new_frame();
@@ -102,14 +105,15 @@ std::string live_status_line(const LiveStatus& status,
 std::string status_line(const std::optional<FrameStamp>& shown,
                         std::uint64_t frame_count, bool playing, bool loop);
 
-/// @brief The stats panel's lines, in Mbit/s (10^6 bit/s) and kB (1000 B).
+/// @brief The stats panel's lines, in Mbit/s (10^6 bit/s), kB (1000 B) and
+///        mm.
 ///
 /// @code
 /// // {"bitrate 11.8 Mbit/s", "frame P · 41.2 kB · 182 k tris",
-/// //  "rate 29.8 / 30 fps"}
+/// //  "deblock LG · T 0.500 mm", "rate 29.8 / 30 fps"}
 /// const auto lines = stats_lines(stats, shown, triangles, now, false);
 /// // live: {"bitrate 9.7 Mbit/s · last 1 s", "frame P · ...",
-/// //        "rate 29.8 fps · 30 rec/s"}
+/// //        "deblock skipped · T 0.500 mm", "rate 29.8 fps · 30 rec/s"}
 /// @endcode
 /// @param stats      The figures.
 /// @param shown      The newest frame drawn; empty before the first.
@@ -118,9 +122,14 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 /// @param live       Whether they are a live player's (StreamPlayer::live).
 /// @return The track's mean bitrate, or live its bitrate over the last
 ///         second (`-` when unknown); the frame's type (I for a key record,
-///         else P), payload and triangles (each `-` before the first); and
-///         the rate frames are taken at, over the nominal when it is known,
-///         or live beside the records a second.
+///         else P), payload and triangles (each `-` before the first); what
+///         the deblock did to it (FrameStamp::deblock): `off` with the
+///         deblock off, the filter recon ran (`LF`, `LG` or `R`), or
+///         `skipped` with the deblock on but no filter run, for a frame
+///         recon's mask gate skips (`codec::Decoder::set_deblock`) or whose
+///         T is finer than every filter's, then its T to the micrometre (each
+///         `-` before the first); and the rate frames are taken at, over the
+///         nominal when it is known, or live beside the records a second.
 std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,

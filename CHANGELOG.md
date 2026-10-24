@@ -59,22 +59,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   normals (gfx's `kHybridMeshNormals`) in place of lighting
   (`PlayerView::normals`, `set_normals` and `mesh_flags`; `draw_controls`
   takes the view's `normals`).
+- The decoder-side deblock (recon #264), on by default: Deblock in the panel
+  and the desktop's D key turn it on and off (`StreamPlayer::set_deblock`
+  and `deblock`), and while paused the frame shown is rebuilt with the
+  change and drawn again (`FrameStamp::rebuild`). The stats say what it did
+  to the frame drawn, off, its filter or skipped, and the frame's T
+  (`FrameStamp::deblock_on` and `deblock`). The iOS app keeps the choice
+  for the next source.
 - Device timing on demand: `StreamPlayer::set_device_timing` (`DeviceTiming`
   off, sampled one frame in `kSampleEvery`, or all), set by the view every
   frame while the stats are open, or fixed by a measurement
   (`PlayerViewConfig::device_timing`); the view's draw is timed only while
   the stats are open and the timing is not off. A timed frame's "decode" and
-  "mesh" carry recon's breakdown rows. `FrameStamp` gains `timed`, `pass`
-  and `counters`, the worker's device counts over the frame;
-  `StreamPlayer::track`, `PlayerView::frames_taken` and `compute_device`.
+  "mesh" carry recon's breakdown rows; a paused rebuild is timed as its
+  frame was. `FrameStamp` gains `timed`, `pass` and `counters`, the worker's
+  device counts over the frame; `StreamPlayer::track`,
+  `PlayerView::frames_taken` and `compute_device`.
 - The measure log (`MeasureLog`, `device_line`, `build_info`,
   `measure_file_name`): one CSV per run, its header naming the commits, the
   build, the device, the stream, how it ran and the timing, then each
-  frame's stage rows and device counts. `tests/vp_probe` (once
-  `vp_live_probe`) writes one of a file or a sender, through the view or
-  with `--worker` the worker alone, validated as the core's test policy
-  asks; the iOS app does with `--measure` (`parse_measure_args`, with
-  `--passes`), or writes why it cannot into a `.failed` file.
+  frame's stage rows and device counts; a paused rebuild is no frame, so it
+  is not written. `tests/vp_probe` (once `vp_live_probe`) writes one of a
+  file or a sender, through the view or with `--worker` the worker alone,
+  validated as the core's test policy asks; the iOS app does with
+  `--measure` (`parse_measure_args`, with `--passes`), or writes why it
+  cannot into a `.failed` file.
 - `tools/measure/measure`: from the Mac, a measurement on the lab's RTX 4090,
   the Mac itself or the owner's iPhone or iPad, its logs copied home, and
   `summarize.py`'s markdown of them (mean, p50, p95; counts per frame; a
@@ -87,10 +96,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- build: the player pins core #50's head (9b64ebb, 0.20.0), gfx #153's
-  (a0a7a01) and recon #272's (75c51bb, on recon main at #262's merge), and
-  requires core 0.20.0. TODO(timing): re-pin to their merge commits. The
-  view presents FIFO as gfx's default (gfx #150), naming no mode.
+- build: the player pins core main at #50's merge (0daced5, 0.20.0), gfx
+  main at #153's merge (123d013) and recon main at #272's merge (fb24de7),
+  and requires core 0.20.0, which gfx and recon need too. The view presents
+  FIFO as gfx's default (gfx #150), naming no mode.
 - The stats show two tables, each under the window it covers: the worker's
   stages per stream frame and the renderer's per display frame, under its
   rate, each as host (busy), wait and GPU ms (gfx #153). `StatsPanel::draw`
@@ -119,6 +128,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a vsync sooner; a file keeps gfx's default.
 - The iOS app draws at most 60 frames a second, so a ProMotion iPad no
   longer redraws the same frame at 120 Hz.
+- A file's frame is decoded once it is due rather than as soon as it is
+  read, so the grid holds the frame shown while paused.
 - A consumer of `StreamPlayer` calls `taken()` from the commit of each
   mesh it takes; the worker sleeps until then rather than waking every
   2 ms, as it did while a window was minimized. Live, a frame waiting on

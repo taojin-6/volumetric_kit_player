@@ -136,7 +136,8 @@ struct FrameStamp {
   std::uint64_t record_bytes = 0;  ///< Their payload bytes.
   /// When the worker published it, so when its records had all come.
   Playback::Clock::time_point published{};
-  /// Whether its device work was timed (@ref DeviceTiming).
+  /// Whether its device work was timed (@ref DeviceTiming); a rebuild's, as
+  /// the frame it rebuilds was.
   bool timed = false;
   /// The pass of a file's track it was read in, from 1; live, 1.
   std::uint64_t pass = 1;
@@ -144,6 +145,18 @@ struct FrameStamp {
   /// to this one's publish (`core::Device::counters`): the submits, the
   /// waits that blocked and their time, and the staging buffers.
   core::DeviceCounters counters;
+  /// Whether the deblock was on for its decode or rebuild
+  /// (@ref StreamPlayer::set_deblock).
+  bool deblock_on = false;
+  /// What the deblock did to it: recon's `codec::Decoder::last_deblock`
+  /// after its decode or rebuild, whose filter is `"off"` with the deblock
+  /// off and also on, for a frame recon skipped.
+  recon::codec::DeblockInfo deblock{};
+  /// A paused toggle's rebuild (@ref StreamPlayer::set_deblock): the frame
+  /// published last, published again under the deblock as now set, so no new
+  /// frame, which neither PlaybackStats nor MeasureLog counts. Its "decode"
+  /// is the rebuild's.
+  bool rebuild = false;
 };
 
 /// @brief The handoff of the worker's meshes to the thread that draws them.
@@ -161,15 +174,17 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 ///        mesh to a @ref FrameExchange for the caller to draw.
 ///
 /// **The worker** first builds the decoder and the extractor. Then, per record
-/// of a file's track, it reads it, `codec::decode_growing` it into a grid
-/// `codec::make_decode_grid` built from the first frame, waits until it is due
-/// (@ref Playback) and until the consumer has taken the last mesh (@ref taken),
-/// then extracts it with Marching Cubes and publishes it. The mesh lives in the
-/// extractor's ring slot, so the next frame decodes while it is drawn. A
-/// damaged record, or one this version cannot read, is skipped, and playback
-/// resumes at the next key record. At the track's end it plays the track again
-/// with loop on; with loop off it holds the last frame, paused, until
-/// @ref play restarts it.
+/// of a file's track, it reads it, waits until it is due (@ref Playback),
+/// `codec::decode_growing` it into a grid `codec::make_decode_grid` built from
+/// the first frame, with the deblock as @ref set_deblock last set it, waits
+/// until the consumer has taken the last mesh (@ref taken), then extracts it
+/// with Marching Cubes and publishes it. The mesh lives in the extractor's ring
+/// slot, so the next frame decodes while it is drawn; and the grid holds the
+/// frame published last until the next is due, so a deblock toggled while
+/// paused rebuilds it. A damaged record, or one this version cannot read, is
+/// skipped, and playback resumes at the next key record. At the track's end it
+/// plays the track again with loop on; with loop off it holds the last frame,
+/// paused, until @ref play restarts it.
 ///
 /// **Errors.** A failed build, any other failure, or a pass of the track that
 /// shows no frame (its first refusal in the message), stops the worker, and
@@ -181,12 +196,12 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 /// @ref set_device_timing asks, off until then.
 ///
 /// **Threads.** The controls (@ref play, @ref pause, @ref step,
-/// @ref set_loop), their reads, @ref park, @ref unpark and @ref taken lock the
-/// mutex the worker waits under, so they are safe from any thread, and each
-/// change and each @ref taken wakes the worker; @ref start, @ref stop and the
-/// destructor run on one thread at a time. Only the worker touches the
-/// decoder, the grid and the extractor; the caller touches only the consumer
-/// side of the exchange.
+/// @ref set_loop, @ref set_deblock), their reads, @ref park, @ref unpark and
+/// @ref taken lock the mutex the worker waits under, so they are safe from
+/// any thread, and each change and each @ref taken wakes the worker;
+/// @ref start, @ref stop and the destructor run on one thread at a time. Only
+/// the worker touches the decoder, the grid and the extractor; the caller
+/// touches only the consumer side of the exchange.
 ///
 /// **Teardown**, on every path out, so nothing the GPU may still read is
 /// freed early: @ref stop, wait until the consumer's queue is idle, and
@@ -295,15 +310,28 @@ class StreamPlayer {
   /// @return Whether it loops.
   bool loop() const;
 
+  /// @brief Turns the decoder-side deblock on or off (recon's
+  ///        `codec::Decoder::set_deblock`), on by default: from the next
+  ///        frame decoded, live too. While a file's playback is paused or
+  ///        held at the end, the worker also rebuilds the frame it published
+  ///        last under the new setting (recon's `codec::Decoder::rebuild`),
+  ///        meshes it and publishes it again (@ref FrameStamp::rebuild), so
+  ///        the change shows at once; parked, it does so at @ref unpark.
+  ///        Safe before @ref start: the first decode takes it.
+  /// @param on  Whether the deblock runs.
+  void set_deblock(bool on);
+  /// @return Whether the deblock is on: true until @ref set_deblock.
+  bool deblock() const;
+
   /// @brief Hold the worker for a suspend (iOS resign-active, Android
   ///        onPause). From this call on, the worker starts no new step (its
-  ///        kernel build, a read, a decode or an extract), even after a
-  ///        timed-out return; the call waits for the step under way.
-  ///        @ref playing does not change; a control applied meanwhile takes
-  ///        effect at @ref unpark. Call it after the consumer stops drawing.
-  ///        Live, a step is GPU work alone and never waits: the worker drops
-  ///        the record in hand and closes the connection within a slice
-  ///        (about 10 ms).
+  ///        kernel build, a read, a decode, a rebuild or an extract), even
+  ///        after a timed-out return; the call waits for the step under
+  ///        way. @ref playing does not change; a control applied meanwhile
+  ///        takes effect at @ref unpark. Call it after the consumer stops
+  ///        drawing. Live, a step is GPU work alone and never waits: the
+  ///        worker drops the record in hand and closes the connection within
+  ///        a slice (about 10 ms).
   /// @param timeout  The longest wait for the step under way.
   /// @return true once the worker is idle, or when stopped or never started;
   ///         false if @p timeout passed first: the step under way may still
@@ -348,7 +376,7 @@ class StreamPlayer {
   explicit StreamPlayer(LiveAddress address);
 
   // A step of the worker's, as park counts them: its kernel build, a record's
-  // read and decode, or an extract; live, a decode or an extract.
+  // read, its decode, a rebuild or an extract; live, a decode or an extract.
   class Step;
 
   // The worker: builds, then plays the track or the live stream until quit or
@@ -368,15 +396,27 @@ class StreamPlayer {
                                core::Status* ended);
   // Build grid_ for the stream of `payload`, the first frame read.
   core::Status make_grid(const std::vector<std::uint8_t>& payload);
-  // Decode `payload` into grid_, built from it if there is none, timed into
-  // `stages`' "decode" row, and with `timed` its device half and recon's
-  // breakdowns.
+  // Decode `payload` into grid_, built from it if there is none, with the
+  // deblock as set_deblock last set it, timed into `stages`' "decode" row,
+  // and with `timed` its device half and recon's breakdowns.
   core::Status decode(const std::vector<std::uint8_t>& payload,
                       core::StageMetrics& stages, bool timed);
   // Whether the next frame's device work is timed, as timing_ asks.
   bool time_next_frame();
-  // Wait until the frame at pts_ns is due, and count it shown: false on quit.
-  bool wait_due(std::uint64_t pts_ns);
+  // `stamp`'s deblock fields, from the decoder's last decode or rebuild.
+  void stamp_deblock(FrameStamp& stamp) const;
+  // Wait until the frame at pts_ns is due, rebuilding last_ meanwhile when
+  // rebuild_wanted: false on quit.
+  core::Result<bool> wait_due(std::uint64_t pts_ns);
+  // Count the frame at pts_ns shown as of due_at, when wait_due found it due,
+  // once it decoded: the clock takes a step.
+  void count_shown(std::uint64_t pts_ns, Playback::Clock::time_point due_at);
+  // Under the lock: whether a paused toggle asks for last_ to be rebuilt.
+  bool rebuild_wanted() const;
+  // Rebuild last_ under the deblock as now set, timed as last_ was, and
+  // publish it again (FrameStamp::rebuild): false on quit. A rebuild recon
+  // refuses as skippable publishes nothing.
+  core::Result<bool> rebuild();
   // Once the consumer took the last mesh, mesh the grid and publish it with
   // @p stamp, the extract timed into its "mesh" row: false on quit.
   core::Result<bool> publish(FrameStamp stamp);
@@ -386,8 +426,8 @@ class StreamPlayer {
   // consumer took the last mesh.
   core::Status mesh_and_publish(FrameStamp stamp);
   // At the end of a pass that showed a frame: true to play the track again,
-  // false on quit.
-  bool wait_at_end();
+  // false on quit; it rebuilds last_ meanwhile when rebuild_wanted.
+  core::Result<bool> wait_at_end();
   // Live, outside any step: wait while parked; false on quit.
   bool wait_unparked();
   // Live, as a connection ends (`ended` OK when quit or a park ended it):
@@ -414,6 +454,9 @@ class StreamPlayer {
   std::thread worker_;
   std::uint64_t frames_started_ = 0;  // for kSampled
   core::DeviceCounters counted_;      // the device's, at the last publish
+  // A file's frame published last, its stages cleared, which grid_ holds
+  // until the next is due; the worker's alone.
+  std::optional<FrameStamp> last_;
 
   std::atomic<DeviceTiming> timing_{DeviceTiming::kOff};
 
@@ -424,6 +467,7 @@ class StreamPlayer {
   std::condition_variable changed_;
   Playback clock_;
   bool loop_ = true;
+  bool deblock_ = true;  // the decoder's, from its next decode
   bool parked_ = false;  // no step starts
   bool busy_ = false;    // a step is under way
   bool quit_ = false;

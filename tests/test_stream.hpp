@@ -6,10 +6,12 @@
 /// @file test_stream.hpp
 /// The tests' streams, which vp_write_stream writes once a ctest run
 /// (CMakeLists.txt): kFrames frames of a sphere moving a block a frame, at 25
-/// fps with a pause before the fourth, an I-frame every third; the same with
-/// frame kEmptyFrame meshing nothing; and at twice the voxel size. A copy of
-/// one of them, and a stream that opens but never decodes, in a scratch
-/// directory of the test's own.
+/// fps with a pause before the fourth, an I-frame every third, each frame
+/// with unobserved voxels, so masked, which recon's deblock skips; the same
+/// with frame kEmptyFrame meshing nothing; coded as a true SDF observed far
+/// enough out that no voxel is masked, so the deblock runs, its filter "R" (T
+/// 1.96 mm); and at twice the voxel size. A copy of one of them, and a stream
+/// that opens but never decodes, in a scratch directory of the test's own.
 
 #include <gtest/gtest.h>
 #include <unistd.h>
@@ -36,10 +38,11 @@ constexpr std::uint64_t kGapAt = 3;
 constexpr std::uint64_t kGapNs = 500'000'000;
 
 // The streams' names in vp_write_stream's directory: the sphere; with frame
-// kEmptyFrame holding no block, so meshing nothing; and at twice the voxel
-// size.
+// kEmptyFrame holding no block, so meshing nothing; as a true SDF, unmasked;
+// and at twice the voxel size.
 constexpr const char* kStream = "sphere.vrst";
 constexpr const char* kEmptyFrameStream = "empty_frame.vrst";
+constexpr const char* kTrueSdfStream = "true_sdf.vrst";
 constexpr const char* kCoarseStream = "coarse.vrst";
 constexpr std::uint64_t kEmptyFrame = 1;
 

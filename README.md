@@ -71,11 +71,13 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib \
 
 The panel at the bottom plays, pauses, steps and loops, and shows the frame;
 Normals, shown pressed while on, colours the mesh by its world-space normals
-in place of lighting. The stats at the top left show the bitrate, the frame
-drawn, the rate and where each frame's time goes: the worker's stages per
-stream frame and the renderer's per display frame, each as host (busy),
-wait and GPU ms. The GPU is timed while they are open; a click on their
-header closes and opens them. The keys are the panel's shortcuts:
+in place of lighting; and Deblock, on at first, has recon's decoder smooth
+each frame across its block faces, and while paused redoes the frame shown.
+The stats at the top left show the bitrate, the frame drawn, what the
+deblock did to it, the rate and where each frame's time goes: the worker's
+stages per stream frame and the renderer's per display frame, each as host
+(busy), wait and GPU ms. The GPU is timed while they are open; a click on
+their header closes and opens them. The keys are the panel's shortcuts:
 
 | Input | Does |
 | --- | --- |
@@ -86,6 +88,7 @@ header closes and opens them. The keys are the panel's shortcuts:
 | Right arrow | steps one frame |
 | L | turns looping on or off |
 | N | turns Normals on or off |
+| D | turns Deblock on or off |
 | Esc | closes the window |
 
 With `run.frames`, the app prints the frame drawn as it exits, for CI's
@@ -101,10 +104,11 @@ machine; for the lab's, over the VPN, copy it and set `source.host` to
 `taojin-desktop.arena.andrew.cmu.edu` or `192.168.21.217`.
 
 The picture joins at the sender's newest I-frame. The panel at the bottom is
-then Normals over a status line: connecting, live with the newest record's
-seq and how long nothing has come, or reconnecting with why, about every
-second until Esc. The keys that play, pause, step and loop do nothing. The
-stats show the bitrate and the records a second over the last second.
+then Normals and Deblock over a status line: connecting, live with the
+newest record's seq and how long nothing has come, or reconnecting with why,
+about every second until Esc. The keys that play, pause, step and loop do
+nothing. The stats show the bitrate and the records a second over the last
+second.
 
 `"$root/build/tests/vp_probe" --connect host[:port]` plays a live stream
 with no window, and prints the status and stats lines once a second (below).

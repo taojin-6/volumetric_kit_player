@@ -172,9 +172,10 @@ class PlayerView {
   bool ui_wants_pointer() const noexcept;
   /// @return The last stream frame drawn, for a read-out (the CI smoke).
   const std::optional<FrameStamp>& shown() const noexcept { return shown_; }
-  /// @return The stream frames taken for drawing so far, each once: a frame
-  ///         that raised it is @ref shown, for a measurement's log
-  ///         (MeasureLog).
+  /// @return The stream frames taken for drawing so far, each once, and a
+  ///         paused toggle's rebuilds (FrameStamp::rebuild): a frame that
+  ///         raised it is @ref shown, for a measurement's log (MeasureLog,
+  ///         which writes no rebuild).
   std::uint64_t frames_taken() const noexcept { return frames_taken_; }
   /// @return The device the worker decodes and meshes on, for a
   ///         measurement's device line (device_line).

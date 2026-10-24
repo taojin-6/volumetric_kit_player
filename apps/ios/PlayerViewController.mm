@@ -129,14 +129,18 @@ vkc::Result<std::optional<cfg::Source>> MeasureSource(
 }
 
 // The view over `source`, on `layer`, with fingertip-sized controls, the
-// Source button, and on an iPhone the compact stats; the worker's device
-// timing fixed by a measurement, or else the stats panel's. No validation:
-// iOS has no layer to load (DECISIONS.md).
+// Source button, on an iPhone the compact stats, and the deblock as
+// `deblock`, if set, as a view before had it; the worker's device timing fixed
+// by a measurement, or else the stats panel's. No validation: iOS has no layer
+// to load (DECISIONS.md).
 vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
     CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source,
-    std::optional<vkp::DeviceTiming> timing) {
+    std::optional<vkp::DeviceTiming> timing, std::optional<bool> deblock) {
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
              vkp::open_source(source));
+  if (deblock) {
+    player->set_deblock(*deblock);
+  }
   VKC_ASSIGN(const vg::windowing::SurfaceSource surface,
              vg::windowing::metal_surface((__bridge const void*)layer));
   vkp::PlayerViewConfig config;
@@ -227,6 +231,7 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   vkc::Status _measureRefused;
   std::unique_ptr<vkp::MeasureLog> _log;
   std::uint64_t _logged;  // the view's frames taken, as of the last logged
+  std::optional<bool> _deblock;  // the last view's Deblock, for the next
 }
 
 - (void)loadView {
@@ -342,7 +347,8 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   vkc::Result<std::unique_ptr<vkp::PlayerView>> made =
       MakeView((CAMetalLayer*)_metal.layer, pixels, **chosen,
                _measure ? std::optional<vkp::DeviceTiming>(_measure->timing)
-                        : std::nullopt);
+                        : std::nullopt,
+               _deblock);
   if (!made.ok()) {
     [self fail:made.status()];
     return;
@@ -603,7 +609,10 @@ glm::vec2 At(UITouch* touch, UIView* view) {
 
 - (void)dropView {
   [self stopLink];
-  _log.reset();    // a measurement under way is left as its .part
+  _log.reset();  // a measurement under way is left as its .part
+  if (_view) {
+    _deblock = _view->player().deblock();
+  }
   _touch.reset();  // the platform half first; the view waits for the GPU
   _view.reset();
 }
