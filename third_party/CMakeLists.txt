@@ -13,11 +13,14 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first, and the
 # config tier: its Source, which the library's open_source takes on every
 # platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
-# is core main at #49's merge (ff44a98, 0.19.0), gfx's and recon's pin too; its
-# iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT)
-# and answers glm. The floor below is the oldest core the player and its
-# siblings build with: gfx's 0.18.0, for Device::pipeline_cache (the Player
-# profile is 0.17.0's), so an older FETCHCONTENT_SOURCE_DIR override is refused.
+# is core main at #50's merge (0daced5, 0.20.0), gfx's and recon's pin too: rows
+# with busy, wait and device halves (core::DeviceTime), tiled device time and
+# Device::counters, which the stats and the measure log read, scopes that close
+# on the thread that opened them, query pools kept until their queue completes
+# and calibration that keeps its uncertainty. Its iOS module,
+# cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT) and answers
+# glm. The floor below is the pin's version, which gfx and recon need too, so an
+# older FETCHCONTENT_SOURCE_DIR override is refused.
 set(VKC_WITH_VULKAN ON)
 set(VKC_WITH_CONFIG ON)
 if(VP_BUILD_TESTS)
@@ -26,26 +29,29 @@ endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG ff44a981055d505590e295ff6a943bb1b6e96109)
+  GIT_TAG 0daced5a3b3ef3b64ad2f8f245aa437367d3ed55)
 FetchContent_MakeAvailable(volumetric_kit_core)
-vkc_require_core(0.18.0 VULKAN CONFIG)
+vkc_require_core(0.20.0 VULKAN CONFIG)
 
 # --- volumetric_kit_recon ----------------------------------------------------
 # The stream reader, the codec's decode grid and its deblock, Marching Cubes,
 # the mesh exchange and the live stream's client. Its tests, examples and
-# -Werror stay off in a subproject, so its library's core floor (0.2.0) is the
-# one checked; its own core pin is the player's. The pin is recon main at #264's
-# merge (6080263): #264's decoder-side deblock (codec::Decoder::set_deblock,
-# rebuild and last_deblock) and #262's EncoderConfig::true_sdf, which the tests'
-# streams use, beside #269's StreamClient::next progress output, #266's block
-# ceiling for codec::make_decode_grid and decode_growing, #260's
-# networking::StreamClient and StreamServer, #256's empty mesh payload at
-# MeshExchange's commit and #255's volume::kDefaultBucketSize /
-# kDefaultMaxChain.
+# -Werror stay off in a subproject, so its library's core floor (0.20.0) is the
+# one checked; its own core pin is the player's. The pin is recon main at #272's
+# merge (fb24de7): #272's breakdown rows for the decode and the extract, each
+# with host, wait and device halves, the deblock's device work inside the
+# decode's "  ..inverse", and a timer made at the first timed call; and #273's
+# deblock gate, which skips a frame only past half its blocks masked. Beside
+# them, #264's decoder-side deblock (codec::Decoder::set_deblock, rebuild and
+# last_deblock), #262's EncoderConfig::true_sdf, which the tests' streams use,
+# #269's StreamClient::next progress output, #266's block ceiling for
+# codec::make_decode_grid and decode_growing, #260's networking::StreamClient
+# and StreamServer, #256's empty mesh payload at MeshExchange's commit and
+# #255's volume::kDefaultBucketSize / kDefaultMaxChain.
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG 60802639db2ee47328bd8e1d023cfb752f40a64d)
+  GIT_TAG fb24de719447220dab296dadb32a745e072b9e15)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------
@@ -53,17 +59,18 @@ FetchContent_MakeAvailable(volumetric_kit_recon)
 # controls and stats panels (ImGui) and the profiler that times the draw. Its
 # tests, examples and -Werror stay off in a subproject. Its GLFW tier is built
 # with the desktop app alone, so not on iOS: the library links no window system
-# (the top-level CMakeLists.txt checks). The pin is gfx main at #152's merge
-# (f147e00): #150's FIFO present by default, which the view takes, beside #148's
-# ImGuiOverlayConfig::min_frame_height, ui::begin_collapsible_panel and
-# ui::draw_stage_table for the stats, #146's windowing::SurfaceSource and
-# glfw::Library, #145's ImGuiTouch, #144's sRGB ImGui fix and #143's orbit drag
-# gestures.
+# (the top-level CMakeLists.txt checks). The pin is gfx main at #153's merge
+# (123d013): ui::draw_stage_table's host, wait and GPU columns under a
+# ui::StageWindow, and the frame loop's own wait, submit and present rows;
+# beside them, #150's FIFO present by default, which the view takes, #148's
+# ImGuiOverlayConfig::min_frame_height and ui::begin_collapsible_panel, #146's
+# windowing::SurfaceSource and glfw::Library, #145's ImGuiTouch, #144's sRGB
+# ImGui fix and #143's orbit drag gestures.
 set(VG_WITH_GLFW ${VP_DESKTOP_APP})
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  GIT_TAG f147e00e7fb45382da8874198684656496f09b7c)
+  GIT_TAG 123d01326d26bc8f58b847ad8ff435ebff9e22dc)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
 if(VP_BUILD_TESTS)

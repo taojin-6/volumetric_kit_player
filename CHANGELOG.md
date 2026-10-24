@@ -43,7 +43,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   second, its reason on the status line (`LiveStatus`, `live_reason`), and a
   park closes it. Live, the stats show the bitrate and records a second over
   the last second (`FrameStamp::records`, `record_bytes`, `published`).
-  `tests/vp_live_probe` plays one with no window, on a Mac.
+  `tests/vp_probe --connect` plays one with no window.
 - The iOS app chooses what to play on screen: a Source button at the top
   right (`PlayerViewConfig::source_button`, `draw_source`,
   `PlayerView::take_source_request`) opens iOS's dialog for a sender's host
@@ -66,13 +66,49 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to the frame drawn, off, its filter or skipped, and the frame's T
   (`FrameStamp::deblock_on` and `deblock`). The iOS app keeps the choice
   for the next source.
+- Device timing on demand: `StreamPlayer::set_device_timing` (`DeviceTiming`
+  off, sampled one frame in `kSampleEvery`, or all), set by the view every
+  frame while the stats are open, or fixed by a measurement
+  (`PlayerViewConfig::device_timing`); the view's draw is timed only while
+  the stats are open and the timing is not off. A timed frame's "decode" and
+  "mesh" carry recon's breakdown rows; a paused rebuild is never timed.
+  `FrameStamp` gains `timed`, `pass` and `counters`, the worker's
+  device counts over the frame; `StreamPlayer::track`,
+  `PlayerView::frames_taken` and `compute_device`.
+- The measure log (`MeasureLog`, `device_line`, `build_info`,
+  `measure_file_name`): one CSV per run, its header naming the commits, the
+  build, the device, the stream, how it ran and the timing, then each
+  frame's stage rows and device counts; a paused rebuild is no frame, so it
+  is not written. `tests/vp_probe` (once `vp_live_probe`) writes one of a
+  file or a sender, through the view or with `--worker` the worker alone,
+  validated as the core's test policy asks; the iOS app does with
+  `--measure` (`parse_measure_args`, with `--passes`), or writes why it
+  cannot into a `.failed` file.
+- `tools/measure/measure`: from the Mac, a measurement on the lab's RTX 4090,
+  the Mac itself or the owner's iPhone or iPad, its logs copied home, and
+  `summarize.py`'s markdown of them (mean, p50, p95; counts per frame; a
+  Mac run's load; a diff of two).
+- `PlayerViewConfig::compact_stats`, which the iOS app sets on an iPhone: no
+  breakdown rows, and in landscape the two tables side by side.
+- build: `VP_DESKTOP_APP` (ON on a desktop): OFF builds the library, the
+  tests but `cli_test`, and `vp_probe` with no GLFW, as the runner does on
+  the lab.
 
 ### Changed
 
-- build: the player pins core 0.19.0 (ff44a98, core #49's merge), gfx main
-  at #152's merge (f147e00) and recon main at #264's merge (6080263), and
-  requires core 0.18.0, gfx's floor. The view presents FIFO as gfx's default
-  (gfx #150), naming no mode.
+- build: the player pins core main at #50's merge (0daced5, 0.20.0), gfx
+  main at #153's merge (123d013) and recon main at #272's merge (fb24de7),
+  and requires core 0.20.0, which gfx and recon need too. The view presents
+  FIFO as gfx's default (gfx #150), naming no mode.
+- The stats show two tables, each under the window it covers: the worker's
+  stages per stream frame and the renderer's per display frame, under its
+  rate, each as host (busy), wait and GPU ms (gfx #153). `StatsPanel::draw`
+  takes the renderer's `gfx::FrameMetrics`; `render_rows`, `window` and
+  `render_window` read them back.
+- A stage mean is over the frames that have its row, its device state the
+  highest of theirs (`PlaybackStats::stage_means`); `window_frames` and
+  `timed_frames` count them.
+- The iOS app builds Release, in CI and in the README.
 - The iOS app's controls fit a phone: 17-pt text (`ui_scale` 1.3) and every
   control at least 44 pt tall (`PlayerViewConfig::ui_min_frame_height`, over
   gfx's `min_frame_height`). Play/Pause and Step are `kButtonEms` (4.5) font
@@ -107,6 +143,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The measurement runner stops when fetching a revision or launching the
+  phone app fails, and retrieves lab logs when `LAB_ROOT` contains spaces.
 - A file's or a sender's frame can no longer make the decode grid gigabytes
   large: one of more than `kMaxFrameBlocks` (131,072) blocks, or a grow past
   the grid for it, is skipped as a damaged one is (recon #266's ceiling).
@@ -122,6 +160,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Migration
 
+- `vp_live_probe host[:port]` is `vp_probe --connect host[:port]`.
+- `StatsPanel::draw` takes `profiler.metrics()`, not its `sections`; its
+  `rows()` are the worker's alone, the renderer's are `render_rows()`.
+- Read a row's `device` (`core::DeviceTime`), not `has_gpu`, and its
+  `wait_ms`: host time less the wait is busy time.
 - Write a scenario in place of the command line (the core's CONFIG.md):
   `source.path` for the stream's path, `source.host` and `port` for
   `--connect host[:port]`, and `run.frames` for `--frames N`.

@@ -4,6 +4,79 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-23 — Timing on demand, each unit stated, and one measure log
+
+Wave 1 of the data-flow plan (its plan v2, row 4: PL0, PL1, PL2 and the
+measurement automation), with D1 to D10 as recommended. The owner: "I want
+timing to be comprehensive and correct. No need for unnecessary copy or
+waits"; "you should automate the measurement process, how you get the data
+log". Nothing in the data flow changes; today's costs become measurable.
+
+- **The device is timed only while the stats are open, or as a measurement
+  fixes it** (`StreamPlayer::set_device_timing`,
+  `PlayerViewConfig::device_timing`): the worker's frames, and the draw,
+  whose gfx profiler the view attaches only while the stats are open and the
+  timing is not off. Untimed, recon gets null metrics; the host and wait
+  halves stay. Why: a timestamp costs device time (recon's DECISIONS: a
+  command buffer's first costs about 0.13 ms on an M5 Max), and nobody reads
+  a closed panel; a measurement's "off" writes no timestamp anywhere.
+  gfx's profiler has no switch of its own: detached, the renderer's table is
+  empty rather than stale, and just after it reopens gfx's rate still
+  averages over the gap. `kSampled` is for measuring timing's cost (M4).
+  This replaces "decode's device time is always on" (2026-10-20).
+- **recon's breakdowns are forwarded** under the player's "decode" and
+  "mesh", which get recon's device time themselves, as core 0.20.0 counts a
+  tile to every scope open around it: the old loop that added "codec
+  decode"'s to "decode" would count it twice.
+- **Each stamp's device counts are the worker's since the last publish**,
+  counted on the worker, so a frame's counts are its own read, decode and
+  mesh, not whatever the worker began after it.
+- **The stage means are over the frames that have each row,** a row only
+  timed frames have kept under its stage, and the device state the highest
+  of the frames', as the core folds one. Why: with sampling, a breakdown's
+  mean is the timed frames', and a mean reads measured only when every frame
+  that timed the row measured it. The summarizer places rows by the same
+  rule.
+- **Two tables, each under its window** (`gfx::ui::StageWindow`). Why: one
+  table mixed stream frames and display frames.
+- **Compact stats on an iPhone** (`PlayerViewConfig::compact_stats`). Why:
+  gfx's three loop rows alone took the panel past the controls on the
+  shortest phone in landscape, and gfx's window line is wider than the
+  narrowest in portrait; an iPad has room for the full panel.
+- **One log format, written by the player** (`MeasureLog`). Why: every
+  measurement, desktop or phone, before or after a change, compares row for
+  row, and a log says what it measured and how it ran: through the view,
+  whose draw shares the GPU, or by the worker alone.
+- **A paused deblock toggle's rebuild is no frame** (`FrameStamp::rebuild`):
+  the log skips it as `PlaybackStats` does, and it is never timed. Why: it is
+  the frame before again, so a row for it would repeat that frame's place with
+  another stage's time, and a timestamp nobody reads only costs device time.
+- **`vp_probe --worker`**, the worker alone on the GPU the core picks, with
+  nothing drawn. Why: NVIDIA's ICD has no headless surface, so on the lab box
+  the view runs on lavapipe; the render rows wait for PL4, so the worker's
+  rows lose nothing. It validates as the core's test policy asks, so its
+  ctest runs are validated where the tests are.
+- **A measure launch that cannot log writes why** into a `.failed` file
+  beside the logs. Why: the runner cannot see the phone's screen.
+- **The runner, `tools/measure/measure`, runs from the Mac, which
+  orchestrates.** On the lab it keeps its own clone of the player in the
+  lab's scratch, holds a lock for the whole run, and builds with
+  `VP_DESKTOP_APP=OFF`. Why: it leaves the owner's checkout alone, two runs
+  cannot mix their checkout, build and logs, and it needs no GLFW, which the
+  lab lacks; GLFW stays the desktop app's prerequisite, never a download.
+  Two passes, the first a warm-up, and timing off then all, as M0 reads host
+  rows untimed and device rows timed. A phone run starts an app on the
+  owner's device, so it runs only with the owner's go-ahead.
+- **`mac` measures on the Mac itself, with the owner's go-ahead,** once the
+  Mac is idle, its load written beside each log. Why: the owner allowed it
+  with the iPhone away (2026-10-23: "you can measure on a mac"), and its GPU
+  is Apple's under MoltenVK, as a phone's is; the Mac is otherwise shared
+  and only orchestrates, so a run waits for it to be idle and says how busy
+  it was. It builds on the siblings' checkouts clean at their pins, as
+  `vp_build_info` reads clean, so it fetches only what no checkout has.
+- **iOS builds Release,** in CI's iOS step and the README: a measurement and
+  the owner's checks run what ships, not an `-O0` build.
+
 ## 2026-10-23 — The decoder-side deblock, on by default
 
 `StreamPlayer::set_deblock` and `deblock`; `FrameStamp`'s `deblock_on`,
@@ -40,9 +113,9 @@ desktop's D key, over recon #264's `Decoder::set_deblock`, `rebuild` and
 - **Deblock is a box after Normals, or, where that row would not fit the work
   area, on a row of its own below it:** a phone's row in portrait was 365 pt
   of 375 already. In landscape there is no height for a row: with the
-  deblock line the stats end 9 pt above the controls on the view tests'
-  shortest notched phone (lavapipe, 2026-10-23), and the row with Deblock is
-  488 pt wide.
+  deblock line and the stage tables the stats end 8 pt above the controls on
+  the view tests' shortest notched phone (lavapipe, 2026-10-24), and the row
+  with Deblock is 488 pt wide.
 - **The tests' true-SDF stream** codes the sphere with no unobserved voxel,
   so the deblock runs on it (filter R); the other streams' frames are
   masked, so it skips them.
@@ -130,7 +203,8 @@ how to run it.
 - **A `source.port` of 0, or none, keeps `LiveAddress`'s port,** recon's
   `networking::kDefaultPort`. Why: the sender's default has one home.
 - **`vp_live_probe` keeps its `host[:port]`:** a tool for agents, not a
-  program a scenario starts.
+  program a scenario starts. *`vp_probe` takes `--connect` since
+  2026-10-23.*
 
 ## 2026-10-21 — Live mode: a sender's stream over TCP
 
@@ -184,6 +258,7 @@ chunks, joined at the newest key.
 - **`vp_live_probe`** plays a live stream on gfx's headless surface and
   prints the panels' lines once a second: agents check a sender with it on a
   Mac, with no window. Mac only, as NVIDIA's ICD has no headless surface.
+  *Grown into `vp_probe` 2026-10-23.*
 
 ## 2026-10-20 — A stats panel that a tap on its header closes
 
@@ -213,7 +288,8 @@ chunks, joined at the newest key.
 - **Decode's device time is always on:** the worker passes a `StageMetrics` to
   `decode_growing`. Why: recon's A/B on the Mac shows no cost on a real
   workload, and without timestamps the timer does nothing. A switch waits for
-  an iPhone decode that looks inflated.
+  an iPhone decode that looks inflated. *Replaced 2026-10-23: timed while
+  the panel is open.*
 - **Its own panel at the work area's top left, open at launch,** with gfx's
   collapsible header (`begin_collapsible_panel`): a tap or click on it closes
   the panel and another opens it; only the header takes input, so a finger or
@@ -325,7 +401,8 @@ the sizes.
   turning off the desktop app, gfx's GLFW tier and the tests. The core links
   MoltenVK's iOS release statically and answers glm (the core's
   DECISIONS.md). Why: what every iOS consumer needs has one home.
-- **CI builds the iOS app** unsigned on the Debug Mac leg, and fails unless
+- **CI builds the iOS app** unsigned on the Release Mac leg (Debug until
+  2026-10-23), and fails unless
   it is an iOS binary (`LC_BUILD_VERSION` platform 2) that loads only the
   system's libraries. Why: only an app's link shows what an iOS link misses,
   such as MoltenVK's frameworks or a macOS glm, and a library build does not;

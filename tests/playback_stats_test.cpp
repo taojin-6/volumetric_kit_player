@@ -5,8 +5,10 @@
 // bitrate, and none below 2 records, over a pts span of 0 or from no track (a
 // live stream's); the nominal rate, and none when unknown; the stage means
 // over the last frames, as many as the nominal rate's frames a second (30
-// when unknown, at most 240), CPU over every frame and GPU over those that
-// have one, held while no frame comes; the rate frames are taken at over the
+// when unknown, at most 240), host and wait over every frame that has the row
+// and GPU over those that measured it, its state ranked, a row only timed
+// frames have kept under its stage, and the frames timed counted; held while
+// no frame comes; the rate frames are taken at over the
 // last second; and the bitrate and records a second their records brought,
 // over the frames published in the last second, so a pause in taking does
 // not crowd them into a moment. A paused toggle's rebuild of the frame before
@@ -22,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "volumetric_kit/core/base/stage_metrics.hpp"
@@ -126,6 +129,72 @@ TEST(PlaybackStats, NoGpuInTheWindowHasNoGpuMean) {
     stats.add_frame(frame(1.0), t0);
   }
   EXPECT_FALSE(mean_of(stats, "decode").has_gpu);
+  EXPECT_EQ(mean_of(stats, "decode").device, core::DeviceTime::None);
+}
+
+// Sampled: a timed frame's breakdowns keep their place under their stage
+// though the newest frame has none, each mean over the frames that have it;
+// the window counts its frames and those timed.
+TEST(PlaybackStats, RowsSomeFramesHaveStayUnderTheirStageMeanOverThoseFrames) {
+  PlaybackStats stats({}, {30, 1});
+  FrameStamp timed = frame(1.0, 4.0, 2.0);
+  timed.timed = true;
+  timed.stages.add_cpu("  ..rans decode", 1.5);
+  timed.stages.add_gpu("  ..rans decode", 1.0);
+  timed.stages.add_cpu("mesh", 3.0);
+  timed.stages.add_cpu("  ..dispatch", 2.0);
+  stats.add_frame(timed, t0);
+  for (int i = 0; i < 3; ++i) {
+    FrameStamp untimed = frame(1.0, 2.0);
+    untimed.stages.add_cpu("mesh", 1.0);
+    stats.add_frame(untimed, t0);
+  }
+  const std::vector<core::StageRow> means = stats.stage_means();
+  std::vector<std::string> names;
+  for (const core::StageRow& row : means) {
+    names.emplace_back(row.name);
+  }
+  EXPECT_EQ(names,
+            (std::vector<std::string>{"read", "decode", "  ..rans decode",
+                                      "mesh", "  ..dispatch"}));
+  EXPECT_DOUBLE_EQ(mean_of(stats, "decode").cpu_ms, 2.5);
+  EXPECT_DOUBLE_EQ(mean_of(stats, "decode").gpu_ms, 2.0);
+  EXPECT_DOUBLE_EQ(mean_of(stats, "  ..rans decode").cpu_ms, 1.5);
+  EXPECT_DOUBLE_EQ(mean_of(stats, "  ..rans decode").gpu_ms, 1.0);
+  EXPECT_DOUBLE_EQ(mean_of(stats, "mesh").cpu_ms, 1.5);
+  EXPECT_DOUBLE_EQ(mean_of(stats, "  ..dispatch").cpu_ms, 2.0);
+  EXPECT_EQ(stats.window_frames(), 4u);
+  EXPECT_EQ(stats.timed_frames(), 1u);
+}
+
+// A row's wait is its mean over the frames; its device state the highest of
+// theirs, so measured only when every frame that timed it measured it, its
+// time over those measured.
+TEST(PlaybackStats, WaitsAverageAndDeviceStatesRank) {
+  PlaybackStats stats({}, {30, 1});
+  for (const auto& [wait_ms, device] :
+       {std::pair{1.0, core::DeviceTime::Measured},
+        std::pair{3.0, core::DeviceTime::Measured},
+        std::pair{2.0, core::DeviceTime::None}}) {
+    FrameStamp stamp = frame(1.0, 4.0);
+    stamp.stages.add_wait("decode", wait_ms);
+    stamp.stages.add_device("decode", device, wait_ms);
+    stats.add_frame(stamp, t0);
+  }
+  core::StageRow decode = mean_of(stats, "decode");
+  EXPECT_DOUBLE_EQ(decode.wait_ms, 2.0);
+  EXPECT_EQ(decode.device, core::DeviceTime::Measured);
+  EXPECT_TRUE(decode.has_gpu);
+  EXPECT_DOUBLE_EQ(decode.gpu_ms, 2.0) << "over the two measured";
+  for (const core::DeviceTime worse :
+       {core::DeviceTime::NotTimed, core::DeviceTime::Unavailable}) {
+    FrameStamp stamp = frame(1.0, 4.0);
+    stamp.stages.add_device("decode", worse);
+    stats.add_frame(stamp, t0);
+    decode = mean_of(stats, "decode");
+    EXPECT_EQ(decode.device, worse);
+    EXPECT_FALSE(decode.has_gpu);
+  }
 }
 
 // The window is the nominal rate's frames a second, rounded: 25 at 25 fps, 30
@@ -200,6 +269,7 @@ TEST(PlaybackStats, ARebuildOfTheFrameBeforeIsNoFrame) {
   EXPECT_DOUBLE_EQ(stats.frames_per_s(now + milliseconds(5)), 10.0);
   EXPECT_DOUBLE_EQ(mean_of(stats, "read").cpu_ms, 2.0);
   EXPECT_DOUBLE_EQ(mean_of(stats, "decode").cpu_ms, 1.0);
+  EXPECT_EQ(stats.window_frames(), 3u);
 }
 
 // A live stream's view passes no track and no rate.

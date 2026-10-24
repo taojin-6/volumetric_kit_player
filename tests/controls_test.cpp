@@ -19,7 +19,10 @@
 // work area's top left; a finger on their header is ImGui's and on their body
 // the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
-// refresh; and their table is the stage means, then the renderer's rows.
+// refresh; and they are the stage means per stream frame, then the renderer's
+// rows per display frame under its rate, each table under the window it
+// covers. Compact, the worker's table leaves out its breakdowns, and the
+// renderer's sits beside it in a work area wider than tall.
 
 #include "volumetric_kit/player/controls.hpp"
 
@@ -49,10 +52,12 @@
 namespace {
 
 namespace core = volumetric_kit::core;
+namespace gfx = volumetric_kit::gfx;
 namespace stream = volumetric_kit::recon::stream;
 namespace ui = volumetric_kit::gfx::ui;
 using std::chrono::milliseconds;
 using std::chrono::seconds;
+using volumetric_kit::player::display_line;
 using volumetric_kit::player::draw_controls;
 using volumetric_kit::player::draw_source;
 using volumetric_kit::player::FrameStamp;
@@ -421,11 +426,19 @@ class ControlsTest : public ::testing::Test {
   }
 
   // The worker's frame `index` taken for drawing now, as the view's commit
-  // takes it.
+  // takes it: an odd one device-timed, its decode measured, and with
+  // `breakdowns_` a breakdown under its decode.
   void take(std::uint64_t index) {
     FrameStamp stamp = stamp_of(index, 2'000, index % 3 == 0);
+    stamp.timed = index % 2 == 1;
     stamp.stages.add_cpu("read", 0.5);
     stamp.stages.add_cpu("decode", 2.0);
+    if (stamp.timed) {
+      stamp.stages.add_gpu("decode", 0.7);
+    }
+    if (breakdowns_) {
+      stamp.stages.add_cpu("  ..rans decode", 1.0);
+    }
     stamp.stages.add_cpu("mesh", 1.0);
     stats_->add_frame(stamp, now());
     shown_ = std::move(stamp);
@@ -439,7 +452,8 @@ class ControlsTest : public ::testing::Test {
   StatsPanel panel_;
   std::optional<FrameStamp> shown_;
   std::uint32_t triangles_ = 0;
-  std::vector<core::StageRow> render_;
+  bool breakdowns_ = false;  // take() adds one
+  gfx::FrameMetrics render_;
   bool source_shown_ = false;
   int source_presses_ = 0;
   ui::EdgeInsets safe_area_;
@@ -728,20 +742,94 @@ TEST_F(ControlsTest, TheFiguresHoldUntilTheRefresh) {
   EXPECT_EQ(panel_.lines()[1], "frame P · 2.0 kB · 1 k tris");
 }
 
-TEST_F(ControlsTest, TheStatsTableIsTheStageMeansThenTheRenderersRows) {
-  render_ = {{"draw", 0.4, 0.3, true}};
+TEST(DisplayLine, StatesTheRateFramesAreDrawnAt) {
+  gfx::FrameMetrics render;
+  render.fps = 59.94;
+  EXPECT_EQ(display_line(render), "display 59.9 fps");
+  EXPECT_EQ(display_line({}), "display - fps") << "no rate yet, or no profiler";
+}
+
+// Two tables, each under its window: the stage means per stream frame, over
+// the frames taken and how many were timed, and the renderer's per display
+// frame, timed where a row was measured.
+TEST_F(ControlsTest,
+       TheStatsAreTheStageMeansThenTheRenderersEachUnderItsWindow) {
+  core::StageRow draw{"draw", 0.4, 0.3, true};
+  draw.device = core::DeviceTime::Measured;
+  render_.sections = {draw, {"frame wait", 15.0}};
+  render_.sections[1].wait_ms = 15.0;
   take(0);
+  take(1);
   // A frame past the refresh rebuilds.
   seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
   frame();
   const std::vector<core::StageRow>& rows = panel_.rows();
-  ASSERT_EQ(rows.size(), 4u);
+  ASSERT_EQ(rows.size(), 3u);
   EXPECT_STREQ(rows[0].name, "read");
   EXPECT_STREQ(rows[1].name, "decode");
   EXPECT_STREQ(rows[2].name, "mesh");
-  EXPECT_STREQ(rows[3].name, "draw");
   EXPECT_DOUBLE_EQ(rows[1].cpu_ms, 2.0);
-  EXPECT_TRUE(rows[3].has_gpu);
+  EXPECT_EQ(panel_.window().frames, 2u);
+  EXPECT_EQ(panel_.window().timed, 1u) << "frame 1 alone was timed";
+  EXPECT_STREQ(panel_.window().unit, "stream frame");
+  ASSERT_EQ(panel_.render_rows().size(), 2u);
+  EXPECT_STREQ(panel_.render_rows()[0].name, "draw");
+  EXPECT_STREQ(panel_.render_rows()[1].name, "frame wait");
+  EXPECT_EQ(panel_.render_window().frames, 1u);
+  EXPECT_EQ(panel_.render_window().timed, 1u);
+  EXPECT_STREQ(panel_.render_window().unit, "display frame");
+  // Untimed, the renderer's window says so.
+  render_.sections.resize(1);
+  render_.sections[0].device = core::DeviceTime::NotTimed;
+  seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  frame();
+  EXPECT_EQ(panel_.render_window().frames, 1u);
+  EXPECT_EQ(panel_.render_window().timed, 0u);
+  // With no rows, as with no profiler attached, it covers no frame.
+  render_.sections.clear();
+  seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  frame();
+  EXPECT_TRUE(panel_.render_rows().empty());
+  EXPECT_EQ(panel_.render_window().frames, 0u);
+}
+
+// Full, the worker's table holds its breakdowns, and the renderer's is below
+// it. Compact, as on a phone: the worker's table leaves them out, a table's
+// window is stated in fewer words, and in a work area wider than tall the
+// renderer's table is beside the worker's.
+TEST_F(ControlsTest, CompactStatsLeaveOutBreakdownsAndSitBesideWhenWide) {
+  render_.sections = {{"draw", 0.4}, {"frame wait", 15.0}};
+  breakdowns_ = true;
+  take(0);
+  for (const bool compact : {false, true}) {
+    SCOPED_TRACE(compact);
+    panel_ = StatsPanel(compact);
+    EXPECT_EQ(panel_.compact(), compact);
+    // Auto-sized, the columns take their sizes on their second frame, and
+    // the body on the one after.
+    for (int i = 0; i < 3; ++i) {
+      frame();
+    }
+    ASSERT_EQ(panel_.rows().size(), 4u) << "the breakdown is in the means";
+    const ImGuiTable* stages = vp_test::stats_table("stages");
+    const ImGuiTable* render = vp_test::stats_table("render");
+    ASSERT_NE(stages, nullptr);
+    ASSERT_NE(render, nullptr);
+    EXPECT_EQ(stages->CurrentRow, compact ? 3 : 4);
+    EXPECT_EQ(render->CurrentRow, 2);
+    if (!compact) {
+      EXPECT_GT(render->OuterRect.Min.y, stages->OuterRect.Max.y);
+      continue;
+    }
+    // display() is 400 x 300 points: wider than tall.
+    EXPECT_GT(render->OuterRect.Min.x, stages->OuterRect.Max.x);
+    EXPECT_LT(render->OuterRect.Min.y, stages->OuterRect.Max.y);
+    // The worker's column is narrower than gfx's line for its window, which
+    // compact states in fewer words.
+    const std::string line = "per stream frame · last 1 · GPU timed in 0";
+    EXPECT_LT(render->OuterRect.Min.x,
+              stages->OuterRect.Min.x + ImGui::CalcTextSize(line.c_str()).x);
+  }
 }
 
 }  // namespace

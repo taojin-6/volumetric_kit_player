@@ -48,7 +48,13 @@ void PlaybackStats::add_frame(const FrameStamp& stamp, Clock::time_point now) {
   if (stages_.size() == window_) {
     stages_.pop_front();
   }
-  stages_.push_back(stamp.stages.rows());
+  stages_.push_back({stamp.stages.rows(), stamp.timed});
+}
+
+std::uint32_t PlaybackStats::timed_frames() const noexcept {
+  return static_cast<std::uint32_t>(
+      std::count_if(stages_.begin(), stages_.end(),
+                    [](const Stages& frame) { return frame.timed; }));
 }
 
 std::optional<double> PlaybackStats::mean_mbit_per_s() const noexcept {
@@ -108,29 +114,52 @@ std::optional<double> PlaybackStats::per_second(
 }
 
 std::vector<core::StageRow> PlaybackStats::stage_means() const {
-  if (stages_.empty()) {
-    return {};
+  // The names in order: one a frame brings first goes after the row it
+  // follows there, so a breakdown stays under its stage.
+  std::vector<const char*> names;
+  for (const Stages& frame : stages_) {
+    std::size_t after = 0;
+    for (const core::StageRow& row : frame.rows) {
+      const auto found = std::find_if(
+          names.begin(), names.end(),
+          [&](const char* name) { return std::strcmp(name, row.name) == 0; });
+      if (found == names.end()) {
+        names.insert(names.begin() + static_cast<std::ptrdiff_t>(after),
+                     row.name);
+        ++after;
+      } else {
+        after = static_cast<std::size_t>(found - names.begin()) + 1;
+      }
+    }
   }
-  std::vector<core::StageRow> means = stages_.back();
-  for (core::StageRow& mean : means) {
-    double cpu_ms = 0.0;
-    double gpu_ms = 0.0;
-    int gpu_frames = 0;
-    for (const std::vector<core::StageRow>& frame : stages_) {
-      for (const core::StageRow& row : frame) {
-        if (std::strcmp(row.name, mean.name) != 0) {
+  std::vector<core::StageRow> means;
+  means.reserve(names.size());
+  for (const char* name : names) {
+    core::StageRow mean;
+    mean.name = name;
+    int frames = 0;
+    int measured = 0;
+    for (const Stages& frame : stages_) {
+      for (const core::StageRow& row : frame.rows) {
+        if (std::strcmp(row.name, name) != 0) {
           continue;
         }
-        cpu_ms += row.cpu_ms;
-        if (row.has_gpu) {
-          gpu_ms += row.gpu_ms;
-          ++gpu_frames;
+        ++frames;
+        mean.cpu_ms += row.cpu_ms;
+        mean.wait_ms += row.wait_ms;
+        // The states rank, as core::StageMetrics folds them.
+        mean.device = std::max(mean.device, row.device);
+        if (row.device == core::DeviceTime::Measured) {
+          mean.gpu_ms += row.gpu_ms;
+          ++measured;
         }
       }
     }
-    mean.cpu_ms = cpu_ms / static_cast<double>(stages_.size());
-    mean.has_gpu = gpu_frames > 0;
-    mean.gpu_ms = mean.has_gpu ? gpu_ms / gpu_frames : 0.0;
+    mean.cpu_ms /= frames;
+    mean.wait_ms /= frames;
+    mean.gpu_ms = measured > 0 ? mean.gpu_ms / measured : 0.0;
+    mean.has_gpu = mean.device == core::DeviceTime::Measured;
+    means.push_back(mean);
   }
   return means;
 }

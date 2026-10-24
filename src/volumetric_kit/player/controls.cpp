@@ -3,7 +3,9 @@
 
 #include "volumetric_kit/player/controls.hpp"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <string_view>
 #include <utility>
 
@@ -36,6 +38,27 @@ std::string rate_text(double fps) {
     text.pop_back();
   }
   return text;
+}
+
+// A column of the compact stats: a child window sized to what it holds, as a
+// table in it would otherwise take the body's whole width, taking no input,
+// as the body takes none.
+void begin_column(const char* id) {
+  ImGui::BeginChild(id, ImVec2(0.0f, 0.0f),
+                    ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY,
+                    ImGuiWindowFlags_NoInputs);
+}
+
+// A table of the compact stats under a short line stating `window`, as
+// gfx::ui::draw_stage_table's own, which a phone's width cannot hold, does:
+// "per stream frame · 30/30 timed".
+void draw_compact_table(const char* id, const std::vector<core::StageRow>& rows,
+                        const gfx::ui::StageWindow& window) {
+  const std::string line = std::string("per ") + window.unit + " · " +
+                           std::to_string(window.timed) + "/" +
+                           std::to_string(window.frames) + " timed";
+  ImGui::TextDisabled("%s", line.c_str());
+  gfx::ui::draw_stage_table(id, rows);
 }
 
 // A button's size: kButtonEms font sizes wide, a frame tall.
@@ -218,26 +241,68 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
           std::move(frame), std::move(deblock), std::move(rate)};
 }
 
+std::string display_line(const gfx::FrameMetrics& render) {
+  return "display " + (render.fps > 0.0 ? fixed(render.fps, 1) : "-") + " fps";
+}
+
 void StatsPanel::draw(const PlaybackStats& stats,
                       const std::optional<FrameStamp>& shown,
-                      std::uint32_t triangles,
-                      const std::vector<core::StageRow>& render,
+                      std::uint32_t triangles, const gfx::FrameMetrics& render,
                       Playback::Clock::time_point now, bool live) {
-  if (gfx::ui::begin_collapsible_panel(
-          kStatsWindow, "Stats", ImGui::GetMainViewport()->WorkPos, &open_)) {
-    // After the header, so the frame a tap opens it on is current.
-    if (!rebuilt_ || now - *rebuilt_ >= kRefresh) {
-      lines_ = stats_lines(stats, shown, triangles, now, live);
-      rows_ = stats.stage_means();
-      rows_.insert(rows_.end(), render.begin(), render.end());
-      rebuilt_ = now;
-    }
+  const ImGuiViewport* viewport = ImGui::GetMainViewport();
+  if (!gfx::ui::begin_collapsible_panel(kStatsWindow, "Stats",
+                                        viewport->WorkPos, &open_)) {
+    return;
+  }
+  // After the header, so the frame a tap opens it on is current.
+  if (!rebuilt_ || now - *rebuilt_ >= kRefresh) {
+    lines_ = stats_lines(stats, shown, triangles, now, live);
+    rows_ = stats.stage_means();
+    window_ = {stats.window_frames(), stats.timed_frames(), "stream frame"};
+    display_ = display_line(render);
+    render_rows_ = render.sections;
+    const bool timed =
+        std::any_of(render_rows_.begin(), render_rows_.end(),
+                    [](const core::StageRow& row) {
+                      return row.device == core::DeviceTime::Measured;
+                    });
+    render_window_ = {render_rows_.empty() ? 0u : 1u, timed ? 1u : 0u,
+                      "display frame"};
+    rebuilt_ = now;
+  }
+  if (!compact_) {
     for (const std::string& line : lines_) {
       ImGui::TextUnformatted(line.c_str());
     }
-    gfx::ui::draw_stage_table("stages", rows_);
+    gfx::ui::draw_stage_table("stages", rows_, window_);
+    ImGui::TextUnformatted(display_.c_str());
+    gfx::ui::draw_stage_table("render", render_rows_, render_window_);
     gfx::ui::end_collapsible_panel();
+    return;
   }
+  // Compact: the worker's table holds its stages alone, and a work area
+  // wider than tall has room for the renderer's beside it, not below.
+  std::vector<core::StageRow> stages;
+  for (const core::StageRow& row : rows_) {
+    if (std::strncmp(row.name, core::StageMetrics::kBreakdownPrefix,
+                     std::strlen(core::StageMetrics::kBreakdownPrefix)) != 0) {
+      stages.push_back(row);
+    }
+  }
+  begin_column("##worker");
+  for (const std::string& line : lines_) {
+    ImGui::TextUnformatted(line.c_str());
+  }
+  draw_compact_table("stages", stages, window_);
+  ImGui::EndChild();
+  if (viewport->WorkSize.x > viewport->WorkSize.y) {
+    ImGui::SameLine();
+  }
+  begin_column("##render");
+  ImGui::TextUnformatted(display_.c_str());
+  draw_compact_table("render", render_rows_, render_window_);
+  ImGui::EndChild();
+  gfx::ui::end_collapsible_panel();
 }
 
 }  // namespace volumetric_kit::player

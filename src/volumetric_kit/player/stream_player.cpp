@@ -4,6 +4,7 @@
 #include "volumetric_kit/player/stream_player.hpp"
 
 #include <chrono>
+#include <cstring>
 #include <utility>
 
 #include "volumetric_kit/core/base/exception_status.hpp"
@@ -46,6 +47,33 @@ core::Status nothing_shown(core::Status first_skip) {
   return std::move(first_skip).with_context(kWhat);
 }
 
+// `to` the rows of `from`, recon's, that are breakdowns, each half: its
+// stage's own row is the player's, open around the call.
+void forward_breakdowns(const core::StageMetrics& from,
+                        core::StageMetrics& to) {
+  const std::size_t prefix = std::strlen(core::StageMetrics::kBreakdownPrefix);
+  for (const core::StageRow& row : from.rows()) {
+    if (std::strncmp(row.name, core::StageMetrics::kBreakdownPrefix, prefix) !=
+        0) {
+      continue;
+    }
+    to.add_cpu(row.name, row.cpu_ms);
+    to.add_wait(row.name, row.wait_ms);
+    to.add_device(row.name, row.device, row.gpu_ms);
+  }
+}
+
+// What a device did between two of its counts.
+core::DeviceCounters since(const core::DeviceCounters& now,
+                           const core::DeviceCounters& then) {
+  core::DeviceCounters done;
+  done.submits = now.submits - then.submits;
+  done.host_waits = now.host_waits - then.host_waits;
+  done.blocked_ns = now.blocked_ns - then.blocked_ns;
+  done.staging_buffers = now.staging_buffers - then.staging_buffers;
+  return done;
+}
+
 // The index of `session`'s first geometry track; none without one.
 std::optional<std::uint16_t> first_geometry_track(
     const stream::Session& session) {
@@ -58,6 +86,18 @@ std::optional<std::uint16_t> first_geometry_track(
 }
 
 }  // namespace
+
+const char* to_string(DeviceTiming timing) noexcept {
+  switch (timing) {
+    case DeviceTiming::kOff:
+      return "off";
+    case DeviceTiming::kSampled:
+      return "sampled";
+    case DeviceTiming::kAll:
+      return "all";
+  }
+  return "off";
+}
 
 core::Result<LiveAddress> parse_live_address(std::string_view text) {
   const std::size_t colon = text.find(':');
@@ -330,12 +370,26 @@ core::Status StreamPlayer::build() {
       recon::mesh::MarchingCubes::create(*device_, *allocator_, config_));
   decoder_.emplace(std::move(decoder));
   extractor_.emplace(std::move(extractor));
+  counted_ = device_->counters();  // the first frame's from here
   return {};
+}
+
+bool StreamPlayer::time_next_frame() {
+  const std::uint64_t frame = frames_started_++;
+  switch (device_timing()) {
+    case DeviceTiming::kOff:
+      return false;
+    case DeviceTiming::kSampled:
+      return frame % kSampleEvery == 0;
+    case DeviceTiming::kAll:
+      return true;
+  }
+  return false;
 }
 
 core::Status StreamPlayer::play_track() {
   std::vector<std::uint8_t> payload;
-  for (;;) {
+  for (std::uint64_t pass = 1;; ++pass) {
     stream::Position pos = reader_->begin();
     std::uint64_t index = 0;  // the next record's place in this pass
     bool shown = false;       // a frame was shown in this pass
@@ -372,6 +426,7 @@ core::Status StreamPlayer::play_track() {
       // Decoded once due, so the grid holds the frame published last until
       // then (DECISIONS.md).
       Clock::time_point due_at{};
+      bool timed = false;
       if (status.ok()) {
         VKC_ASSIGN(const bool due, wait_due(record.info.pts_ns));
         if (!due) {
@@ -382,7 +437,8 @@ core::Status StreamPlayer::play_track() {
         if (!step) {
           return {};
         }
-        status = decode(payload, stages);
+        timed = time_next_frame();
+        status = decode(payload, stages, timed);
       }
       if (!status.ok()) {
         if (!skippable(status)) {
@@ -395,9 +451,15 @@ core::Status StreamPlayer::play_track() {
         continue;
       }
       count_shown(record.info.pts_ns, due_at);
-      FrameStamp stamp{frame,           record.info.pts_ns,        record.size,
-                       record.info.key, std::exchange(stages, {}), 1,
-                       record.size};
+      FrameStamp stamp;
+      stamp.index = frame;
+      stamp.pts_ns = record.info.pts_ns;
+      stamp.bytes = record.size;
+      stamp.key = record.info.key;
+      stamp.stages = std::exchange(stages, {});
+      stamp.record_bytes = record.size;
+      stamp.timed = timed;
+      stamp.pass = pass;
       stamp_deblock(stamp);
       last_ = stamp;
       last_->stages.clear();
@@ -490,10 +552,16 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
         return {};  // quit or parked: the record is dropped
       }
       core::StageMetrics stages;
-      const core::Status decoded = decode(payload, stages);
+      const bool timed = time_next_frame();
+      const core::Status decoded = decode(payload, stages, timed);
       if (decoded.ok()) {
-        newest = {record.info.seq, record.info.pts_ns, record.size,
-                  record.info.key, std::move(stages)};
+        newest = FrameStamp{};
+        newest.index = record.info.seq;
+        newest.pts_ns = record.info.pts_ns;
+        newest.bytes = record.size;
+        newest.key = record.info.key;
+        newest.stages = std::move(stages);
+        newest.timed = timed;
         stamp_deblock(newest);
         pending = true;
       } else if (!skippable(decoded)) {
@@ -549,23 +617,22 @@ core::Status StreamPlayer::make_grid(const std::vector<std::uint8_t>& payload) {
 }
 
 core::Status StreamPlayer::decode(const std::vector<std::uint8_t>& payload,
-                                  core::StageMetrics& stages) {
+                                  core::StageMetrics& stages, bool timed) {
   decoder_->set_deblock(deblock());
-  core::StageMetrics decoded;  // recon's rows, for the device's half
+  // recon's rows: with them it tags its commands, whose tiles count to every
+  // scope open around them, "decode" included; without, it writes no
+  // timestamp, and "decode" has its host and wait halves alone.
+  core::StageMetrics decoded;
   {
     const core::StageScope decode(stages, "decode");
     if (!grid_.has_value()) {
       VKC_TRY(make_grid(payload));
     }
     VKC_TRY(codec::decode_growing(*decoder_, payload.data(), payload.size(),
-                                  *grid_, kMaxFrameBlocks, &decoded));
+                                  *grid_, kMaxFrameBlocks,
+                                  timed ? &decoded : nullptr));
   }
-  // "codec decode" alone has a device span; its breakdowns are host time.
-  for (const core::StageRow& row : decoded.rows()) {
-    if (row.has_gpu) {
-      stages.add_gpu("decode", row.gpu_ms);
-    }
-  }
+  forward_breakdowns(decoded, stages);
   return {};
 }
 
@@ -626,6 +693,8 @@ bool StreamPlayer::rebuild_wanted() const {
 core::Result<bool> StreamPlayer::rebuild() {
   FrameStamp stamp = *last_;
   stamp.rebuild = true;
+  // Never timed: no frame, so no reader for its device halves (DECISIONS.md).
+  stamp.timed = false;
   {
     const Step step(*this);  // the rebuild
     if (!step) {
@@ -633,12 +702,11 @@ core::Result<bool> StreamPlayer::rebuild() {
     }
     const bool on = deblock();
     decoder_->set_deblock(on);
-    last_->deblock_on = on;      // tried: once a change
-    core::StageMetrics rebuilt;  // recon's row, for the device's half
+    last_->deblock_on = on;  // tried: once a change
     core::Status status;
     {
       const core::StageScope decode(stamp.stages, "decode");
-      status = decoder_->rebuild(*grid_, &rebuilt);
+      status = decoder_->rebuild(*grid_, nullptr);
     }
     if (!status.ok()) {
       // A grid a failed decode left as neither frame: the next frame shows
@@ -647,11 +715,6 @@ core::Result<bool> StreamPlayer::rebuild() {
         return true;
       }
       return status;
-    }
-    for (const core::StageRow& row : rebuilt.rows()) {
-      if (row.has_gpu) {
-        stamp.stages.add_gpu("decode", row.gpu_ms);
-      }
     }
     stamp_deblock(stamp);
     last_->deblock = stamp.deblock;
@@ -679,11 +742,17 @@ core::Result<bool> StreamPlayer::publish(FrameStamp stamp) {
 }
 
 core::Status StreamPlayer::mesh_and_publish(FrameStamp stamp) {
+  core::StageMetrics meshed;  // recon's rows, as decode's
   core::Result<recon::mesh::DeviceMesh> mesh = [&] {
     const core::StageScope extract(stamp.stages, "mesh");
-    return extractor_->extract_device(*grid_);
+    return extractor_->extract_device(*grid_, 0.0f, nullptr,
+                                      stamp.timed ? &meshed : nullptr);
   }();
   VKC_TRY(mesh.status());
+  forward_breakdowns(meshed, stamp.stages);
+  const core::DeviceCounters counted = device_->counters();
+  stamp.counters = since(counted, counted_);
+  counted_ = counted;
   stamp.published = Clock::now();
   exchange_->publish(mesh.value(), std::move(stamp));
   return {};

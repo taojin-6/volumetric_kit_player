@@ -77,11 +77,21 @@ class PlaybackStats {
   /// @return The records a second, as @ref rolling_mbit_per_s: their frames'
   ///         `records` in place of their bytes; 0 where it is empty.
   double records_per_s(Clock::time_point now) const;
-  /// @return Each row of the newest frame's stamp, in its order, as its mean
-  ///         over the window: CPU over every frame in it, GPU over those
-  ///         whose row has a device span (`has_gpu` false with none). Empty
+  /// @return Each row of the window's stamps as its mean over the frames
+  ///         that have it: in their order, a row only some frames have (a
+  ///         timed frame's breakdowns) after the row it follows there. Host
+  ///         and wait over each of those frames; the device half as
+  ///         `core::StageMetrics` folds one, its state the highest of theirs
+  ///         (`core::DeviceTime`), so measured only when every frame that
+  ///         timed it measured it, and its time over those measured. Empty
   ///         before the first frame.
   std::vector<core::StageRow> stage_means() const;
+  /// @return The frames the stage means are taken over: the window's.
+  std::uint32_t window_frames() const noexcept {
+    return static_cast<std::uint32_t>(stages_.size());
+  }
+  /// @return Of them, those whose device work was timed (`FrameStamp::timed`).
+  std::uint32_t timed_frames() const noexcept;
 
  private:
   // A frame taken: when, when it was published, and its records' count and
@@ -100,11 +110,17 @@ class PlaybackStats {
                                    Clock::time_point Taken::* when,
                                    double (*value)(const Taken&)) const;
 
+  // A frame's rows, and whether its device work was timed.
+  struct Stages {
+    std::vector<core::StageRow> rows;
+    bool timed = false;
+  };
+
   recon::stream::TrackStats track_;
   std::optional<double> nominal_fps_;
-  std::size_t window_ = 0;   // frames the stage means cover
-  std::deque<Taken> taken_;  // within a second of the newest
-  std::deque<std::vector<core::StageRow>> stages_;  // the window's, newest last
+  std::size_t window_ = 0;     // frames the stage means cover
+  std::deque<Taken> taken_;    // within a second of the newest
+  std::deque<Stages> stages_;  // the window's, newest last
 };
 
 }  // namespace volumetric_kit::player

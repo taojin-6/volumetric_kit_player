@@ -12,7 +12,7 @@
 // stream that opens, and a live scenario, which nothing refuses, exit 1 with
 // that refusal. A run not back within kPrompt, as a window's loop would not
 // be, is killed and fails the test. On the host: the scenarios in
-// config/examples/, and parse_count, which vp_live_probe's --frames and a
+// config/examples/, and parse_count, which vp_probe's --frames and a
 // live address's port take.
 
 #include <gtest/gtest.h>

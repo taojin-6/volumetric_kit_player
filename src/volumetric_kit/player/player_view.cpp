@@ -98,11 +98,14 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
                      std::move(profiler), std::move(recon_device),
                      std::move(recon_allocator), std::move(mesh_pipeline),
                      std::move(overlay), wiring.exchange, std::move(player)));
-  // In its place, as the loop keeps its address; the destructor detaches it.
-  view->app_.set_profiler(&view->profiler_);
   view->camera_.set_target({0.0f, 0.85f, 0.0f});
   view->camera_.set_distance(3.0f);
   view->source_button_ = config.source_button;
+  view->stats_panel_ = StatsPanel(config.compact_stats);
+  // The panel opens at launch, so its frames are timed from the first.
+  view->device_timing_ = config.device_timing;
+  view->player_->set_device_timing(
+      config.device_timing.value_or(DeviceTiming::kAll));
   VKC_TRY(view->player_->start(view->recon_device_, view->recon_allocator_,
                                wiring.mc, view->exchange_));
   return view;
@@ -135,8 +138,14 @@ PlayerView::~PlayerView() {
 
 core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   VKC_TRY(player_->status());
-  // 1. A skipped tick opens no ImGui frame. A frame begun opens the
-  // profiler's too.
+  // 1. The draw is timed as the worker is, while the stats show it as of the
+  // last frame: gfx's profiler marks every frame it is attached to, so it is
+  // attached only then, in its place (the loop keeps its address; the
+  // destructor detaches it). A skipped tick opens no ImGui frame. A frame
+  // begun opens the attached profiler's too.
+  const bool profiled =
+      stats_panel_.open() && player_->device_timing() != DeviceTiming::kOff;
+  app_.set_profiler(profiled ? &profiler_ : nullptr);
   VKC_ASSIGN(std::optional<gfx::windowing::Frame> begun,
              app_.begin_frame(extent));
   if (!begun) {
@@ -150,9 +159,18 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   if (source_button_ && draw_source()) {
     source_request_ = true;
   }
+  // Detached, the profiler's last figures are old: the renderer's table is
+  // empty.
+  static const gfx::FrameMetrics kUnprofiled;
   stats_panel_.draw(stats_, shown_, shown_triangles_,
-                    profiler_.metrics().sections, PlaybackStats::Clock::now(),
-                    player_->live());
+                    profiled ? profiler_.metrics() : kUnprofiled,
+                    PlaybackStats::Clock::now(), player_->live());
+  // The worker times its frames' device work while the panel shows it,
+  // unless a measurement fixed the timing.
+  if (!device_timing_) {
+    player_->set_device_timing(stats_panel_.open() ? DeviceTiming::kAll
+                                                   : DeviceTiming::kOff);
+  }
   // 3. The newest mesh, an empty one included; the slot's last frame has
   // completed. Each frame published is taken here once, and counted.
   exchange_.begin_frame(frame.slot, [this](const recon::mesh::DeviceMesh& mesh,
@@ -160,6 +178,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
     stats_.add_frame(stamp, PlaybackStats::Clock::now());
     shown_triangles_ = mesh.triangle_count;
     shown_ = std::move(stamp);
+    ++frames_taken_;
     player_->taken();
     return true;
   });
@@ -175,7 +194,8 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   {
     // The stats' "draw" row: CPU is the recording, GPU the device's time
     // where the graphics queue can time. It spans the whole pass, as Apple
-    // GPUs time only at a pass's bounds: inside, it reads about 0.
+    // GPUs time only at a pass's bounds: inside, it reads about 0. Inert
+    // while the profiler is detached.
     const gfx::Profiler::Scope timed = profiler_.gpu_scope(frame.cmd, "draw");
     frame.target->begin(frame.cmd, clear);
     const recon::mesh::DeviceMesh& mesh = exchange_.live();

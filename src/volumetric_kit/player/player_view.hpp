@@ -51,6 +51,15 @@ struct PlayerViewConfig {
   /// scenario's window.validation, and always in Debug; iOS has no layer
   /// (DECISIONS.md); the tests take it from VKC_TEST_VALIDATION.
   bool validation = false;
+  /// The stats compact, for a phone (StatsPanel): the iOS shell sets it on
+  /// an iPhone.
+  bool compact_stats = false;
+  /// The worker's device timing (StreamPlayer::set_device_timing), fixed, as
+  /// a measurement sets it. Empty, the default: every frame while the stats
+  /// panel is open, and none while it is closed. The draw is timed, every
+  /// display frame, only while the panel is open and the worker's timing is
+  /// not off.
+  std::optional<DeviceTiming> device_timing;
 };
 
 /// @brief The swapchain @ref PlayerView asks gfx for: gfx's FIFO default and
@@ -93,8 +102,10 @@ class PlayerView {
   /// @brief Make the shared device on @p surface (gfx::app::make_shared_device)
   ///        and adopt it for gfx (@ref view_swapchain, 2 frames in flight)
   ///        and for recon. Build the mesh pipeline, the overlay (no imgui.ini)
-  ///        and a gfx::Profiler for the stats' "draw" row, attached to the
-  ///        frame loop. Aim the camera at the first view: target (0, 0.85, 0),
+  ///        and a gfx::Profiler for the stats' "draw" row, which @ref frame
+  ///        attaches to the frame loop while the draw is timed
+  ///        (PlayerViewConfig::device_timing). Aim the camera at the first
+  ///        view: target (0, 0.85, 0),
   ///        3 m. Then start @p player; its worker builds its kernels, and it
   ///        plays unless the caller paused it.
   /// @param surface  The window system's source; its window or layer must
@@ -161,12 +172,20 @@ class PlayerView {
   bool ui_wants_pointer() const noexcept;
   /// @return The last stream frame drawn, for a read-out (the CI smoke).
   const std::optional<FrameStamp>& shown() const noexcept { return shown_; }
+  /// @return The stream frames taken for drawing so far, each once, and a
+  ///         paused toggle's rebuilds (FrameStamp::rebuild): a frame that
+  ///         raised it is @ref shown, for a measurement's log (MeasureLog,
+  ///         which writes no rebuild).
+  std::uint64_t frames_taken() const noexcept { return frames_taken_; }
+  /// @return The device the worker decodes and meshes on, for a
+  ///         measurement's device line (device_line).
+  const core::Device& compute_device() const noexcept { return recon_device_; }
   /// @return Its mesh, in the extractor's ring, for a read-out of its counts;
   ///         generation 0 before the first.
   const recon::mesh::DeviceMesh& mesh() const noexcept {
     return exchange_.live();
   }
-  /// @return The stats panel, for a read-out of its figures (vp_live_probe).
+  /// @return The stats panel, for a read-out of its figures (vp_probe).
   const StatsPanel& stats_panel() const noexcept { return stats_panel_; }
 
  private:
@@ -198,10 +217,12 @@ class PlayerView {
   bool normals_ = false;         // the mesh's shading (mesh_flags)
   bool source_button_ = false;   // frame() draws Source
   bool source_request_ = false;  // pressed since take_source_request
+  std::optional<DeviceTiming> device_timing_;  // fixed; else the panel's
   std::unique_ptr<StreamPlayer> player_;
   PlaybackStats stats_;  // from player_'s track
   std::optional<FrameStamp> shown_;
   std::uint32_t shown_triangles_ = 0;  // shown_'s mesh's
+  std::uint64_t frames_taken_ = 0;
   StatsPanel stats_panel_;
 };
 
