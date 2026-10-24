@@ -522,9 +522,10 @@ TEST_F(PlayerViewTest, ATapOnNormalsSwitchesTheMeshsFlags) {
   EXPECT_TRUE(view_->player().playing()) << "the taps pressed Normals alone";
 }
 
-// The true-SDF stream, which the deblock runs on, paused on frame 0: a tap
-// turns the deblock off, and the worker's rebuild of frame 0 is drawn; the
-// stats, past a refresh, say it is off.
+// The true-SDF stream, which the deblock runs on, paused on frame 0, none of
+// whose blocks it keeps exact, as the stats say: a tap turns the deblock
+// off, and the worker's rebuild of frame 0 is drawn; the stats, past a
+// refresh, say it is off.
 TEST_F(PlayerViewTest, ATapOnDeblockWhilePausedRebuildsTheFrameShown) {
   const std::string path =
       scratch_.copy(VP_TEST_STREAMS, vp_test::kTrueSdfStream);
@@ -534,10 +535,16 @@ TEST_F(PlayerViewTest, ATapOnDeblockWhilePausedRebuildsTheFrameShown) {
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
   EXPECT_TRUE(view_->shown()->deblock_on);
   EXPECT_STREQ(view_->shown()->deblock.filter, "R");
+  // Under 1,000 blocks, so their count has no thousands to group.
+  const std::uint32_t blocks = view_->shown()->deblock.block_count;
+  EXPECT_GT(blocks, 0u);
+  EXPECT_LT(blocks, 1'000u);
+  EXPECT_EQ(view_->shown()->deblock.exact_blocks, 0u);
   tick_for(2 * StatsPanel::kRefresh);
   const std::vector<std::string> before = view_->stats_panel().lines();
   ASSERT_EQ(before.size(), 4u);
-  EXPECT_EQ(before[2], "deblock R · T 1.962 mm");
+  EXPECT_EQ(before[2], "deblock R · T 1.962 mm · 0 of " +
+                           std::to_string(blocks) + " blocks exact");
   ImGui::SetCurrentContext(view_->ui_context());
   const ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
   ASSERT_NE(panel, nullptr);

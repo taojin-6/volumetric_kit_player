@@ -19,13 +19,15 @@
 // rather than polling for the take; a fatal error stops the worker,
 // a failed build on it included; start is refused once started or stopped.
 // Playing, no frame arrives before its pts says. The deblock is on by
-// default, and each frame says what it did: the true-SDF stream's filter, and
-// skipped on the masked sphere's; set before start, the first decode takes
-// it; toggled while paused, the frame shown, not the next, is rebuilt,
-// meshed and published again as a rebuild, never timed, with
-// nothing else going, at the end with loop off too, and parked only at
-// unpark; toggled while playing,
-// the frames after take it with no rebuild. A park holds the worker:
+// default, and each frame says what it did, its filter and its blocks, the
+// exact ones among them: the true-SDF stream's, none exact, each mesh unlike
+// its rebuild with the deblock off; the masked sphere's, its blocks holding
+// an unobserved voxel exact, each mesh like that rebuild exactly when all
+// are; set before start, the first decode takes it; toggled while paused, the
+// frame shown, not the next, is rebuilt, meshed and published again as a
+// rebuild, never timed, with nothing else going, at the end with loop off
+// too, and parked only at unpark; toggled while playing, the frames after
+// take it with no rebuild. A park holds the worker:
 // nothing is published while parked, an extract waiting for the consumer
 // included; a control applied meanwhile (a step, a play and a pause) takes
 // effect at unpark; playing() does not change; unpark carries on from the
@@ -73,6 +75,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -331,31 +334,108 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     return read.indexCount;
   }
 
-  // The mean x of the mesh's vertices on the device, in metres: about its
-  // frame's sphere's centre, kMetresAFrame times the frame.
-  double mean_x(const recon::mesh::DeviceMesh& mesh) {
+  // The mesh's vertices, read back from the device; none, with a failure
+  // recorded, for an empty mesh.
+  std::vector<recon::mesh::Vertex> vertices(
+      const recon::mesh::DeviceMesh& mesh) {
     const VkDeviceSize size =
         VkDeviceSize{mesh.vertex_count} * sizeof(recon::mesh::Vertex);
     if (size == 0) {
       ADD_FAILURE() << "an empty mesh";
-      return 0.0;
+      return {};
     }
     // A view of the extractor's buffer: its deleter frees nothing.
-    const core::Buffer vertices(
+    const core::Buffer buffer(
         mesh.vertices, size, mesh.vertex_usage, mesh.sharing_mode, nullptr,
         [] {}, std::nullopt);
     std::vector<recon::mesh::Vertex> read(mesh.vertex_count);
     core::CommandBatch batch(device(), allocator());
-    core::Status status = batch.readback(vertices, 0, size, read.data());
+    core::Status status = batch.readback(buffer, 0, size, read.data());
     if (status.ok()) {
       status = batch.submit();
     }
     EXPECT_TRUE(status.ok()) << status.message();
+    return read;
+  }
+
+  // The mean x of the mesh's vertices on the device, in metres: about its
+  // frame's sphere's centre, kMetresAFrame times the frame.
+  double mean_x(const recon::mesh::DeviceMesh& mesh) {
+    const std::vector<recon::mesh::Vertex> read = vertices(mesh);
+    if (read.empty()) {
+      return 0.0;
+    }
     double sum = 0.0;
     for (const recon::mesh::Vertex& vertex : read) {
       sum += vertex.position.x;
     }
     return sum / static_cast<double>(read.size());
+  }
+
+  // The positions of the mesh's vertices, sorted, so two extracts of the same
+  // voxels compare equal in whatever order the device wrote them.
+  std::vector<std::array<float, 3>> positions(
+      const recon::mesh::DeviceMesh& mesh) {
+    std::vector<std::array<float, 3>> sorted;
+    for (const recon::mesh::Vertex& vertex : vertices(mesh)) {
+      sorted.push_back(
+          {vertex.position.x, vertex.position.y, vertex.position.z});
+    }
+    std::sort(sorted.begin(), sorted.end());
+    return sorted;
+  }
+
+  // Each frame's blocks, as its header counts them (recon's
+  // codec::read_frame_info), in file order.
+  std::vector<std::uint32_t> block_counts() {
+    std::vector<std::uint32_t> counts;
+    core::Result<std::unique_ptr<stream::StreamReader>> reader =
+        stream::StreamReader::open(path_);
+    EXPECT_TRUE(reader.ok()) << reader.status().message();
+    if (!reader.ok()) {
+      return counts;
+    }
+    for (const stream::Record& record : records()) {
+      Bytes payload;
+      const core::Status read = (*reader)->read(record, &payload);
+      EXPECT_TRUE(read.ok()) << read.message();
+      const core::Result<recon::codec::FrameInfo> info =
+          recon::codec::read_frame_info(payload.data(), payload.size());
+      EXPECT_TRUE(info.ok()) << info.status().message();
+      counts.push_back(info.ok() ? info->block_count : 0);
+    }
+    return counts;
+  }
+
+  // Frame `frame`, just shown paused with the deblock on, which ran `filter`
+  // on its `blocks` and kept `exact` of them at their exact decode: rebuilt
+  // with the deblock off, which keeps every block exact, its mesh is the
+  // same exactly when the deblock kept every block; and rebuilt with it on
+  // again, it is as shown. So the next step decodes with the deblock on.
+  void expect_deblock_against_off(std::uint64_t frame, const char* filter,
+                                  std::uint32_t blocks, std::uint32_t exact) {
+    StreamPlayer& player = *player_;
+    const std::vector<std::array<float, 3>> on = positions(exchange_.live());
+    ASSERT_FALSE(on.empty());
+    player.set_deblock(false);
+    const std::optional<FrameStamp> off = next_frame();
+    ASSERT_TRUE(off.has_value()) << "no rebuild of frame " << frame;
+    EXPECT_TRUE(off->rebuild);
+    EXPECT_EQ(off->index, frame);
+    EXPECT_STREQ(off->deblock.filter, "off");
+    EXPECT_EQ(off->deblock.block_count, blocks);
+    EXPECT_EQ(off->deblock.exact_blocks, blocks);
+    EXPECT_EQ(positions(exchange_.live()) == on, exact == blocks)
+        << "frame " << frame << ", " << exact << " of " << blocks
+        << " blocks exact";
+    player.set_deblock(true);
+    const std::optional<FrameStamp> again = next_frame();
+    ASSERT_TRUE(again.has_value()) << "no rebuild of frame " << frame;
+    EXPECT_TRUE(again->rebuild);
+    EXPECT_STREQ(again->deblock.filter, filter);
+    EXPECT_EQ(again->deblock.block_count, blocks);
+    EXPECT_EQ(again->deblock.exact_blocks, exact);
+    EXPECT_EQ(positions(exchange_.live()), on);
   }
 
   // The test's stream is the true-SDF one, which the deblock runs on.
@@ -1247,8 +1327,13 @@ TEST_F(StreamPlayerTest, AParkBeforeStartOrAfterStopReturnsAtOnce) {
   EXPECT_TRUE(player_->status().ok()) << player_->status().message();
 }
 
+// The true-SDF stream has no unobserved voxel, so the deblock filters every
+// block of each frame, and keeps none at its exact decode: each frame's mesh
+// differs from its rebuild with the deblock off.
 TEST_F(StreamPlayerTest, TheDeblockIsOnByDefaultAndEachFrameSaysWhatItDid) {
   ASSERT_NO_FATAL_FAILURE(use_true_sdf());
+  const std::vector<std::uint32_t> blocks = block_counts();
+  ASSERT_EQ(blocks.size(), kFrames);
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   EXPECT_TRUE(player->deblock());
@@ -1261,24 +1346,38 @@ TEST_F(StreamPlayerTest, TheDeblockIsOnByDefaultAndEachFrameSaysWhatItDid) {
     EXPECT_TRUE(frame->deblock_on);
     EXPECT_STREQ(frame->deblock.filter, "R") << "frame " << i;
     EXPECT_NEAR(frame->deblock.step, kTrueSdfStep, kStepError);
+    EXPECT_GT(blocks[i], 0u);
+    EXPECT_EQ(frame->deblock.block_count, blocks[i]) << "frame " << i;
+    EXPECT_EQ(frame->deblock.exact_blocks, 0u) << "frame " << i;
     EXPECT_NEAR(mean_x(exchange_.live()), kMetresAFrame * i, 0.02);
+    ASSERT_NO_FATAL_FAILURE(expect_deblock_against_off(i, "R", blocks[i], 0));
   }
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-// The sphere's frames have unobserved voxels, so recon skips them: the
-// deblock is on, its filter "off".
-TEST_F(StreamPlayerTest, TheDeblockSkipsTheMaskedSpheresFrames) {
+// The sphere's frames hold an unobserved voxel in every block (4 voxels of
+// truncation, 8 a block), so the deblock's per-block fallback keeps them all
+// at their exact decode, under the filter the frame's T picks, LG: no frame
+// is skipped, and each mesh is its rebuild's with the deblock off.
+TEST_F(StreamPlayerTest, TheDeblockKeepsTheMaskedSpheresBlocksExact) {
+  const std::vector<std::uint32_t> blocks = block_counts();
+  ASSERT_EQ(blocks.size(), kFrames);
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   for (std::uint64_t i = 0; i < kFrames; ++i) {
     player->step();
     const std::optional<FrameStamp> frame = next_frame();
     ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_FALSE(frame->rebuild);
     EXPECT_TRUE(frame->deblock_on);
-    EXPECT_STREQ(frame->deblock.filter, "off") << "frame " << i;
+    EXPECT_STREQ(frame->deblock.filter, "LG") << "frame " << i;
     EXPECT_NEAR(frame->deblock.step, kSphereStep, kStepError);
+    EXPECT_GT(blocks[i], 0u);
+    EXPECT_EQ(frame->deblock.block_count, blocks[i]) << "frame " << i;
+    EXPECT_EQ(frame->deblock.exact_blocks, blocks[i]) << "frame " << i;
+    ASSERT_NO_FATAL_FAILURE(
+        expect_deblock_against_off(i, "LG", blocks[i], blocks[i]));
   }
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
@@ -2032,9 +2131,12 @@ TEST_F(LivePlayerTest, FramesArriveWithTheirSeqAsTheirIndex) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-// The sphere's frames are masked, so the deblock skips them; the setting each
-// carries is the decoder's at its record.
+// The setting each frame carries, and what the deblock did to it, are the
+// decoder's at its record: on, the sphere's filter, LG; off, none; every
+// block exact either way, as each holds an unobserved voxel.
 TEST_F(LivePlayerTest, ADeblockToggleReachesTheNextRecord) {
+  const std::vector<std::uint32_t> blocks = block_counts();
+  ASSERT_EQ(blocks.size(), kFrames);
   const std::unique_ptr<networking::StreamServer> server = serve();
   ASSERT_NE(server, nullptr);
   StreamPlayer* player = start_live(server->port());
@@ -2048,8 +2150,10 @@ TEST_F(LivePlayerTest, ADeblockToggleReachesTheNextRecord) {
     ASSERT_TRUE(frame.has_value()) << "no frame " << i;
     EXPECT_EQ(frame->index, i);
     EXPECT_EQ(frame->deblock_on, on) << "frame " << i;
-    EXPECT_STREQ(frame->deblock.filter, "off");
+    EXPECT_STREQ(frame->deblock.filter, on ? "LG" : "off");
     EXPECT_NEAR(frame->deblock.step, kSphereStep, kStepError);
+    EXPECT_EQ(frame->deblock.block_count, blocks[i]) << "frame " << i;
+    EXPECT_EQ(frame->deblock.exact_blocks, blocks[i]) << "frame " << i;
     EXPECT_FALSE(frame->rebuild);
   }
   EXPECT_TRUE(player->status().ok()) << player->status().message();

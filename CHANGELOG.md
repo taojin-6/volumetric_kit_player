@@ -63,9 +63,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the desktop's D key turn it on and off (`StreamPlayer::set_deblock`
   and `deblock`), and while paused the frame shown is rebuilt with the
   change and drawn again (`FrameStamp::rebuild`). The stats say what it did
-  to the frame drawn, off, its filter or skipped, and the frame's T
-  (`FrameStamp::deblock_on` and `deblock`). The iOS app keeps the choice
-  for the next source.
+  to the frame drawn, off or its filter, the frame's T and, after a filter,
+  how many of its blocks recon's per-block fallback (recon #274) kept at
+  their exact decode, as "deblock LG · T 0.490 mm · 12 of 1,920 blocks
+  exact" (`FrameStamp::deblock_on` and `deblock`); a stats line too wide for
+  the screen breaks before its last part. The iOS app keeps the choice for
+  the next source.
 - Device timing on demand: `StreamPlayer::set_device_timing` (`DeviceTiming`
   off, sampled one frame in `kSampleEvery`, or all), set by the view every
   frame while the stats are open, or fixed by a measurement
@@ -89,7 +92,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `summarize.py`'s markdown of them (mean, p50, p95; counts per frame; a
   Mac run's load; a diff of two).
 - `PlayerViewConfig::compact_stats`, which the iOS app sets on an iPhone: no
-  breakdown rows, and in landscape the two tables side by side.
+  breakdown rows, the rate over the renderer's table, and in landscape the
+  two tables side by side.
 - build: `VP_DESKTOP_APP` (ON on a desktop): OFF builds the library, the
   tests but `cli_test`, and `vp_probe` with no GLFW, as the runner does on
   the lab.
@@ -97,7 +101,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - build: the player pins core main at #50's merge (0daced5, 0.20.0), gfx
-  main at #153's merge (123d013) and recon main at #272's merge (fb24de7),
+  main at #153's merge (123d013) and recon main at #274's merge (27bf656),
   and requires core 0.20.0, which gfx and recon need too. The view presents
   FIFO as gfx's default (gfx #150), naming no mode.
 - The stats show two tables, each under the window it covers: the worker's

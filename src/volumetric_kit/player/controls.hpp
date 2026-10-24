@@ -110,10 +110,11 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 ///
 /// @code
 /// // {"bitrate 11.8 Mbit/s", "frame P · 41.2 kB · 182 k tris",
-/// //  "deblock LG · T 0.500 mm", "rate 29.8 / 30 fps"}
+/// //  "deblock LG · T 0.500 mm · 12 of 1,920 blocks exact",
+/// //  "rate 29.8 / 30 fps"}
 /// const auto lines = stats_lines(stats, shown, triangles, now, false);
 /// // live: {"bitrate 9.7 Mbit/s · last 1 s", "frame P · ...",
-/// //        "deblock skipped · T 0.500 mm", "rate 29.8 fps · 30 rec/s"}
+/// //        "deblock off · T 0.500 mm", "rate 29.8 fps · 30 rec/s"}
 /// @endcode
 /// @param stats      The figures.
 /// @param shown      The newest frame drawn; empty before the first.
@@ -123,13 +124,14 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 /// @return The track's mean bitrate, or live its bitrate over the last
 ///         second (`-` when unknown); the frame's type (I for a key record,
 ///         else P), payload and triangles (each `-` before the first); what
-///         the deblock did to it (FrameStamp::deblock): `off` with the
-///         deblock off, the filter recon ran (`LF`, `LG` or `R`), or
-///         `skipped` with the deblock on but no filter run, for a frame
-///         recon's mask gate skips (`codec::Decoder::set_deblock`) or whose
-///         T is finer than every filter's, then its T to the micrometre (each
-///         `-` before the first); and the rate frames are taken at, over the
-///         nominal when it is known, or live beside the records a second.
+///         the deblock did to it (FrameStamp::deblock): the filter recon ran
+///         (`LF`, `LG` or `R`) or `off`, for the deblock off or a T finer
+///         than every filter's, then its T to the micrometre (each `-`
+///         before the first), and after a filter how many of the frame's
+///         blocks recon's per-block fallback kept at their exact decode
+///         (`codec::DeblockInfo::exact_blocks`); and the rate frames are
+///         taken at, over the nominal when it is known, or live beside the
+///         records a second.
 std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
@@ -156,6 +158,10 @@ std::string display_line(const gfx::FrameMetrics& render);
 ///        stating its gfx::ui::StageWindow). Only the header takes input: a
 ///        finger or the mouse on the body reaches the camera.
 ///
+/// A line wider than the room it has breaks before its last " · ", the rest
+/// indented below it, so the panel stays on screen: the deblock line with its
+/// blocks on a phone.
+///
 /// It opens at launch, and a tap or click on the header closes and opens it.
 /// While it is open its figures are rebuilt every @ref kRefresh, so the
 /// digits stay readable; while it is closed nothing is rebuilt, but the
@@ -164,8 +170,9 @@ std::string display_line(const gfx::FrameMetrics& render);
 ///
 /// **Compact**, for a phone: the worker's table without its breakdown rows,
 /// each table's window stated on a shorter line ("per stream frame · 30/30
-/// timed"), and, in a work area wider than tall, the renderer's table beside
-/// the worker's.
+/// timed"), the rate over the renderer's table, and, in a work area wider than
+/// tall, the renderer's table beside the worker's, whose lines have the width
+/// it leaves them.
 ///
 /// @code
 /// StatsPanel panel(/*compact=*/is_phone);
@@ -230,6 +237,7 @@ class StatsPanel {
   std::string display_;
   std::vector<core::StageRow> render_rows_;
   gfx::ui::StageWindow render_window_;
+  float render_width_ = 0.0f;  // compact: the renderer's column, last frame
   std::optional<Playback::Clock::time_point> rebuilt_;
 };
 

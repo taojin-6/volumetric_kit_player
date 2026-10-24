@@ -3,7 +3,8 @@
 
 // The controls and the stats panel on the host: status_line's,
 // live_status_line's and stats_lines' wording, file and live, the deblock's
-// for each filter, off and skipped; live_reason; parse_live_address; and
+// for each filter with some, none or all of its blocks exact, and off;
+// live_reason; parse_live_address; and
 // draw_controls and StatsPanel on a CPU-only ImGui context fed by gfx's
 // ImGuiTouch, over a stream opened but not started. A tap on Play/Pause flips
 // playing(), Step pauses, Loop toggles, Normals flips the view's shading and
@@ -19,10 +20,13 @@
 // work area's top left; a finger on their header is ImGui's and on their body
 // the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
-// refresh; and they are the stage means per stream frame, then the renderer's
-// rows per display frame under its rate, each table under the window it
-// covers. Compact, the worker's table leaves out its breakdowns, and the
-// renderer's sits beside it in a work area wider than tall.
+// refresh; a line too wide for the work area, the deblock's at the block
+// ceiling on a phone in portrait, breaks before its blocks, and takes one row
+// where it fits; and they are the stage means per stream frame, then the
+// renderer's rows per display frame under its rate, each table under the
+// window it covers. Compact, the worker's table leaves out its breakdowns,
+// the renderer's sits beside it in a work area wider than tall, the rate
+// over it, and a line breaks against the room its column has.
 
 #include "volumetric_kit/player/controls.hpp"
 
@@ -31,6 +35,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -116,22 +121,36 @@ TEST(StatsLines, SayDashForTheFrameBeforeTheFirst) {
                    "deblock - · T - mm", "rate 0.0 / 30 fps"}));
 }
 
-// recon's filter names as they come, "off" with the deblock off, and
-// "skipped" when it was on and ran none; T to the micrometre either way.
-TEST(StatsLines, SayWhatTheDeblockDidAndTheFramesT) {
+// recon's filter names as they come, T to the micrometre, and the blocks its
+// per-block fallback kept at their exact decode, some, none or all, with
+// their thousands grouped; "off", with no count, for the deblock off and for
+// no filter run.
+TEST(StatsLines, SayWhatTheDeblockDidTheFramesTAndItsExactBlocks) {
   const PlaybackStats stats(a_track(), {30, 1});
-  const auto line = [&](bool on, const char* filter, float step) {
+  const auto line = [&](bool on, const char* filter, float step,
+                        std::uint32_t exact, std::uint32_t blocks) {
     FrameStamp stamp = stamp_of(7, 41'234, false);
     stamp.deblock_on = on;
     stamp.deblock.filter = filter;
     stamp.deblock.step = step;
+    stamp.deblock.exact_blocks = exact;
+    stamp.deblock.block_count = blocks;
     return stats_lines(stats, stamp, 182'364, t0, false)[2];
   };
-  EXPECT_EQ(line(true, "LF", 0.000125f), "deblock LF · T 0.125 mm");
-  EXPECT_EQ(line(true, "LG", 0.0005f), "deblock LG · T 0.500 mm");
-  EXPECT_EQ(line(true, "R", 0.002f), "deblock R · T 2.000 mm");
-  EXPECT_EQ(line(true, "off", 0.0005f), "deblock skipped · T 0.500 mm");
-  EXPECT_EQ(line(false, "off", 0.0005f), "deblock off · T 0.500 mm");
+  EXPECT_EQ(line(true, "LF", 0.0002f, 12, 1'920),
+            "deblock LF · T 0.200 mm · 12 of 1,920 blocks exact");
+  EXPECT_EQ(line(true, "LG", 0.0005f, 0, 1'920),
+            "deblock LG · T 0.500 mm · 0 of 1,920 blocks exact");
+  EXPECT_EQ(line(true, "R", 0.002f, 131'072, 131'072),
+            "deblock R · T 2.000 mm · 131,072 of 131,072 blocks exact");
+  EXPECT_EQ(line(true, "LG", 0.0005f, 999, 1'000),
+            "deblock LG · T 0.500 mm · 999 of 1,000 blocks exact");
+  EXPECT_EQ(line(true, "R", 0.002f, 1, 1),
+            "deblock R · T 2.000 mm · 1 of 1 block exact");
+  EXPECT_EQ(line(true, "off", 0.00005f, 1'920, 1'920),
+            "deblock off · T 0.050 mm");
+  EXPECT_EQ(line(false, "off", 0.0005f, 1'920, 1'920),
+            "deblock off · T 0.500 mm");
 }
 
 TEST(StatsLines, NameTheFramesTypeBytesAndTrianglesAndTheRate) {
@@ -167,13 +186,16 @@ TEST(StatsLines, LiveTheyShowTheLastSecondsBitrateAndRecords) {
             (Lines{"bitrate - Mbit/s · last 1 s", "frame - · - kB · - k tris",
                    "deblock - · T - mm", "rate 0.0 fps · 0 rec/s"}));
   // 11 frames 100 ms apart, each taken as it is published after 3 records of
-  // 12.5 kB: 3 Mbit/s, 30 records a second. A room's masked frames: the
-  // deblock skipped them.
+  // 12.5 kB: 3 Mbit/s, 30 records a second. A fused room's frames: every
+  // block holds an unobserved voxel, so the fallback kept them all exact.
   FrameStamp taken = stamp_of(0, 12'500, false);
   taken.records = 3;
   taken.record_bytes = 3 * 12'500;
   taken.deblock_on = true;
+  taken.deblock.filter = "LG";
   taken.deblock.step = 0.0005f;
+  taken.deblock.block_count = 1'920;
+  taken.deblock.exact_blocks = 1'920;
   for (int i = 0; i <= 10; ++i) {
     taken.published = t0 + milliseconds(100 * i);
     stats.add_frame(taken, taken.published);
@@ -181,7 +203,8 @@ TEST(StatsLines, LiveTheyShowTheLastSecondsBitrateAndRecords) {
   EXPECT_EQ(
       stats_lines(stats, taken, 1'200, t0 + seconds(1), true),
       (Lines{"bitrate 3.0 Mbit/s · last 1 s", "frame P · 12.5 kB · 1 k tris",
-             "deblock skipped · T 0.500 mm", "rate 10.0 fps · 30 rec/s"}));
+             "deblock LG · T 0.500 mm · 1,920 of 1,920 blocks exact",
+             "rate 10.0 fps · 30 rec/s"}));
 }
 
 TEST(LiveStatusLine, SaysConnectingThenWhyItReconnects) {
@@ -376,6 +399,19 @@ class ControlsTest : public ::testing::Test {
         (std::string(kStatsWindow) + "##body").c_str());
   }
 
+  // The compact stats' column `id`, "##worker" or "##render": a child window
+  // of the body, which ImGui names after its id; null before it is drawn.
+  static const ImGuiWindow* stats_column(const char* id) {
+    const ImGuiWindow* const body = stats_body();
+    for (const ImGuiWindow* window : ImGui::GetCurrentContext()->Windows) {
+      if (body != nullptr && window->ParentWindow == body &&
+          std::strstr(window->Name, id) != nullptr) {
+        return window;
+      }
+    }
+    return nullptr;
+  }
+
   static glm::vec2 middle(const ImGuiWindow& window) {
     return {window.Pos.x + 0.5f * window.Size.x,
             window.Pos.y + 0.5f * window.Size.y};
@@ -443,6 +479,17 @@ class ControlsTest : public ::testing::Test {
     stats_->add_frame(stamp, now());
     shown_ = std::move(stamp);
     triangles_ = 1'200;
+  }
+
+  // The frame shown at the block ceiling, every block exact, under LG at
+  // T 0.5 mm with the deblock `on`, which makes its line the widest; off, its
+  // line is short. A frame is taken first.
+  void deblock_at_the_ceiling(bool on) {
+    shown_->deblock_on = on;
+    shown_->deblock.filter = on ? "LG" : "off";
+    shown_->deblock.step = 0.0005f;
+    shown_->deblock.block_count = volumetric_kit::player::kMaxFrameBlocks;
+    shown_->deblock.exact_blocks = volumetric_kit::player::kMaxFrameBlocks;
   }
 
   vp_test::Scratch scratch_;
@@ -740,6 +787,72 @@ TEST_F(ControlsTest, TheFiguresHoldUntilTheRefresh) {
   seconds_ += refresh;
   frame();
   EXPECT_EQ(panel_.lines()[1], "frame P · 2.0 kB · 1 k tris");
+}
+
+// The deblock line at the block ceiling, the widest it gets. At this
+// context's scale, 288 points is the narrowest phone's 375 in portrait at the
+// iOS shell's 1.3, and 625 the shortest notched one's 812 in landscape. Full,
+// as on a desktop, the line breaks before its blocks on the first, one row
+// more, and takes one row on the second.
+TEST_F(ControlsTest, ALineTooWideForTheWorkAreaBreaksBeforeItsLastPart) {
+  take(0);
+  deblock_at_the_ceiling(true);
+  seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  // An auto-sized window takes its size on its second frame.
+  const auto body_at = [&](std::uint32_t width) {
+    width_ = width;
+    frame();
+    frame();
+    return stats_body();
+  };
+  const float wide_height = body_at(625)->ContentSize.y;
+  ASSERT_EQ(panel_.lines()[2],
+            "deblock LG · T 0.500 mm · 131,072 of 131,072 blocks exact");
+  EXPECT_FLOAT_EQ(body_at(288)->ContentSize.y,
+                  wide_height + ImGui::GetTextLineHeightWithSpacing());
+}
+
+// Compact, as on a phone, the rate sits in the renderer's column, and a line
+// breaks against the room left it: the work area's width in portrait (288
+// points), and in landscape (560) the width the renderer's column beside it
+// leaves, though the work area alone would hold the line. Either way the
+// deblock line at the block ceiling leaves the worker's column one row taller
+// than the deblock off's short line does, and the body fits the work area.
+TEST_F(ControlsTest, CompactALineBreaksAgainstTheRoomItsColumnHas) {
+  panel_ = StatsPanel(/*compact=*/true);
+  take(0);
+  // The worker's column at `width`, past a refresh. Columns take their sizes
+  // on their second frame, and the body on the one after.
+  const auto worker_at = [&](std::uint32_t width, bool deblock_on) {
+    deblock_at_the_ceiling(deblock_on);
+    width_ = width;
+    seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
+    for (int i = 0; i < 3; ++i) {
+      frame();
+    }
+    return stats_column("##worker");
+  };
+  for (const std::uint32_t width : {288u, 560u}) {
+    SCOPED_TRACE(width);
+    const ImGuiWindow* const off = worker_at(width, false);
+    ASSERT_NE(off, nullptr);
+    ASSERT_EQ(panel_.lines()[2], "deblock off · T 0.500 mm");
+    const float off_height = off->ContentSize.y;
+    const ImGuiWindow* const on = worker_at(width, true);
+    ASSERT_EQ(panel_.lines()[2],
+              "deblock LG · T 0.500 mm · 131,072 of 131,072 blocks exact");
+    const ImGuiWindow* const body = stats_body();
+    const ImVec2 work = ImGui::GetMainViewport()->WorkSize;
+    if (work.x > work.y) {
+      EXPECT_LT(ImGui::CalcTextSize(panel_.lines()[2].c_str()).x,
+                work.x - 2.0f * body->WindowPadding.x)
+          << "the work area alone holds the line";
+    }
+    EXPECT_FLOAT_EQ(on->ContentSize.y,
+                    off_height + ImGui::GetTextLineHeightWithSpacing());
+    EXPECT_LE(body->ContentSize.x + 2.0f * body->WindowPadding.x,
+              work.x - 2.0f * ImGui::GetStyle().DisplaySafeAreaPadding.x);
+  }
 }
 
 TEST(DisplayLine, StatesTheRateFramesAreDrawnAt) {
