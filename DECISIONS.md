@@ -16,11 +16,18 @@ The stats' deblock line over recon #274's per-block fallback
   frames, nearly every block exact, from a true SDF's, none. With no filter,
   for the deblock off or a T finer than every filter's, it says "off" and no
   count, as every block is exact; "skipped" is gone.
-- **A stats line too wide for the work area breaks before its last " · ",**
+- **A stats line too wide for the room it has breaks before its last " · ",**
   the rest indented below it. Why: at the block ceiling the deblock line is
   57 characters, about 520 pt at the iOS shell's scale, past a 375-pt phone
-  in portrait; in landscape, where the stats end 9 pt above the controls, it
-  fits on one row, so the panel grows no taller there.
+  in portrait.
+- **Compact, the rate sits over the renderer's table, and beside it the
+  worker's lines take the width it leaves.** Why: in landscape, side by side
+  with the sphere's 48-character deblock line on one row, the columns were
+  768 pt wide on the view tests' shortest notched phone, whose stats hold
+  706. Broken, the line adds a row to the worker's column, the taller, which
+  sets how far above the controls the panel ends (2026-10-23); the rate's
+  row moved to the renderer's, the shorter, leaves the panel as tall as
+  before, and 624 pt wide (lavapipe, 2026-10-24).
 
 ## 2026-10-23 — Timing on demand, each unit stated, and one measure log
 

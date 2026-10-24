@@ -25,7 +25,8 @@
 // where it fits; and they are the stage means per stream frame, then the
 // renderer's rows per display frame under its rate, each table under the
 // window it covers. Compact, the worker's table leaves out its breakdowns,
-// and the renderer's sits beside it in a work area wider than tall.
+// the renderer's sits beside it in a work area wider than tall, the rate
+// over it, and a line breaks against the room its column has.
 
 #include "volumetric_kit/player/controls.hpp"
 
@@ -480,6 +481,17 @@ class ControlsTest : public ::testing::Test {
     triangles_ = 1'200;
   }
 
+  // The frame shown at the block ceiling, every block exact, under LG at
+  // T 0.5 mm with the deblock `on`, which makes its line the widest; off, its
+  // line is short. A frame is taken first.
+  void deblock_at_the_ceiling(bool on) {
+    shown_->deblock_on = on;
+    shown_->deblock.filter = on ? "LG" : "off";
+    shown_->deblock.step = 0.0005f;
+    shown_->deblock.block_count = volumetric_kit::player::kMaxFrameBlocks;
+    shown_->deblock.exact_blocks = volumetric_kit::player::kMaxFrameBlocks;
+  }
+
   vp_test::Scratch scratch_;
   std::unique_ptr<StreamPlayer> player_;
   bool normals_ = false;  // the view's shading, which the controls flip
@@ -779,43 +791,67 @@ TEST_F(ControlsTest, TheFiguresHoldUntilTheRefresh) {
 
 // The deblock line at the block ceiling, the widest it gets. At this
 // context's scale, 288 points is the narrowest phone's 375 in portrait at the
-// iOS shell's 1.3, and 625 the shortest notched one's 812 in landscape: on
-// the first the line breaks before its blocks, one row more, full as on a
-// desktop and compact as on a phone, whose worker's column fits the work
-// area; on the second it takes one row.
+// iOS shell's 1.3, and 625 the shortest notched one's 812 in landscape. Full,
+// as on a desktop, the line breaks before its blocks on the first, one row
+// more, and takes one row on the second.
 TEST_F(ControlsTest, ALineTooWideForTheWorkAreaBreaksBeforeItsLastPart) {
   take(0);
-  shown_->deblock_on = true;
-  shown_->deblock.filter = "LG";
-  shown_->deblock.step = 0.0005f;
-  shown_->deblock.block_count = volumetric_kit::player::kMaxFrameBlocks;
-  shown_->deblock.exact_blocks = volumetric_kit::player::kMaxFrameBlocks;
-  for (const bool compact : {false, true}) {
-    SCOPED_TRACE(compact);
-    panel_ = StatsPanel(compact);
-    // The lines' window: the body, or compact the worker's column. Columns
-    // take their sizes on their second frame, and the body on the one after.
-    const auto lines_at = [&](std::uint32_t width) {
-      width_ = width;
-      for (int i = 0; i < 3; ++i) {
-        frame();
-      }
-      return compact ? stats_column("##worker") : stats_body();
-    };
-    const ImGuiWindow* const wide = lines_at(625);
-    ASSERT_NE(wide, nullptr);
+  deblock_at_the_ceiling(true);
+  seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  // An auto-sized window takes its size on its second frame.
+  const auto body_at = [&](std::uint32_t width) {
+    width_ = width;
+    frame();
+    frame();
+    return stats_body();
+  };
+  const float wide_height = body_at(625)->ContentSize.y;
+  ASSERT_EQ(panel_.lines()[2],
+            "deblock LG · T 0.500 mm · 131,072 of 131,072 blocks exact");
+  EXPECT_FLOAT_EQ(body_at(288)->ContentSize.y,
+                  wide_height + ImGui::GetTextLineHeightWithSpacing());
+}
+
+// Compact, as on a phone, the rate sits in the renderer's column, and a line
+// breaks against the room left it: the work area's width in portrait (288
+// points), and in landscape (560) the width the renderer's column beside it
+// leaves, though the work area alone would hold the line. Either way the
+// deblock line at the block ceiling leaves the worker's column one row taller
+// than the deblock off's short line does, and the body fits the work area.
+TEST_F(ControlsTest, CompactALineBreaksAgainstTheRoomItsColumnHas) {
+  panel_ = StatsPanel(/*compact=*/true);
+  take(0);
+  // The worker's column at `width`, past a refresh. Columns take their sizes
+  // on their second frame, and the body on the one after.
+  const auto worker_at = [&](std::uint32_t width, bool deblock_on) {
+    deblock_at_the_ceiling(deblock_on);
+    width_ = width;
+    seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
+    for (int i = 0; i < 3; ++i) {
+      frame();
+    }
+    return stats_column("##worker");
+  };
+  for (const std::uint32_t width : {288u, 560u}) {
+    SCOPED_TRACE(width);
+    const ImGuiWindow* const off = worker_at(width, false);
+    ASSERT_NE(off, nullptr);
+    ASSERT_EQ(panel_.lines()[2], "deblock off · T 0.500 mm");
+    const float off_height = off->ContentSize.y;
+    const ImGuiWindow* const on = worker_at(width, true);
     ASSERT_EQ(panel_.lines()[2],
               "deblock LG · T 0.500 mm · 131,072 of 131,072 blocks exact");
-    const float wide_height = wide->ContentSize.y;
-    const ImGuiWindow* const narrow = lines_at(288);
-    ASSERT_NE(narrow, nullptr);
-    EXPECT_FLOAT_EQ(narrow->ContentSize.y,
-                    wide_height + ImGui::GetTextLineHeightWithSpacing());
-    if (compact) {
-      EXPECT_LE(narrow->ContentSize.x + 2.0f * stats_body()->WindowPadding.x,
-                ImGui::GetMainViewport()->WorkSize.x -
-                    2.0f * ImGui::GetStyle().DisplaySafeAreaPadding.x);
+    const ImGuiWindow* const body = stats_body();
+    const ImVec2 work = ImGui::GetMainViewport()->WorkSize;
+    if (work.x > work.y) {
+      EXPECT_LT(ImGui::CalcTextSize(panel_.lines()[2].c_str()).x,
+                work.x - 2.0f * body->WindowPadding.x)
+          << "the work area alone holds the line";
     }
+    EXPECT_FLOAT_EQ(on->ContentSize.y,
+                    off_height + ImGui::GetTextLineHeightWithSpacing());
+    EXPECT_LE(body->ContentSize.x + 2.0f * body->WindowPadding.x,
+              work.x - 2.0f * ImGui::GetStyle().DisplaySafeAreaPadding.x);
   }
 }
 

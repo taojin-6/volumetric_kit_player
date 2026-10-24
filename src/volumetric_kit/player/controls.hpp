@@ -158,9 +158,9 @@ std::string display_line(const gfx::FrameMetrics& render);
 ///        stating its gfx::ui::StageWindow). Only the header takes input: a
 ///        finger or the mouse on the body reaches the camera.
 ///
-/// A line wider than the work area holds breaks before its last " · ", the
-/// rest indented below it, so the panel stays on screen: the deblock line
-/// with its blocks on a phone in portrait.
+/// A line wider than the room it has breaks before its last " · ", the rest
+/// indented below it, so the panel stays on screen: the deblock line with its
+/// blocks on a phone.
 ///
 /// It opens at launch, and a tap or click on the header closes and opens it.
 /// While it is open its figures are rebuilt every @ref kRefresh, so the
@@ -170,8 +170,9 @@ std::string display_line(const gfx::FrameMetrics& render);
 ///
 /// **Compact**, for a phone: the worker's table without its breakdown rows,
 /// each table's window stated on a shorter line ("per stream frame · 30/30
-/// timed"), and, in a work area wider than tall, the renderer's table beside
-/// the worker's.
+/// timed"), the rate over the renderer's table, and, in a work area wider than
+/// tall, the renderer's table beside the worker's, whose lines have the width
+/// it leaves them.
 ///
 /// @code
 /// StatsPanel panel(/*compact=*/is_phone);
@@ -236,6 +237,7 @@ class StatsPanel {
   std::string display_;
   std::vector<core::StageRow> render_rows_;
   gfx::ui::StageWindow render_window_;
+  float render_width_ = 0.0f;  // compact: the renderer's column, last frame
   std::optional<Playback::Clock::time_point> rebuilt_;
 };
 

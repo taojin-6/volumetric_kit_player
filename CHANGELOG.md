@@ -92,7 +92,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `summarize.py`'s markdown of them (mean, p50, p95; counts per frame; a
   Mac run's load; a diff of two).
 - `PlayerViewConfig::compact_stats`, which the iOS app sets on an iPhone: no
-  breakdown rows, and in landscape the two tables side by side.
+  breakdown rows, the rate over the renderer's table, and in landscape the
+  two tables side by side.
 - build: `VP_DESKTOP_APP` (ON on a desktop): OFF builds the library, the
   tests but `cli_test`, and `vp_probe` with no GLFW, as the runner does on
   the lab.

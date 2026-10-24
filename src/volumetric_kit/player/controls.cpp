@@ -316,7 +316,10 @@ void StatsPanel::draw(const PlaybackStats& stats,
     return;
   }
   // Compact: the worker's table holds its stages alone, and a work area
-  // wider than tall has room for the renderer's beside it, not below.
+  // wider than tall has room for the renderer's beside it, not below. The
+  // rate, the last line, sits over the display's rate, so a line that breaks
+  // leaves the worker's column no taller; beside, a line takes the width the
+  // renderer's column left as of the last frame.
   std::vector<core::StageRow> stages;
   for (const core::StageRow& row : rows_) {
     if (std::strncmp(row.name, core::StageMetrics::kBreakdownPrefix,
@@ -324,19 +327,27 @@ void StatsPanel::draw(const PlaybackStats& stats,
       stages.push_back(row);
     }
   }
+  const bool beside = viewport->WorkSize.x > viewport->WorkSize.y;
+  const float worker_width =
+      beside ? width - render_width_ - style.ItemSpacing.x : width;
+  const std::size_t worker_lines = lines_.empty() ? 0 : lines_.size() - 1;
   begin_column("##worker");
-  for (const std::string& line : lines_) {
-    draw_stats_line(line, width);
+  for (std::size_t i = 0; i < worker_lines; ++i) {
+    draw_stats_line(lines_[i], worker_width);
   }
   draw_compact_table("stages", stages, window_);
   ImGui::EndChild();
-  if (viewport->WorkSize.x > viewport->WorkSize.y) {
+  if (beside) {
     ImGui::SameLine();
   }
   begin_column("##render");
+  if (!lines_.empty()) {
+    draw_stats_line(lines_.back(), width);
+  }
   ImGui::TextUnformatted(display_.c_str());
   draw_compact_table("render", render_rows_, render_window_);
   ImGui::EndChild();
+  render_width_ = ImGui::GetItemRectSize().x;
   gfx::ui::end_collapsible_panel();
 }
 
