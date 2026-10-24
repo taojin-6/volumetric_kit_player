@@ -693,6 +693,8 @@ bool StreamPlayer::rebuild_wanted() const {
 core::Result<bool> StreamPlayer::rebuild() {
   FrameStamp stamp = *last_;
   stamp.rebuild = true;
+  // Never timed: no frame, so no reader for its device halves (DECISIONS.md).
+  stamp.timed = false;
   {
     const Step step(*this);  // the rebuild
     if (!step) {
@@ -701,13 +703,10 @@ core::Result<bool> StreamPlayer::rebuild() {
     const bool on = deblock();
     decoder_->set_deblock(on);
     last_->deblock_on = on;  // tried: once a change
-    // recon's row, as decode's: timed as the frame was, its device half
-    // lands in "decode".
-    core::StageMetrics rebuilt;
     core::Status status;
     {
       const core::StageScope decode(stamp.stages, "decode");
-      status = decoder_->rebuild(*grid_, stamp.timed ? &rebuilt : nullptr);
+      status = decoder_->rebuild(*grid_, nullptr);
     }
     if (!status.ok()) {
       // A grid a failed decode left as neither frame: the next frame shows
@@ -717,7 +716,6 @@ core::Result<bool> StreamPlayer::rebuild() {
       }
       return status;
     }
-    forward_breakdowns(rebuilt, stamp.stages);
     stamp_deblock(stamp);
     last_->deblock = stamp.deblock;
   }

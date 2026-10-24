@@ -48,9 +48,9 @@ log". Nothing in the data flow changes; today's costs become measurable.
   row, and a log says what it measured and how it ran: through the view,
   whose draw shares the GPU, or by the worker alone.
 - **A paused deblock toggle's rebuild is no frame** (`FrameStamp::rebuild`):
-  the log skips it as `PlaybackStats` does, and it is timed as the frame it
-  redoes was, its "decode" the rebuild's. Why: it is the frame before again,
-  so a row for it would repeat that frame's place with another stage's time.
+  the log skips it as `PlaybackStats` does, and it is never timed. Why: it is
+  the frame before again, so a row for it would repeat that frame's place with
+  another stage's time, and a timestamp nobody reads only costs device time.
 - **`vp_probe --worker`**, the worker alone on the GPU the core picks, with
   nothing drawn. Why: NVIDIA's ICD has no headless surface, so on the lab box
   the view runs on lavapipe; the render rows wait for PL4, so the worker's
@@ -113,9 +113,9 @@ desktop's D key, over recon #264's `Decoder::set_deblock`, `rebuild` and
 - **Deblock is a box after Normals, or, where that row would not fit the work
   area, on a row of its own below it:** a phone's row in portrait was 365 pt
   of 375 already. In landscape there is no height for a row: with the
-  deblock line the stats end 9 pt above the controls on the view tests'
-  shortest notched phone (lavapipe, 2026-10-23), and the row with Deblock is
-  488 pt wide.
+  deblock line and the stage tables the stats end 8 pt above the controls on
+  the view tests' shortest notched phone (lavapipe, 2026-10-24), and the row
+  with Deblock is 488 pt wide.
 - **The tests' true-SDF stream** codes the sphere with no unobserved voxel,
   so the deblock runs on it (filter R); the other streams' frames are
   masked, so it skips them.

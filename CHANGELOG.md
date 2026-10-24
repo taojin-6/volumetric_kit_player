@@ -71,8 +71,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   frame while the stats are open, or fixed by a measurement
   (`PlayerViewConfig::device_timing`); the view's draw is timed only while
   the stats are open and the timing is not off. A timed frame's "decode" and
-  "mesh" carry recon's breakdown rows; a paused rebuild is timed as its
-  frame was. `FrameStamp` gains `timed`, `pass` and `counters`, the worker's
+  "mesh" carry recon's breakdown rows; a paused rebuild is never timed.
+  `FrameStamp` gains `timed`, `pass` and `counters`, the worker's
   device counts over the frame; `StreamPlayer::track`,
   `PlayerView::frames_taken` and `compute_device`.
 - The measure log (`MeasureLog`, `device_line`, `build_info`,

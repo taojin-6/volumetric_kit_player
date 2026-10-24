@@ -22,7 +22,7 @@
 // default, and each frame says what it did: the true-SDF stream's filter, and
 // skipped on the masked sphere's; set before start, the first decode takes
 // it; toggled while paused, the frame shown, not the next, is rebuilt,
-// meshed and published again as a rebuild, timed as that frame was, with
+// meshed and published again as a rebuild, never timed, with
 // nothing else going, at the end with loop off too, and parked only at
 // unpark; toggled while playing,
 // the frames after take it with no rebuild. A park holds the worker:
@@ -1338,53 +1338,35 @@ TEST_F(StreamPlayerTest, ToggledWhilePausedTheFrameShownIsRebuilt) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-// A rebuild is timed as the frame it redoes was, whatever the timing is now:
-// frame 0's, timed, has device halves on its "decode", the rebuild's, and its
-// "mesh" though the timing is off since; frame 1's, untimed, has none. There
-// is no "read".
-TEST_F(StreamPlayerTest, ARebuildIsTimedAsTheFrameItRedoesWas) {
-  // recon's timers are private; one on the same device times where they can.
-  core::Result<core::GpuTimer> timer = core::GpuTimer::create(device());
-  ASSERT_TRUE(timer.ok()) << timer.status().message();
-  const core::DeviceTime expected = timer.value().available()
-                                        ? core::DeviceTime::Measured
-                                        : core::DeviceTime::Unavailable;
+// A rebuild is never timed, though every frame is: its "decode", the
+// rebuild's, and its "mesh" have no device half and no breakdown, and there
+// is no "read". The frame after is timed as before.
+TEST_F(StreamPlayerTest, ARebuildIsNeverTimed) {
   ASSERT_NO_FATAL_FAILURE(use_true_sdf());
   timing_ = DeviceTiming::kAll;
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
-  player->set_device_timing(DeviceTiming::kOff);
   std::this_thread::sleep_for(kQuiet);  // the worker waits for frame 1's due
   player->set_deblock(false);
-  const std::optional<FrameStamp> timed = next_frame();
-  ASSERT_TRUE(timed.has_value()) << "no rebuild of frame 0";
-  EXPECT_TRUE(timed->rebuild);
-  EXPECT_EQ(timed->index, 0u);
-  EXPECT_TRUE(timed->timed);
-  const std::vector<core::StageRow>& rows = timed->stages.rows();
-  ASSERT_GE(rows.size(), 2u);
+  const std::optional<FrameStamp> rebuilt = next_frame();
+  ASSERT_TRUE(rebuilt.has_value()) << "no rebuild of frame 0";
+  EXPECT_TRUE(rebuilt->rebuild);
+  EXPECT_EQ(rebuilt->index, 0u);
+  EXPECT_FALSE(rebuilt->timed);
+  const std::vector<core::StageRow>& rows = rebuilt->stages.rows();
+  ASSERT_EQ(rows.size(), 2u);
   EXPECT_STREQ(rows[0].name, "decode");
-  EXPECT_EQ(rows[0].device, expected);
   EXPECT_STREQ(rows[1].name, "mesh");
-  EXPECT_EQ(rows[1].device, expected);
-  if (expected == core::DeviceTime::Measured) {
-    EXPECT_GT(rows[0].gpu_ms, 0.0);
-  }
-  player->set_deblock(true);
-  ASSERT_TRUE(next_frame().has_value()) << "no rebuild of frame 0";
-  ASSERT_NO_FATAL_FAILURE(step_to(*player, 1));
-  std::this_thread::sleep_for(kQuiet);  // the worker waits for frame 2's due
-  player->set_deblock(false);
-  const std::optional<FrameStamp> untimed = next_frame();
-  ASSERT_TRUE(untimed.has_value()) << "no rebuild of frame 1";
-  EXPECT_TRUE(untimed->rebuild);
-  EXPECT_EQ(untimed->index, 1u);
-  EXPECT_FALSE(untimed->timed);
-  ASSERT_EQ(untimed->stages.rows().size(), 2u);
-  for (const core::StageRow& row : untimed->stages.rows()) {
+  for (const core::StageRow& row : rows) {
     EXPECT_EQ(row.device, core::DeviceTime::None) << row.name;
   }
+  player->step();
+  const std::optional<FrameStamp> next = next_frame();
+  ASSERT_TRUE(next.has_value()) << "no frame 1";
+  EXPECT_EQ(next->index, 1u);
+  EXPECT_FALSE(next->rebuild);
+  EXPECT_TRUE(next->timed);
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }

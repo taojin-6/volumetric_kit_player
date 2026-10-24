@@ -136,8 +136,8 @@ struct FrameStamp {
   std::uint64_t record_bytes = 0;  ///< Their payload bytes.
   /// When the worker published it, so when its records had all come.
   Playback::Clock::time_point published{};
-  /// Whether its device work was timed (@ref DeviceTiming); a rebuild's, as
-  /// the frame it rebuilds was.
+  /// Whether its device work was timed (@ref DeviceTiming); a rebuild's never
+  /// is.
   bool timed = false;
   /// The pass of a file's track it was read in, from 1; live, 1.
   std::uint64_t pass = 1;
@@ -413,8 +413,8 @@ class StreamPlayer {
   void count_shown(std::uint64_t pts_ns, Playback::Clock::time_point due_at);
   // Under the lock: whether a paused toggle asks for last_ to be rebuilt.
   bool rebuild_wanted() const;
-  // Rebuild last_ under the deblock as now set, timed as last_ was, and
-  // publish it again (FrameStamp::rebuild): false on quit. A rebuild recon
+  // Rebuild last_ under the deblock as now set, untimed, and publish it
+  // again (FrameStamp::rebuild): false on quit. A rebuild recon
   // refuses as skippable publishes nothing.
   core::Result<bool> rebuild();
   // Once the consumer took the last mesh, mesh the grid and publish it with
