@@ -4,8 +4,10 @@
 #include "volumetric_kit/player/controls.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -59,6 +61,33 @@ void draw_compact_table(const char* id, const std::vector<core::StageRow>& rows,
                            std::to_string(window.frames) + " timed";
   ImGui::TextDisabled("%s", line.c_str());
   gfx::ui::draw_stage_table(id, rows);
+}
+
+// `count` with its thousands grouped: 131,072.
+std::string grouped(std::uint32_t count) {
+  std::string text = std::to_string(count);
+  for (std::size_t at = text.size(); at > 3; at -= 3) {
+    text.insert(at - 3, ",");
+  }
+  return text;
+}
+
+// What joins a stats line's parts.
+constexpr std::string_view kSeparator = " · ";
+
+// A stats line, or, where it is wider than `width`, its part before its last
+// separator and, indented below it, the rest.
+void draw_stats_line(const std::string& line, float width) {
+  const std::size_t cut = line.rfind(kSeparator);
+  if (cut == std::string::npos ||
+      ImGui::CalcTextSize(line.c_str()).x <= width) {
+    ImGui::TextUnformatted(line.c_str());
+    return;
+  }
+  ImGui::TextUnformatted(line.c_str(), line.c_str() + cut);
+  ImGui::Indent();
+  ImGui::TextUnformatted(line.c_str() + cut + kSeparator.size());
+  ImGui::Unindent();
 }
 
 // A button's size: kButtonEms font sizes wide, a frame tall.
@@ -219,14 +248,15 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
     frame = std::string("frame ") + (shown->key ? "I" : "P") + " · " +
             fixed(static_cast<double>(shown->bytes) / 1e3, 1) + " kB · " +
             fixed(triangles / 1e3, 0) + " k tris";
-    const char* filter = "off";
-    if (shown->deblock_on) {
-      filter = std::string_view(shown->deblock.filter) == "off"
-                   ? "skipped"
-                   : shown->deblock.filter;
+    const recon::codec::DeblockInfo& info = shown->deblock;
+    const std::string_view filter = shown->deblock_on ? info.filter : "off";
+    deblock = "deblock " + std::string(filter) + " · T " +
+              fixed(static_cast<double>(info.step) * 1e3, 3) + " mm";
+    if (filter != "off") {
+      deblock += " · " + grouped(info.exact_blocks) + " of " +
+                 grouped(info.block_count) +
+                 (info.block_count == 1 ? " block" : " blocks") + " exact";
     }
-    deblock = std::string("deblock ") + filter + " · T " +
-              fixed(static_cast<double>(shown->deblock.step) * 1e3, 3) + " mm";
   }
   std::string rate = "rate " + fixed(stats.frames_per_s(now), 1);
   if (const std::optional<double> nominal = stats.nominal_fps()) {
@@ -270,9 +300,14 @@ void StatsPanel::draw(const PlaybackStats& stats,
                       "display frame"};
     rebuilt_ = now;
   }
+  // The widest text the body's window holds inside the work area.
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float width =
+      viewport->WorkSize.x -
+      2.0f * (style.DisplaySafeAreaPadding.x + style.WindowPadding.x);
   if (!compact_) {
     for (const std::string& line : lines_) {
-      ImGui::TextUnformatted(line.c_str());
+      draw_stats_line(line, width);
     }
     gfx::ui::draw_stage_table("stages", rows_, window_);
     ImGui::TextUnformatted(display_.c_str());
@@ -291,7 +326,7 @@ void StatsPanel::draw(const PlaybackStats& stats,
   }
   begin_column("##worker");
   for (const std::string& line : lines_) {
-    ImGui::TextUnformatted(line.c_str());
+    draw_stats_line(line, width);
   }
   draw_compact_table("stages", stages, window_);
   ImGui::EndChild();

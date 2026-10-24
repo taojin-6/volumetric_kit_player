@@ -149,8 +149,10 @@ struct FrameStamp {
   /// (@ref StreamPlayer::set_deblock).
   bool deblock_on = false;
   /// What the deblock did to it: recon's `codec::Decoder::last_deblock`
-  /// after its decode or rebuild, whose filter is `"off"` with the deblock
-  /// off and also on, for a frame recon skipped.
+  /// after its decode or rebuild: the filter, `"off"` with the deblock off
+  /// or a T finer than every filter's; T; and the frame's blocks, with
+  /// those recon's per-block fallback kept at their exact decode (all of
+  /// them with no filter).
   recon::codec::DeblockInfo deblock{};
   /// A paused toggle's rebuild (@ref StreamPlayer::set_deblock): the frame
   /// published last, published again under the deblock as now set, so no new

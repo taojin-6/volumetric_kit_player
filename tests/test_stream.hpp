@@ -6,11 +6,12 @@
 /// @file test_stream.hpp
 /// The tests' streams, which vp_write_stream writes once a ctest run
 /// (CMakeLists.txt): kFrames frames of a sphere moving a block a frame, at 25
-/// fps with a pause before the fourth, an I-frame every third, each frame
-/// with unobserved voxels, so masked, which recon's deblock skips; the same
-/// with frame kEmptyFrame meshing nothing; coded as a true SDF observed far
-/// enough out that no voxel is masked, so the deblock runs, its filter "R" (T
-/// 1.96 mm); and at twice the voxel size. A copy of one of them, and a stream
+/// fps with a pause before the fourth, an I-frame every third, each block
+/// of each frame with an unobserved voxel, so masked, which recon's deblock
+/// keeps at its exact decode; the same with frame kEmptyFrame meshing
+/// nothing; coded as a true SDF observed far enough out that no voxel is
+/// masked, so the deblock filters every block, its filter "R" (T 1.96 mm);
+/// and at twice the voxel size. A copy of one of them, and a stream
 /// that opens but never decodes, in a scratch directory of the test's own.
 
 #include <gtest/gtest.h>

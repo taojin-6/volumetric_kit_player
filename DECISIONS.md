@@ -4,6 +4,24 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-24 — The stats count the blocks the deblock kept exact
+
+The stats' deblock line over recon #274's per-block fallback
+(`codec::DeblockInfo`'s `block_count` and `exact_blocks`).
+
+- **The line names the filter, T and the blocks kept exact:** "deblock LG ·
+  T 0.490 mm · 12 of 1,920 blocks exact". Why: recon no longer skips a frame
+  for an unobserved voxel; it keeps each block holding one at its exact
+  decode and filters the rest, so the count is what tells a fused room's
+  frames, nearly every block exact, from a true SDF's, none. With no filter,
+  for the deblock off or a T finer than every filter's, it says "off" and no
+  count, as every block is exact; "skipped" is gone.
+- **A stats line too wide for the work area breaks before its last " · ",**
+  the rest indented below it. Why: at the block ceiling the deblock line is
+  57 characters, about 520 pt at the iOS shell's scale, past a 375-pt phone
+  in portrait; in landscape, where the stats end 9 pt above the controls, it
+  fits on one row, so the panel grows no taller there.
+
 ## 2026-10-23 — Timing on demand, each unit stated, and one measure log
 
 Wave 1 of the data-flow plan (its plan v2, row 4: PL0, PL1, PL2 and the
@@ -104,12 +122,9 @@ desktop's D key, over recon #264's `Decoder::set_deblock`, `rebuild` and
   one's due time; the clock counts a frame shown as of when it was due, so a
   slow decode does not push the frames after it back, but only once it
   decodes, so a frame that fails takes no step, as before.
-- **The stats name what the deblock did to the frame drawn:** off, the filter
-  recon ran (LF, LG or R), or skipped: on, but no filter run, for a frame
-  recon's mask gate skips (`codec::Decoder::set_deblock`), as a fused
-  room's are, or one whose T is finer than every filter's. recon's
-  `DeblockInfo` says "off" for both, so the panel does not tell them apart.
-  T is in mm to the micrometre, as the rule's lowest threshold is 0.075 mm.
+- **The stats name what the deblock did to the frame drawn** (2026-10-24
+  for the line), T in mm to the micrometre, as the rule's lowest threshold
+  is 0.075 mm.
 - **Deblock is a box after Normals, or, where that row would not fit the work
   area, on a row of its own below it:** a phone's row in portrait was 365 pt
   of 375 already. In landscape there is no height for a row: with the
@@ -117,8 +132,8 @@ desktop's D key, over recon #264's `Decoder::set_deblock`, `rebuild` and
   the view tests' shortest notched phone (lavapipe, 2026-10-24), and the row
   with Deblock is 488 pt wide.
 - **The tests' true-SDF stream** codes the sphere with no unobserved voxel,
-  so the deblock runs on it (filter R); the other streams' frames are
-  masked, so it skips them.
+  so the deblock filters every block of it (filter R); every block of the
+  other streams' frames is masked, so it keeps them all exact.
 
 ## 2026-10-22 — A frame holds at most 131,072 blocks
 
