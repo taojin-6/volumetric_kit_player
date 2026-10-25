@@ -4,6 +4,95 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-25 — One batch per frame
+
+Wave 2 of the data-flow plan (player PR 7: PL3 and PL4), over core's
+`HostRing` and recon's recorded decode and extract. The owner: "I want timing
+to be comprehensive and correct. No need for unnecessary copy or waits";
+"everything should be GPU with zero-copy"; "if the new design is beneficial
+everywhere, we do not need the older pipelines".
+
+- **A file's frame is one command batch:** its record read into one of the
+  decoder's input slots (recon's `StreamReader::read` into the slot), its
+  decode (`codec::record_growing`) and its mesh (`record_extract`, gated on
+  the decode) recorded together, submitted without a wait, and finished once
+  due (`finish_growing`, `MarchingCubes::finish`). A steady frame of the
+  tests' stream is 1 submit, 0 staging buffers, 39 dispatches and 47
+  barriers in place or 48 copied, I and P alike, where M0's was 6 submits
+  and 7 staging buffers; the tests pin the counts, as Apple GPUs step in time
+  near 80 of either (recon's DECISIONS.md). The old per-call path is gone.
+- **The rings take their path from the device:** in place where
+  device-mapped memory is cached (Apple, lavapipe), copied elsewhere
+  (NVIDIA), as core's `HostRing` decides; the player has no setting for it,
+  and the log's `rings` key states it.
+- **Recorded ahead only while playing.** Playing, the next frame is recorded
+  as soon as the one before is published, so its mesh is ready when due.
+  Paused or held, a frame is recorded only once due, and a pause publishes
+  the frame already recorded, so whenever the clock is paused the grid holds
+  the frame shown, which `Decoder::rebuild` redoes after a toggle. A pause
+  lands at most one frame period late: it shows the frame already recorded,
+  ahead of its due time. A toggle while playing reaches the second frame
+  after it.
+- **The ring is two slots past the frames in flight** (`mesh_wiring`): one
+  mesh published and not yet taken, one meshed in the next frame's batch
+  before that take. One more vertex arena: about 19 MiB for rafa2, 119 MiB
+  for the live room.
+- **The draw waits for the mesh's `ready` value on the GPU**
+  (`gfx::windowing::FrameWait` at `VERTEX_INPUT | DRAW_INDIRECT`): reached
+  before the mesh is published, so it stalls nothing; it carries the
+  worker's writes across queues, where the fence alone did not.
+- **A park waits out a batch in flight,** submitting nothing, and the frame
+  is finished and published at unpark, a grow, retry or refit included: a
+  submit from the background loses the device on iOS. A park finds the worker
+  in its pacing sleep, which it wakes.
+- **Live, each record is a decode batch of its own,** its body read
+  straight into an input slot (`StreamClient::read`) and finished before the
+  next is recorded, as the next parses against its reference; the newest
+  frame decoded is meshed in a batch of its own once its decode is judged.
+  The arrival stamp is taken when the complete record is received, before
+  finishing the preceding decode, so latency includes that wait or recovery.
+- **The timing:** a frame's rows are read, decode and mesh (recording),
+  submit, `wait: GPU` (about 0 while the GPU keeps up) and finish, the batch's
+  device rows folded in once after its wait; the queue's idle before the
+  worker's batch, from raw ticks when the batch before was timed and nothing
+  came between; its queue latency where the device calibrates; and the
+  latency from due, the time the clock set rather than the worker's wake-up,
+  to published, taken and the present call, the whole over the frames
+  presented: a mean of a frame set with each leg's own would mix frames
+  presented with the worker alone's. The renderer's pass row is "draw
+  (mesh+UI)", as Apple GPUs time only a pass's bounds. Tile depth and debug
+  labels are measure options for M4 (`--tile-depth`, `--labels`).
+  The runner omits these options at their defaults so older probes can
+  still measure a baseline; a nondefault requires support from that probe.
+- **The compact stats keep their height:** one "GPU · latency" line over the
+  renderer's table beside the rate, the worker's table read, decode and mesh,
+  and the renderer's without its loop's submit, its draw named "draw". Why:
+  on the view tests' shortest notched phone in landscape the panel already
+  ended at the controls' top, and two more rows took it 35 pt past them; in
+  portrait "draw (mesh+UI)" took the body 2 pt past the narrowest phone.
+- **Measure format 2:** the renderer's rows as of the tick that took a
+  frame, the dispatches and barriers, what the deblock did, the rounds, the
+  idle, the queue latency and the latency legs per frame, under `rings`,
+  `tile_depth` and `labels`, and a phone's thermal state and Low Power Mode.
+  The summarizer reads formats 1 and 2, so M2 diffs against M0 row for row.
+  The render rows are gfx's profiler's newest resolved frame, two display
+  frames behind the one that drew the stream frame, as its snapshot lags the
+  frames in flight and carries no frame number to pair by; their means are
+  the renderer's all the same.
+- **The phone runner** builds on 6 jobs (the Mac's load rule), names each
+  timing's log as the lab's and the Mac's are, and lists the app's Documents
+  before its measure folder, so it never asks devicectl for the folder the
+  app has not made yet, and every other devicectl error shows.
+- **CI reruns the worker's and the view's suites under synchronization
+  validation** (`VKC_TEST_SYNC_VALIDATION`) on the Release legs: NVIDIA's,
+  the rings copied, and the Mac's, in place and across MoltenVK's two
+  families, where a regression in the one batch's barriers or the draw's
+  wait would show.
+- **The tests' grow stream** has a key whose blocks nearly fill the decode
+  grid its first frame sized, so the table refuses some on the device and
+  recon grows the grid at the frame's finish: a recovery the park tests can
+  find due.
+
 ## 2026-10-24 — The stats count the blocks the deblock kept exact
 
 The stats' deblock line over recon #274's per-block fallback
@@ -122,13 +211,12 @@ desktop's D key, over recon #264's `Decoder::set_deblock`, `rebuild` and
   meshes it and publishes it again, stamped `rebuild`, which `PlaybackStats`
   does not count. Why: otherwise the change shows only at the next step.
   Playing, the next frame shows it.
-- **So a file's frame is decoded once it is due,** not as soon as it is read:
-  until then the grid holds the frame published last, which is the frame
-  `rebuild` redoes, the one decoded last. A frame reaches the screen a
-  decode after it is due, at the same pace, as each is due from the last
-  one's due time; the clock counts a frame shown as of when it was due, so a
-  slow decode does not push the frames after it back, but only once it
-  decodes, so a frame that fails takes no step, as before.
+- **So whenever the clock is paused the grid holds the frame shown,** which
+  `rebuild` redoes: the frame decoded last. The clock counts a frame shown as
+  of when it was due, so a slow decode does not push the frames after it
+  back, but only once it decodes, so a frame that fails takes no step.
+  *Since 2026-10-25 frames are recorded ahead while playing, and a pause
+  publishes the frame recorded; until then a frame was decoded once due.*
 - **The stats name what the deblock did to the frame drawn** (2026-10-24
   for the line), T in mm to the micrometre, as the rule's lowest threshold
   is 0.075 mm.
@@ -249,10 +337,11 @@ chunks, joined at the newest key.
   throttling a queued burst. `StreamClient::next` reports progress separately
   from a whole record: a partial receive must also keep draining. Only a
   call with no progress permits the wait.
-- **Live steps never wait.** A step is GPU work alone (the build, a decode,
-  an extract), and live, one that would wait while parked does not begin:
-  the worker drops the record in hand and closes the connection within a
-  10 ms slice, and unpark connects again at the newest key. Why: a parked
+- **Live steps never wait.** A step is GPU work alone (the build, a decode
+  from its recording to its finish, a mesh), and live, one that would wait
+  while parked does not begin: the worker waits out a decode in flight,
+  drops it and the record in hand, and closes the connection within a 10 ms
+  slice, and unpark connects again at the newest key. Why: a parked
   player must hold no connection, and a stalled sender must not make a park
   time out, which on iOS rebuilds the view.
 - **Network and protocol errors are never fatal.** They set
@@ -405,13 +494,14 @@ the sizes.
 `StreamPlayer::park` and `unpark`; the header says what each call does.
 
 - **`park` holds the worker before each step** (its kernel build, a record's
-  read and decode, an extract) and waits for the one under way; while
-  parked no frame comes due, so a control applied meanwhile takes effect at
-  `unpark`, and the worker carries on from the same frame. Why: a GPU submit
-  from the background loses the device on iOS (MoltenVK marks it lost for
-  good) or ends the app, so a suspended app must start none. `pause` cannot
-  stand in, as the worker decodes a frame before it waits for its due time,
-  nor can `stop`, as `start` refuses after it.
+  read, a frame's recording, a rebuild, a mesh) and waits for the one under
+  way, a frame's batch in flight included (2026-10-25); while parked no frame
+  comes due, so a control applied meanwhile takes effect at `unpark`, and
+  the worker carries on from the same frame. Why: a GPU submit from the
+  background loses the device on iOS (MoltenVK marks it lost for good) or
+  ends the app, so a suspended app must start none. `pause` cannot stand in,
+  as the worker records a frame before it is due, nor can `stop`, as `start`
+  refuses after it.
 - **A park that times out keeps its hold,** so at most the one step under way
   submits after it, and the caller learns that it may have.
 
@@ -495,11 +585,12 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   before its first record, and a failed build reaches `status()`. Why: their
   shader builds took seconds on the iOS scanner's first launch, and blocking
   main that long risks the watchdog's kill; the window side stays on main.
-- **It meshes a frame only once the consumer has taken the last mesh,**
+- **It publishes a frame only once the consumer has taken the last mesh,**
   rather than publishing over it. Why: each untaken mesh would hold a ring
-  slot the consumer's `frames_in_flight + 1` do not cover. A consumer that
-  stops drawing, such as a minimized window, so stops playback, and the clock
-  re-anchors on the late frame.
+  slot the consumer's `frames_in_flight + 2` do not cover (+1 until
+  2026-10-25, when frames came to be meshed before that take). A consumer
+  that stops drawing, such as a minimized window, so stops playback, and the
+  clock re-anchors on the late frame.
 - **The consumer says it took a mesh** (`StreamPlayer::taken`), and until
   then the worker sleeps on its condition variable. Why: recon's
   `wait_collected` polls every 2 ms, so a minimized window kept the worker

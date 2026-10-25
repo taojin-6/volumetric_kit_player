@@ -20,20 +20,25 @@
 // timing is not off, each frame taken counted once; Source is off by
 // default, and a tap on it is one request; ui_wants_pointer() follows a finger
 // on the panel, which controls_test.cpp checks on the stats' header and body;
-// and teardown mid-playback, the profiler attached, is clean. A live view
-// presents, on the two images its swapchain asks for (checked on the host).
-// The view makes its own shared device, validated as the test policy asks, so
-// the layer's errors fail the test. The tests skip where the loader offers no
-// headless surface (NVIDIA's ICD), but fail on Apple, where MoltenVK has
-// one. MoltenVK plans two queue families, so the mesh's
-// buffers are CONCURRENT and read across. One family, EXCLUSIVE and read in
-// place, is tested on the host only (mesh_wiring_test.cpp) until a leg runs
-// the view on one.
+// each mesh is drawn behind a GPU wait on its ready value, reached, with no
+// error the layer reports; a frame drawn is stamped from its due time to its
+// present call, and the stats show its latency; the renderer's figures are
+// the profiler's while the draw is timed (render_metrics), and none while it
+// is not; and teardown mid-playback, the profiler attached, is clean. A live
+// view presents, on the two images its swapchain asks for (checked on the
+// host). The view makes its own shared device, validated as the test policy
+// asks, so the layer's errors fail the test. The tests skip where the loader
+// offers no headless surface (NVIDIA's ICD), but fail on Apple, where MoltenVK
+// has one. MoltenVK plans two queue families, so the mesh's buffers are
+// CONCURRENT and read across. One family, EXCLUSIVE and read in place, is
+// tested on the host only (mesh_wiring_test.cpp) until a leg runs the view on
+// one.
 
 #include "volumetric_kit/player/player_view.hpp"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -54,6 +59,7 @@
 #include "volumetric_kit/gfx/app/shared_device_config.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
+#include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/player/controls.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
@@ -292,7 +298,7 @@ class PlayerViewTest : public core::test::VulkanTest {
   // rebuild.
   bool draw_row_shown() const {
     for (const core::StageRow& row : view_->stats_panel().render_rows()) {
-      if (std::string(row.name) == "draw") {
+      if (std::string(row.name) == "draw (mesh+UI)") {
         return true;
       }
     }
@@ -542,7 +548,7 @@ TEST_F(PlayerViewTest, ATapOnDeblockWhilePausedRebuildsTheFrameShown) {
   EXPECT_EQ(view_->shown()->deblock.exact_blocks, 0u);
   tick_for(2 * StatsPanel::kRefresh);
   const std::vector<std::string> before = view_->stats_panel().lines();
-  ASSERT_EQ(before.size(), 4u);
+  ASSERT_EQ(before.size(), 6u);
   EXPECT_EQ(before[2], "deblock R · T 1.962 mm · 0 of " +
                            std::to_string(blocks) + " blocks exact");
   ImGui::SetCurrentContext(view_->ui_context());
@@ -556,7 +562,7 @@ TEST_F(PlayerViewTest, ATapOnDeblockWhilePausedRebuildsTheFrameShown) {
   EXPECT_FALSE(view_->shown()->deblock_on);
   tick_for(2 * StatsPanel::kRefresh);
   const std::vector<std::string> after = view_->stats_panel().lines();
-  ASSERT_EQ(after.size(), 4u);
+  ASSERT_EQ(after.size(), 6u);
   EXPECT_EQ(after[2], "deblock off · T 1.962 mm");
   EXPECT_FALSE(view_->player().playing());
   EXPECT_TRUE(view_->player().status().ok())
@@ -722,8 +728,9 @@ TEST_F(PlayerViewTest, ATapOnSourceIsOneRequest) {
 // landscape, at the iOS shell's sizes, Source and the compact stats included,
 // playing, past a refresh so the stats hold a frame's figures: their tables
 // have the worker's three stages and the renderer's draw row and its loop's
-// three, the panel fits across, ends above the controls and starts below
-// Source, and its header is a fingertip tall, left of Source.
+// frame wait and present, the panel, its GPU and latency line included, fits
+// across, ends above the controls and starts below Source, and its header is
+// a fingertip tall, left of Source.
 TEST_F(PlayerViewTest, TheStatsFitAPhone) {
   pixels_per_point_ = kPhonePixelsPerPoint;
   ui_scale_ = kPhoneScale;
@@ -750,7 +757,7 @@ TEST_F(PlayerViewTest, TheStatsFitAPhone) {
     ASSERT_NE(controls, nullptr);
     ASSERT_NE(source, nullptr);
     EXPECT_EQ(stats_rows("stages"), 3);
-    EXPECT_EQ(stats_rows("render"), 4);
+    EXPECT_EQ(stats_rows("render"), 3);
     // The widths ImGui fits the body and the header to.
     EXPECT_LE(body->ContentSize.x + 2.0f * body->WindowPadding.x,
               widest_panel());
@@ -779,7 +786,7 @@ TEST_F(PlayerViewTest, TheDrawRowTimesTheWholePass) {
   for (int i = 0; i < 5; ++i) {
     tick_for(StatsPanel::kRefresh);
     for (const core::StageRow& row : view_->stats_panel().render_rows()) {
-      if (std::string(row.name) == "draw" &&
+      if (std::string(row.name) == "draw (mesh+UI)" &&
           row.device == core::DeviceTime::Measured) {
         sum_ms += row.gpu_ms;
         ++readings;
@@ -804,9 +811,11 @@ TEST_F(PlayerViewTest, TheWorkerAndTheDrawAreTimedWhileTheStatsAreOpen) {
   EXPECT_EQ(view_->player().device_timing(), DeviceTiming::kAll);
   tick_for(2 * StatsPanel::kRefresh);
   EXPECT_TRUE(draw_row_shown());
+  EXPECT_FALSE(view_->render_metrics().sections.empty());
   ASSERT_NO_FATAL_FAILURE(tap_stats_header());
   ASSERT_FALSE(view_->stats_panel().open());
   EXPECT_EQ(view_->player().device_timing(), DeviceTiming::kOff);
+  EXPECT_TRUE(view_->render_metrics().sections.empty()) << "the draw untimed";
   // The worker may have decoded the next frame already, timed.
   const std::uint64_t taken = view_->frames_taken();
   ASSERT_TRUE(tick_until([&] { return view_->frames_taken() >= taken + 2; }));
@@ -859,6 +868,74 @@ TEST_F(PlayerViewTest, AMeasurementsTimingHoldsWhateverTheStatsShow) {
     ASSERT_TRUE(view_->stats_panel().open());
     EXPECT_TRUE(view_->stats_panel().render_rows().empty());
   }
+}
+
+// The draw waits on the GPU for its mesh's ready value: each frame drawing a
+// mesh goes to the queue behind that value at the draw's stages
+// (frame_waits). The worker reached it before it published, so every such
+// frame presents, and the layer, sync validation included where the test
+// policy asks, reports nothing: on the device's families (MoltenVK's two,
+// and its specialized ones in their rerun).
+TEST_F(PlayerViewTest, TheDrawWaitsOnTheMeshesReadyValue) {
+  ASSERT_TRUE(make_view());
+  constexpr VkPipelineStageFlags kDrawStages =
+      VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+  int drawn = 0;
+  ASSERT_TRUE(tick_until([&] {
+    const recon::mesh::DeviceMesh& mesh = view_->mesh();
+    if (mesh.valid() && !mesh.empty()) {
+      EXPECT_NE(mesh.ready.semaphore, nullptr);
+      // The frame went to the queue behind that value, at the draw's stages.
+      const std::vector<gfx::windowing::FrameWait>& waits =
+          view_->frame_waits();
+      EXPECT_TRUE(std::any_of(waits.begin(), waits.end(),
+                              [&](const gfx::windowing::FrameWait& wait) {
+                                return wait.point.semaphore ==
+                                           mesh.ready.semaphore &&
+                                       wait.point.value == mesh.ready.value &&
+                                       wait.stages == kDrawStages;
+                              }))
+          << "no wait on generation " << mesh.generation << "'s ready value";
+      if (mesh.ready.semaphore != nullptr) {
+        const core::Result<std::uint64_t> reached =
+            mesh.ready.semaphore->value();
+        EXPECT_TRUE(reached.ok()) << reached.status().message();
+        if (reached.ok()) {
+          EXPECT_GE(*reached, mesh.ready.value);
+        }
+      }
+      ++drawn;
+    }
+    return drawn >= 30;
+  })) << drawn
+      << " frame(s) drew a mesh";
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
+
+// A frame drawn is stamped from its due time to its present call, in order,
+// and the stats show its latency's legs.
+TEST_F(PlayerViewTest, LatencyIsStampedFromDueToPresent) {
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([&] {
+    return view_->shown().has_value() && view_->shown()->index >= 2;
+  }));
+  const FrameStamp stamp = *view_->shown();
+  ASSERT_TRUE(stamp.taken.has_value());
+  ASSERT_TRUE(stamp.presented.has_value());
+  EXPECT_NE(stamp.due, SteadyClock::time_point{});
+  EXPECT_LE(stamp.due, stamp.published);
+  EXPECT_LE(stamp.published, *stamp.taken);
+  EXPECT_LE(*stamp.taken, *stamp.presented);
+  tick_for(2 * StatsPanel::kRefresh);
+  bool latency = false;
+  for (const std::string& line : view_->stats_panel().lines()) {
+    if (line.rfind("latency ", 0) == 0) {
+      latency = true;
+      EXPECT_EQ(line.find(" - "), std::string::npos) << line;
+    }
+  }
+  EXPECT_TRUE(latency) << "no latency line";
 }
 
 TEST_F(PlayerViewTest, TeardownMidPlaybackIsClean) {

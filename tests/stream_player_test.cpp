@@ -4,20 +4,28 @@
 // StreamPlayer on a device, over the tests' stream (test_stream.hpp). Its
 // track's counts and rate are what was written. Paused and stepped, so each
 // frame goes when the test says: frames arrive in order with their index,
-// pts, payload bytes, key, stage times (read, decode and mesh, with their
-// fences' waits, and untimed no device half) and the worker's device counts
-// over the frame alone; timed, decode and mesh have device halves over
-// recon's breakdowns, every frame or one in kSampleEvery; each pass of the
-// track is counted; each mesh is non-empty on the device, and a
-// frame that meshes nothing still reaches the commit with its stamp; with
-// loop on a step past the end wraps, with loop off the last frame holds until
-// play restarts; a corrupt P-frame, a damaged record header or a record this
-// version cannot read resyncs at the next key, and a stream with no key left
-// stops the worker with the reason, one of keys past kMaxFrameBlocks blocks
-// with recon's refusal naming that ceiling; quit is prompt, playing, paused or
-// waiting for a consumer that takes nothing; the worker sleeps until taken()
-// rather than polling for the take; a fatal error stops the worker,
-// a failed build on it included; start is refused once started or stopped.
+// pts, payload bytes, key, stage times (read, decode, mesh, submit, the wait
+// for its batch and finish, untimed with no device half) and the worker's
+// device counts over the frame alone; timed, decode and mesh have device
+// halves over recon's breakdowns, every frame or one in kSampleEvery, and
+// from the second batch on the queue's idle before it, and its queue latency
+// where the device calibrates; each pass of the track is counted; each mesh
+// is non-empty on the device, carries a reached ready value, and a frame that
+// meshes nothing still reaches the commit with its stamp. Played, a steady
+// frame is one batch, one submit, no staging buffer, at most one wait that
+// blocked, and the dispatches and barriers its kind records; its rounds and
+// its due time are stamped. Paused, nothing is recorded ahead; a pause
+// publishes the frame recorded ahead at once, and the grid then holds it.
+// With loop on a step past the end wraps, with loop off the last frame holds
+// until play restarts; a corrupt P-frame, a damaged record header or a record
+// this version cannot read resyncs at the next key, as does one recon refuses
+// on the device, whose ring slot comes back over more passes than the ring
+// has; a stream with no key left stops the worker with the reason, one of
+// keys past kMaxFrameBlocks blocks with recon's refusal naming that ceiling;
+// quit is prompt, playing, paused or waiting for a consumer that takes
+// nothing; the worker sleeps until taken() rather than polling for the take; a
+// fatal error stops the worker, a failed build on it included, as does a ring
+// one short; start is refused once started or stopped.
 // Playing, no frame arrives before its pts says. The deblock is on by
 // default, and each frame says what it did, its filter and its blocks, the
 // exact ones among them: the true-SDF stream's, none exact, each mesh unlike
@@ -28,8 +36,10 @@
 // rebuild, never timed, with nothing else going, at the end with loop off
 // too, and parked only at unpark; toggled while playing, the frames after
 // take it with no rebuild. A park holds the worker:
-// nothing is published while parked, an extract waiting for the consumer
-// included; a control applied meanwhile (a step, a play and a pause) takes
+// nothing is published while parked, a mesh waiting for the consumer
+// included; a batch in flight is waited out, nothing is submitted, and its
+// frame is published at unpark, a grow and a decode again it needs included;
+// a control applied meanwhile (a step, a play and a pause) takes
 // effect at unpark; playing() does not change; unpark carries on from the
 // same frame; a park returns as soon as the step under way ends; one that
 // times out mid-decode still lets nothing start after it; one before start
@@ -38,8 +48,10 @@
 //
 // Live, from a recon StreamServer on 127.0.0.1 publishing the stream (looped
 // and restamped for a steady flow), or a raw peer: frames arrive with their
-// seq as their index, decode and mesh rows alone and the deblock on, which a
-// toggle turns off and on from the next record; a join after a P-frame
+// seq as their index, a mesh of their own decode, decode, submit, wait,
+// finish and mesh rows alone and the deblock on, which a toggle turns off and
+// on from the next record; each record is a decode batch and each mesh one,
+// with no staging buffer once the slots have grown; a join after a P-frame
 // shows that GOP from its key; P-frames before a connection's first key are
 // skipped, though counted, with status() OK; every record published while a
 // mesh waits for the consumer is decoded, and the newest is shown with the
@@ -52,8 +64,9 @@
 // fed as the view feeds it reads no spike in the records a second; a server
 // going away is a retry with its reason, a new one on its port, at another
 // voxel size, gives frames again, and a park then leaves no reason; a park
-// closes the connection within kClosed, 8 times at spread points as records
-// flow, and once with none coming; an unpark joins at the newest key; bytes
+// closes the connection within kClosed, submitting nothing after it, 8 times
+// at spread points as records flow, and once with none coming; an unpark
+// joins at the newest key; bytes
 // that are no stream, a session with no geometry track and a name that does not
 // resolve show why, with status() OK; a reason of StreamClient's shows less
 // its prefix, which names the address; a park ends the wait to retry, so
@@ -103,6 +116,7 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
@@ -246,9 +260,9 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   }
 
   // The extractor's, for a renderer of kFramesInFlight frames into
-  // `slot_count` ring slots.
+  // `slot_count` ring slots: mesh_wiring's two more by default.
   static recon::mesh::MarchingCubesConfig extractor_config(
-      std::uint32_t slot_count = kFramesInFlight + 1) {
+      std::uint32_t slot_count = kFramesInFlight + 2) {
     recon::mesh::MarchingCubesConfig config;
     config.extra_vertex_usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     config.extra_index_usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
@@ -259,7 +273,7 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   // The stream opened and started on the test's device, paused unless
   // `playing`, into `slot_count` ring slots; the fixture owns it.
   StreamPlayer* start(bool playing,
-                      std::uint32_t slot_count = kFramesInFlight + 1) {
+                      std::uint32_t slot_count = kFramesInFlight + 2) {
     core::Result<std::unique_ptr<StreamPlayer>> opened =
         StreamPlayer::open(path_);
     EXPECT_TRUE(opened.ok()) << opened.status().message();
@@ -311,11 +325,96 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
           EXPECT_EQ(index_count(mesh),
                     recon::mesh::kIndicesPerTriangle * mesh.triangle_count);
         }
+        if (!mesh.empty()) {
+          expect_ready(mesh);
+        }
         return taken;
       }
       std::this_thread::sleep_for(1ms);
     }
     return std::nullopt;
+  }
+
+  // The next mesh published, taken as next_frame takes it but with no check
+  // on the device, so at once and with no work of the test's on it; its
+  // stamp, or empty when none comes within `wait`. Each committed mesh's
+  // ready value has been reached.
+  std::optional<FrameStamp> take(SteadyClock::duration wait = kArrival) {
+    const SteadyClock::time_point deadline = SteadyClock::now() + wait;
+    while (SteadyClock::now() < deadline) {
+      std::optional<FrameStamp> taken;
+      const recon::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
+          slot_, [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+            taken = stamp;
+            player_->taken();
+            return true;
+          });
+      slot_ = (slot_ + 1) % kFramesInFlight;
+      if (outcome == recon::mesh::ExchangeOutcome::kCommitted) {
+        if (!exchange_.live().empty()) {
+          expect_ready(exchange_.live());
+        }
+        return taken;
+      }
+      std::this_thread::sleep_for(1ms);
+    }
+    return std::nullopt;
+  }
+
+  // A mesh carries the value on its extractor's timeline that the batch
+  // which wrote it set, reached by its hand-over (DeviceMesh::ready), which a
+  // drawing frame waits on with no stall.
+  static void expect_ready(const recon::mesh::DeviceMesh& mesh) {
+    ASSERT_NE(mesh.ready.semaphore, nullptr)
+        << "generation " << mesh.generation;
+    EXPECT_GT(mesh.ready.value, 0u);
+    const core::Result<std::uint64_t> reached = mesh.ready.semaphore->value();
+    ASSERT_TRUE(reached.ok()) << reached.status().message();
+    EXPECT_GE(*reached, mesh.ready.value) << "generation " << mesh.generation;
+  }
+
+  // Whether `done()` holds within `wait`, asked every millisecond.
+  template <typename Done>
+  static bool eventually(Done&& done, SteadyClock::duration wait = kArrival) {
+    const SteadyClock::time_point deadline = SteadyClock::now() + wait;
+    while (!done()) {
+      if (SteadyClock::now() >= deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(1ms);
+    }
+    return true;
+  }
+
+  // Once the worker submits a batch past the device's `submits`, within
+  // kArrival: a frame recorded ahead.
+  bool submitted_after(std::uint64_t submits) {
+    return eventually([&] { return device().counters().submits > submits; });
+  }
+
+  // Once the batch of the frame after `taken`, the frame taken last, has run,
+  // within kArrival: recorded ahead while playing, it sets the value after
+  // `taken`'s mesh's on the extractor's timeline, and its recording, a grow
+  // included, has submitted all it will. Whether that frame is still kAhead
+  // or more from due, so a control applied now finds its batch in flight: it
+  // is due no earlier than its pts step after `taken` was (FrameStamp::due).
+  // A test skips without, as a device too slow for this window cannot show
+  // what the test checks.
+  bool next_batch_in_flight(const FrameStamp& taken) {
+    constexpr auto kAhead = 100ms;
+    const core::TimelinePoint ready = exchange_.live().ready;
+    EXPECT_NE(ready.semaphore, nullptr);
+    if (ready.semaphore == nullptr) {
+      return false;
+    }
+    const core::Status ran = ready.semaphore->wait(
+        ready.value + 1,
+        std::chrono::duration_cast<std::chrono::nanoseconds>(kArrival).count());
+    EXPECT_TRUE(ran.ok()) << "frame " << taken.index + 1
+                          << "'s batch: " << ran.message();
+    const auto step =
+        std::chrono::nanoseconds(pts_of(taken.index + 1) - pts_of(taken.index));
+    return ran.ok() && SteadyClock::now() + kAhead < taken.due + step;
   }
 
   // The index count the mesh's indirect draw command holds on the device.
@@ -564,6 +663,22 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     EXPECT_TRUE(reread_status.ok()) << reread_status.message();
   }
 
+  // Flips a byte near the end of `record`'s frame, in its last segment's
+  // rANS stream (recon's frames end with their PAYLOAD section), with its
+  // payload's and its header's CRCs rewritten, so the record still reads and
+  // its header still parses: only decoding it on the device finds the fault.
+  void corrupt_segments(const stream::Record& record) {
+    const auto payload = static_cast<std::size_t>(record.size);
+    std::vector<std::uint8_t> chunk =
+        read_at(record.offset, kRecordHeader + payload);
+    chunk[kRecordHeader + payload - 2] ^= 0x5A;
+    put_u32(chunk, kBodyCrcAt, crc32(chunk.data() + kRecordHeader, payload));
+    put_u32(chunk, kHeaderCrcAt, crc32(chunk.data(), kHeaderCrcAt));
+    ASSERT_NO_FATAL_FAILURE(write_at(record.offset, chunk));
+    const core::Status reread_status = reread(record);
+    EXPECT_TRUE(reread_status.ok()) << reread_status.message();
+  }
+
   // Steps once and checks the frame that comes is the stream's frame
   // `frame`, stamped `index`.
   void step_to(StreamPlayer& player, std::uint64_t frame, std::uint64_t index) {
@@ -610,10 +725,11 @@ TEST_F(StreamPlayerTest, TheTracksCountsAndRateAreWhatWasWritten) {
   EXPECT_EQ((*opened)->rate().den, 1u);
 }
 
-// Untimed, as until set_device_timing asks: each frame's read, decode and
-// mesh have host time, decode and mesh their fences' waits inside it, and
-// none a device half; and the worker's device counts its submits, its waits
-// and their time, and its staging buffers, each frame's its own.
+// Untimed, as until set_device_timing asks: each frame's read, decode, mesh,
+// submit, wait for its batch and finish have host time, the wait all of it,
+// and none a device half; and the worker's device counts its submits, its
+// waits and their time, its staging buffers, dispatches and barriers, each
+// frame's its own.
 TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
   const std::vector<stream::Record> all = records();
   ASSERT_EQ(all.size(), kFrames);
@@ -637,28 +753,31 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
     EXPECT_EQ(frame->key, i % kIntraPeriod == 0);
     EXPECT_FALSE(frame->timed);
     const std::vector<core::StageRow>& rows = frame->stages.rows();
-    ASSERT_EQ(rows.size(), 3u) << "frame " << i;
+    ASSERT_EQ(rows.size(), 6u) << "frame " << i;
     EXPECT_STREQ(rows[0].name, "read");
     EXPECT_STREQ(rows[1].name, "decode");
     EXPECT_STREQ(rows[2].name, "mesh");
+    EXPECT_STREQ(rows[3].name, "submit");
+    EXPECT_STREQ(rows[4].name, "wait: GPU");
+    EXPECT_STREQ(rows[5].name, "finish");
     for (const core::StageRow& row : rows) {
       EXPECT_GT(row.cpu_ms, 0.0) << row.name << ", frame " << i;
       EXPECT_LE(row.wait_ms, row.cpu_ms) << row.name << ", frame " << i;
       EXPECT_EQ(row.device, core::DeviceTime::None) << row.name;
     }
-    EXPECT_GT(rows[1].wait_ms, 0.0) << "decode waits for its fences";
-    EXPECT_GT(rows[2].wait_ms, 0.0) << "mesh waits for its fence";
-    // The test's own readback of the mesh counts too, so at least these;
-    // today's decode stages its payload.
+    EXPECT_EQ(rows[4].wait_ms, rows[4].cpu_ms) << "a wait is all wait";
+    // The test's own readback of the mesh before counts too, so at least
+    // these.
     const core::DeviceCounters& counted = frame->counters;
-    EXPECT_GE(counted.submits, 2u) << "frame " << i;
-    EXPECT_GE(counted.host_waits, 1u) << "frame " << i;
-    EXPECT_GT(counted.blocked_ns, 0u) << "frame " << i;
-    EXPECT_GE(counted.staging_buffers, 1u) << "frame " << i;
+    EXPECT_GE(counted.submits, 1u) << "frame " << i;
+    EXPECT_GT(counted.dispatches, 0u) << "frame " << i;
+    EXPECT_GT(counted.barriers, 0u) << "frame " << i;
     frames.submits += counted.submits;
     frames.host_waits += counted.host_waits;
     frames.blocked_ns += counted.blocked_ns;
     frames.staging_buffers += counted.staging_buffers;
+    frames.dispatches += counted.dispatches;
+    frames.barriers += counted.barriers;
   }
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
@@ -669,11 +788,14 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
   EXPECT_LE(frames.blocked_ns, after.blocked_ns - before.blocked_ns);
   EXPECT_LE(frames.staging_buffers,
             after.staging_buffers - before.staging_buffers);
+  EXPECT_LE(frames.dispatches, after.dispatches - before.dispatches);
+  EXPECT_LE(frames.barriers, after.barriers - before.barriers);
 }
 
 // Timed, every frame's decode and mesh have a device half, where the queue
 // can time measured, each over recon's breakdowns, which follow its row and
-// whose tiles it holds; read has none.
+// whose tiles it holds, folded in once from its batch; read, submit, the
+// wait and finish have none.
 TEST_F(StreamPlayerTest, ATimedFramesDecodeAndMeshHoldReconsBreakdowns) {
   // recon's timers are private; one on the same device times where they can.
   core::Result<core::GpuTimer> timer = core::GpuTimer::create(device());
@@ -715,7 +837,12 @@ TEST_F(StreamPlayerTest, ATimedFramesDecodeAndMeshHoldReconsBreakdowns) {
         EXPECT_GE(row.gpu_ms + 1e-9, breakdowns_ms) << stage;
       }
     }
-    EXPECT_EQ(at, rows.size()) << "nothing after mesh's breakdowns";
+    for (const char* host : {"submit", "wait: GPU", "finish"}) {
+      ASSERT_LT(at, rows.size());
+      EXPECT_STREQ(rows[at].name, host);
+      EXPECT_EQ(rows[at++].device, core::DeviceTime::None) << host;
+    }
+    EXPECT_EQ(at, rows.size()) << "nothing after finish";
     EXPECT_STREQ(rows[2].name, "  ..rans decode");
   }
   EXPECT_TRUE(player->status().ok()) << player->status().message();
@@ -734,9 +861,9 @@ TEST_F(StreamPlayerTest, SampledTimesOneFrameInKSampleEveryFromTheFirst) {
     EXPECT_EQ(frame->timed, i % volumetric_kit::player::kSampleEvery == 0)
         << "frame " << i;
     // A timed frame has recon's breakdowns too.
-    EXPECT_EQ(frame->stages.rows().size() > 3u, frame->timed) << "frame " << i;
+    EXPECT_EQ(frame->stages.rows().size() > 6u, frame->timed) << "frame " << i;
   }
-  // Paused, the worker has read the next frame but decodes it once a step
+  // Paused, the worker has read the next frame but records it once a step
   // makes it due, so it is timed as now set, and the one after it too.
   player->set_device_timing(DeviceTiming::kAll);
   for (int i = 0; i < 2; ++i) {
@@ -943,6 +1070,35 @@ TEST_F(StreamPlayerTest, ACorruptPFrameResyncsAtTheNextKey) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
+// A P-frame whose rANS data is damaged reads and parses, so its batch runs,
+// and recon refuses it on the device: the shown mesh stays, its extract, run
+// gated off, gives its ring slot back unpublished, and the frame after, which
+// lost its reference, is skipped, so playback resumes at the next key. Over
+// more passes than the ring has slots, no slot is lost.
+TEST_F(StreamPlayerTest, ARefusedFrameReturnsItsMeshSlot) {
+  constexpr std::uint32_t kSlots = kFramesInFlight + 2;
+  const std::vector<stream::Record> all = records();
+  ASSERT_EQ(all.size(), kFrames);
+  ASSERT_NO_FATAL_FAILURE(corrupt_segments(all[1]));
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  for (std::uint64_t pass = 1; pass <= kSlots + 1; ++pass) {
+    for (const std::uint64_t frame : {std::uint64_t{0}, std::uint64_t{3},
+                                      std::uint64_t{4}, std::uint64_t{5}}) {
+      const std::optional<FrameStamp> got = take();
+      ASSERT_TRUE(got.has_value()) << "pass " << pass << ", frame " << frame;
+      EXPECT_EQ(got->index, frame) << "pass " << pass;
+      EXPECT_EQ(got->pass, pass);
+      if (frame == 3 && pass > 1) {
+        // Frame 1's batch ran, then frame 3's; in the first pass, buffers
+        // grown to the stream add their own.
+        EXPECT_EQ(got->counters.submits, 2u) << "pass " << pass;
+      }
+    }
+  }
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
 TEST_F(StreamPlayerTest, ADamagedRecordHeaderResyncsAtTheNextKey) {
   const std::vector<stream::Record> all = records();
   ASSERT_EQ(all.size(), kFrames);
@@ -1061,14 +1217,14 @@ TEST_F(StreamPlayerTest, AConsumerTakingNothingStallsTheWorkerUntilQuit) {
 }
 
 // The worker sleeps until taken() says the last mesh was taken, rather than
-// polling the exchange: a take it is not told of leaves the next extract
+// polling the exchange: a take it is not told of leaves the next publish
 // waiting, and taken() lets it go.
 TEST_F(StreamPlayerTest, TheWorkerSleepsUntilTakenRatherThanPolling) {
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
   // Frame 1 goes and is left untaken, so frame 2, stepped too, waits for the
-  // consumer before its extract; the sleep only lets the worker get there.
+  // consumer before its publish; the sleep only lets the worker get there.
   player->step();
   player->step();
   std::this_thread::sleep_for(kQuiet);
@@ -1097,14 +1253,358 @@ TEST_F(StreamPlayerTest, TheWorkerSleepsUntilTakenRatherThanPolling) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
+// A frame's decode and mesh, as one command batch records them: a P-frame's
+// and a key's of the tests' stream, each sphere's blocks moved a block, with
+// the deblock's LG filter, in place where device-mapped memory is cached and
+// copied elsewhere (its output copies take one barrier more). Pinned, as
+// Apple GPUs step in time near 80 of either (DECISIONS.md).
+struct BatchCounts {
+  std::uint64_t dispatches;
+  std::uint64_t barriers;  // in place
+};
+constexpr BatchCounts kPFrameBatch{39, 47};
+constexpr BatchCounts kKeyBatch{39, 47};
+
+// Played, every frame of a steady pass, the second, is one batch: one
+// submit, no staging buffer, at most one wait that blocked (its fence, which
+// has normally signalled by its due time), and the dispatches and barriers
+// its kind records. Taken with no device work of the test's.
+TEST_F(StreamPlayerTest, OneBatchPerFrame) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  const bool in_place = device().caps().device_mapped_cached();
+  std::uint64_t seen = 0;
+  while (seen < kFrames) {
+    const std::optional<FrameStamp> frame = take();
+    ASSERT_TRUE(frame.has_value()) << "no frame after " << seen;
+    if (frame->pass < 2) {
+      continue;
+    }
+    ++seen;
+    SCOPED_TRACE(::testing::Message() << "frame " << frame->index);
+    const core::DeviceCounters& counted = frame->counters;
+    EXPECT_EQ(counted.submits, 1u);
+    EXPECT_EQ(counted.staging_buffers, 0u);
+    EXPECT_LE(counted.host_waits, 1u);
+    const BatchCounts expected = frame->key ? kKeyBatch : kPFrameBatch;
+    EXPECT_EQ(counted.dispatches, expected.dispatches);
+    EXPECT_EQ(counted.barriers, expected.barriers + (in_place ? 0 : 1));
+    RecordProperty(std::string(frame->key ? "key" : "p") + "_frame_batch",
+                   std::to_string(counted.dispatches) + " dispatches, " +
+                       std::to_string(counted.barriers) + " barriers");
+    // Its rounds on the device, and its latency's first leg.
+    EXPECT_GE(frame->rounds, 1u);
+    EXPECT_LE(frame->rounds, recon::volume::VoxelHashMap::kRecordedRounds);
+    EXPECT_NE(frame->due, SteadyClock::time_point{});
+    EXPECT_LE(frame->due, frame->published);
+  }
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A frame's due time is the one the clock set, not when the worker woke to
+// it: each frame's is its pts step after the frame before's, unless that one
+// was shown over a period late, which moves the clock on (Playback).
+TEST_F(StreamPlayerTest, AFramesDueTimeIsTheOneTheClockSet) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  std::optional<FrameStamp> before = take();
+  ASSERT_TRUE(before.has_value());
+  std::uint64_t compared = 0;
+  for (std::uint64_t i = 1; i < 2 * kFrames; ++i) {
+    std::optional<FrameStamp> frame = take();
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    if (frame->pass == before->pass &&
+        before->published - before->due <=
+            std::chrono::nanoseconds(kPeriodNs)) {
+      EXPECT_EQ(frame->due - before->due,
+                std::chrono::nanoseconds(pts_of(frame->index) -
+                                         pts_of(before->index)))
+          << "frame " << frame->index << " of pass " << frame->pass;
+      ++compared;
+    }
+    before = std::move(frame);
+  }
+  EXPECT_GT(compared, 0u);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A frame seen over a period late moves the clock on: the frame after it is
+// due its pts step after the late one was seen, not after the late one's due
+// time, so the frames behind it follow rather than come in a burst
+// (Playback). Frame 2 left untaken holds the worker in frame 3's publish,
+// so it sees frame 4 due no sooner than frame 2 is taken.
+TEST_F(StreamPlayerTest, AFrameSeenOverAPeriodLateMovesTheClockOn) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  std::optional<FrameStamp> frame;
+  while (!frame || frame->index < 1) {
+    frame = take();
+    ASSERT_TRUE(frame.has_value());
+  }
+  // Past frame 4's due time, frame 1's plus three steps, and a period on.
+  std::this_thread::sleep_for(
+      std::chrono::nanoseconds(pts_of(4) - pts_of(1) + 2 * kPeriodNs) + 250ms);
+  const SteadyClock::time_point taken = SteadyClock::now();
+  std::optional<FrameStamp> late;
+  while (!frame || frame->index < 5) {
+    frame = take();
+    ASSERT_TRUE(frame.has_value());
+    if (frame->index == 4) {
+      late = frame;
+    }
+  }
+  ASSERT_TRUE(late.has_value());
+  const auto period = std::chrono::nanoseconds(kPeriodNs);
+  if (taken - late->due <= period) {
+    GTEST_SKIP() << "frame 4 was not seen a period late";
+  }
+  EXPECT_GE(
+      frame->due - late->due,
+      std::chrono::nanoseconds(pts_of(5) - pts_of(4)) + (taken - late->due))
+      << "frame 5 is due its step after frame 4's due time, not after frame "
+         "4 was seen";
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Every mesh carries the value its batch set on the extractor's timeline,
+// reached by its hand-over (take checks), each frame's past the one before.
+TEST_F(StreamPlayerTest, EveryMeshCarriesAReachedReadyValue) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  std::uint64_t last = 0;
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    const std::optional<FrameStamp> frame = take();
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    const core::TimelinePoint& ready = exchange_.live().ready;
+    EXPECT_GT(ready.value, last) << "frame " << i;
+    last = ready.value;
+  }
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Timed, a frame's batch shows the queue's idle since the worker's batch
+// before when both were timed and nothing came between: not the first
+// frame's, and in the steady pass, the second, every frame's; and its queue
+// latency where the device calibrates its clocks. Untimed, neither. Both are
+// in ms: the idle under a second, as the stream's longest pts step is
+// kGapNs + kPeriodNs, and the latency, a submit's, under 100 ms (a
+// calibration may place the first timestamp a little before the submit
+// call, by its deviation).
+TEST_F(StreamPlayerTest, DeviceIdleNeedsTwoTimedBatchesInARow) {
+  constexpr double kMaxIdleMs = 1000.0;
+  constexpr double kMaxQueueMs = 100.0;
+  constexpr double kCalibrationMs = 1.0;
+  core::Result<core::GpuTimer> timer = core::GpuTimer::create(device());
+  ASSERT_TRUE(timer.ok()) << timer.status().message();
+  const bool times = timer.value().available();
+  const bool calibrates = device().calibrate().ok();
+  timing_ = DeviceTiming::kAll;
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  for (std::uint64_t i = 0; i < 2 * kFrames; ++i) {
+    const std::optional<FrameStamp> frame = take();
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_TRUE(frame->timed);
+    if (i == 0) {
+      EXPECT_FALSE(frame->device_idle_ms.has_value()) << "no batch before";
+    } else if (frame->pass == 2) {
+      EXPECT_EQ(frame->device_idle_ms.has_value(), times) << "frame " << i;
+    }
+    if (frame->device_idle_ms) {
+      EXPECT_GE(*frame->device_idle_ms, 0.0);
+      EXPECT_LT(*frame->device_idle_ms, kMaxIdleMs) << "frame " << i;
+    }
+    EXPECT_EQ(frame->queue_ms.has_value(), times && calibrates)
+        << "frame " << i;
+    if (frame->queue_ms) {
+      EXPECT_GT(*frame->queue_ms, -kCalibrationMs) << "frame " << i;
+      EXPECT_LT(*frame->queue_ms, kMaxQueueMs) << "frame " << i;
+    }
+  }
+  player->set_device_timing(DeviceTiming::kOff);
+  // The frame after the next is recorded untimed.
+  std::optional<FrameStamp> untimed;
+  for (int i = 0; i < 3 && (!untimed || untimed->timed); ++i) {
+    untimed = take();
+    ASSERT_TRUE(untimed.has_value());
+  }
+  EXPECT_FALSE(untimed->timed);
+  EXPECT_FALSE(untimed->device_idle_ms.has_value());
+  EXPECT_FALSE(untimed->queue_ms.has_value());
+  // Timed again, the first timed frame follows an untimed batch: no idle.
+  player->set_device_timing(DeviceTiming::kAll);
+  std::optional<FrameStamp> timed;
+  for (int i = 0; i < 3 && (!timed || !timed->timed); ++i) {
+    timed = take();
+    ASSERT_TRUE(timed.has_value());
+  }
+  EXPECT_TRUE(timed->timed);
+  EXPECT_FALSE(timed->device_idle_ms.has_value()) << "an untimed batch before";
+  // Stepped, with the test's own readback of each mesh submitted between two
+  // frames' batches: no idle either.
+  player->pause();
+  for (std::uint64_t i = 0; i < 3; ++i) {
+    player->step();
+    const std::optional<FrameStamp> stepped = next_frame();
+    ASSERT_TRUE(stepped.has_value()) << "step " << i;
+    if (stepped->timed && i > 0) {
+      EXPECT_FALSE(stepped->device_idle_ms.has_value())
+          << "a submit between, step " << i;
+    }
+  }
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Paused, a frame is recorded only once it is due: in the steady pass, the
+// second, a step's frame is its one batch, after which the worker reads the
+// next record and submits nothing until the next step.
+TEST_F(StreamPlayerTest, NothingIsRecordedAheadWhilePaused) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    ASSERT_NO_FATAL_FAILURE(step_to(*player, i));
+  }
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  const std::uint64_t submits = device().counters().submits;
+  player->step();
+  const std::optional<FrameStamp> one = take();
+  ASSERT_TRUE(one.has_value());
+  EXPECT_EQ(one->index, 1u);
+  EXPECT_EQ(one->pass, 2u);
+  std::this_thread::sleep_for(kQuiet);  // the worker reads frame 2
+  EXPECT_EQ(device().counters().submits - submits, 1u)
+      << "frame 2 recorded ahead while paused";
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 2));
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Playing, the frame after the one taken is recorded at once, before its due
+// time: past the stream's half-second pause, frame kGapAt. A pause then
+// publishes it at once, not when it was due, and nothing more goes, so the
+// grid holds the frame shown, which a toggle rebuilds (DECISIONS.md).
+TEST_F(StreamPlayerTest, APauseShowsTheFrameInHandThenHolds) {
+  ASSERT_NO_FATAL_FAILURE(use_true_sdf());
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  std::optional<FrameStamp> frame;
+  while (!frame || frame->index + 1 < vp_test::kGapAt) {
+    frame = take();
+    ASSERT_TRUE(frame.has_value());
+  }
+  // Frame kGapAt is due kGapNs on; the worker records it meanwhile.
+  if (!next_batch_in_flight(*frame)) {
+    GTEST_SKIP() << "frame " << vp_test::kGapAt << " was not in flight "
+                 << "well ahead of its due time";
+  }
+  const SteadyClock::time_point paused = SteadyClock::now();
+  player->pause();
+  const std::optional<FrameStamp> held = next_frame();
+  ASSERT_TRUE(held.has_value()) << "the pause published no frame";
+  EXPECT_EQ(held->index, vp_test::kGapAt);
+  EXPECT_LT(SteadyClock::now() - paused,
+            std::chrono::nanoseconds(vp_test::kGapNs / 2))
+      << "published when due, not at the pause";
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "paused, nothing else goes";
+  player->set_deblock(false);
+  ASSERT_NO_FATAL_FAILURE(expect_rebuild(vp_test::kGapAt, false, "off"));
+  EXPECT_FALSE(player->playing());
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Parked with a frame's batch in flight, recorded ahead of its due time, the
+// park waits that batch out and returns at once; nothing is submitted or
+// published while parked, past its due time; at unpark the frame is finished
+// and published, with no other batch.
+TEST_F(StreamPlayerTest,
+       AParkWithABatchInFlightSubmitsNothingAndPublishesAfterUnpark) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  // In the steady pass, the second, so the frame is its one batch.
+  std::optional<FrameStamp> frame;
+  while (!frame || frame->pass < 2 || frame->index + 1 < vp_test::kGapAt) {
+    frame = take();
+    ASSERT_TRUE(frame.has_value());
+  }
+  if (!next_batch_in_flight(*frame)) {
+    GTEST_SKIP() << "frame " << vp_test::kGapAt << " was not in flight "
+                 << "well ahead of its due time";
+  }
+  const std::uint64_t submits = device().counters().submits;
+  const SteadyClock::time_point parking = SteadyClock::now();
+  ASSERT_TRUE(player->park(kArrival));
+  EXPECT_LT(SteadyClock::now() - parking, kPrompt);
+  EXPECT_FALSE(take(std::chrono::nanoseconds(vp_test::kGapNs)).has_value())
+      << "published while parked";
+  EXPECT_EQ(device().counters().submits, submits) << "submitted while parked";
+  player->unpark();
+  const std::optional<FrameStamp> next = take();
+  ASSERT_TRUE(next.has_value()) << "nothing after unpark";
+  EXPECT_EQ(next->index, vp_test::kGapAt);
+  EXPECT_EQ(next->counters.submits, 1u);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// The grow stream's frame kGrownFrame nearly fills the grid: its batch runs,
+// the table refuses blocks on the device, and its extract runs gated off.
+// Parked with that batch in flight, nothing is submitted; at unpark recon
+// grows the grid and decodes the frame again ("  ..grow"), the worker meshes
+// it in a batch of its own, and publishes it.
+TEST_F(StreamPlayerTest, AParkWhileARecoveryIsDueRunsItAtUnpark) {
+  path_ = scratch_.copy(VP_TEST_STREAMS, vp_test::kGrowStream);
+  ASSERT_FALSE(path_.empty());
+  const std::vector<std::uint32_t> blocks = block_counts();
+  ASSERT_EQ(blocks.size(), kFrames);
+  ASSERT_LE(2 * blocks[0], vp_test::kFirstGridSlots) << "a grid of more slots";
+  ASSERT_GT(blocks[vp_test::kGrownFrame],
+            vp_test::kFirstGridSlots - vp_test::kTableFloor);
+  ASSERT_LE(blocks[vp_test::kGrownFrame], vp_test::kFirstGridSlots);
+  timing_ = DeviceTiming::kAll;
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  std::optional<FrameStamp> frame;
+  while (!frame || frame->index + 1 < vp_test::kGrownFrame) {
+    frame = take();
+    ASSERT_TRUE(frame.has_value());
+  }
+  if (!next_batch_in_flight(*frame)) {
+    GTEST_SKIP() << "frame " << vp_test::kGrownFrame << " was not in flight "
+                 << "well ahead of its due time";
+  }
+  // From the park's call to the unpark: no submit, the park's own wait
+  // included.
+  const std::uint64_t submits = device().counters().submits;
+  ASSERT_TRUE(player->park(kArrival));
+  EXPECT_FALSE(take(std::chrono::nanoseconds(vp_test::kGapNs)).has_value())
+      << "published while parked";
+  EXPECT_EQ(device().counters().submits, submits) << "recovered while parked";
+  player->unpark();
+  const std::optional<FrameStamp> grown = take();
+  ASSERT_TRUE(grown.has_value()) << "nothing after unpark";
+  EXPECT_EQ(grown->index, vp_test::kGrownFrame);
+  EXPECT_GT(grown->counters.submits, 1u) << "no recovery";
+  bool grow_row = false;
+  for (const core::StageRow& row : grown->stages.rows()) {
+    grow_row = grow_row || std::strcmp(row.name, "  ..grow") == 0;
+  }
+  EXPECT_TRUE(grow_row) << "no \"  ..grow\" row";
+  EXPECT_GT(exchange_.live().triangle_count, 0u);
+  // The frames after it decode into the grown grid.
+  const std::optional<FrameStamp> after = take();
+  ASSERT_TRUE(after.has_value());
+  EXPECT_EQ(after->index, vp_test::kGrownFrame + 1);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
 TEST_F(StreamPlayerTest, AFatalErrorStopsTheWorker) {
-  // A ring with no slot to spare: with both of the consumer's frames holding
-  // a mesh, the third extract is refused.
+  // A ring one short of mesh_wiring's: with both of the consumer's frames
+  // holding a mesh and frame 2 published untaken, frame 3's extract, recorded
+  // before that take, is refused.
   StreamPlayer* player =
-      start(/*playing=*/false, /*slot_count=*/kFramesInFlight);
+      start(/*playing=*/false, /*slot_count=*/kFramesInFlight + 1);
   ASSERT_NE(player, nullptr);
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 1));
+  player->step();
   player->step();
   const SteadyClock::time_point deadline = SteadyClock::now() + kArrival;
   while (player->status().ok() && SteadyClock::now() < deadline) {
@@ -1216,23 +1716,24 @@ TEST_F(StreamPlayerTest, PlayingDoesNotChangeAcrossAPark) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-TEST_F(StreamPlayerTest, AParkHoldsAnExtractWaitingForTheConsumer) {
+TEST_F(StreamPlayerTest, AParkHoldsAMeshWaitingForTheConsumer) {
   StreamPlayer* player = start(/*playing=*/false);
   ASSERT_NE(player, nullptr);
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
-  // Frame 1 goes and is left untaken, so frame 2, stepped too, waits for the
-  // consumer before its extract; the sleep only lets the worker get there.
+  // Frame 1 goes and is left untaken, so frame 2, stepped too, is meshed and
+  // waits for the consumer before its publish, in no step; the sleep only
+  // lets the worker get there.
   player->step();
   player->step();
   std::this_thread::sleep_for(kQuiet);
   EXPECT_TRUE(player->park(kArrival));
   // Taking frame 1, published before the park, frees the worker's wait; it
-  // does not extract while parked.
+  // does not publish while parked.
   std::uint64_t last = 0;
   if (const std::optional<FrameStamp> pending = next_frame(kQuiet)) {
     last = pending->index;
   }
-  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "extracted while parked";
+  EXPECT_FALSE(next_frame(kQuiet).has_value()) << "published while parked";
   player->unpark();
   const std::optional<FrameStamp> next = next_frame();
   ASSERT_TRUE(next.has_value()) << "nothing after unpark";
@@ -1408,7 +1909,7 @@ TEST_F(StreamPlayerTest, TurnedOffBeforeStartTheFirstFrameDecodesWithout) {
   EXPECT_TRUE(player_->status().ok()) << player_->status().message();
 }
 
-// Paused on frame 1, the worker has read frame 2 but decodes it only when it
+// Paused on frame 1, the worker has read frame 2 but records it only when it
 // is due, so the grid holds frame 1: a toggle rebuilds that, and nothing
 // else goes until a step.
 TEST_F(StreamPlayerTest, ToggledWhilePausedTheFrameShownIsRebuilt) {
@@ -1507,8 +2008,8 @@ TEST_F(StreamPlayerTest, AToggleDuringAParkRebuildsAtUnpark) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-// Playing, a toggle reaches the next frame decoded, which may be after one
-// decoded before it; nothing is rebuilt.
+// Playing, a toggle reaches the next frame recorded: the second after the
+// toggle, as the next is recorded already; nothing is rebuilt.
 TEST_F(StreamPlayerTest, ToggledWhilePlayingTheFramesAfterTakeIt) {
   ASSERT_NO_FATAL_FAILURE(use_true_sdf());
   StreamPlayer* player = start(/*playing=*/true);
@@ -1869,19 +2370,6 @@ class LivePlayerTest : public StreamPlayerTest {
     return started.ok() ? player_.get() : nullptr;
   }
 
-  // Whether `done()` holds within `wait`, asked every millisecond.
-  template <typename Done>
-  static bool eventually(Done&& done, SteadyClock::duration wait = kArrival) {
-    const SteadyClock::time_point deadline = SteadyClock::now() + wait;
-    while (!done()) {
-      if (SteadyClock::now() >= deadline) {
-        return false;
-      }
-      std::this_thread::sleep_for(1ms);
-    }
-    return true;
-  }
-
   // Whether the player's connection reaches `state` within kArrival.
   bool reaches(LiveState state) {
     return eventually([&] { return player_->live_status().state == state; });
@@ -1895,28 +2383,6 @@ class LivePlayerTest : public StreamPlayerTest {
     const std::string& why = status.last_error;
     EXPECT_EQ(why.rfind(start, 0), 0u) << why;
     EXPECT_EQ(why.find(status.address), std::string::npos) << why;
-  }
-
-  // The next mesh published, taken as next_frame takes it but with no check
-  // on the device, so at once; its stamp, or empty when none comes within
-  // `wait`.
-  std::optional<FrameStamp> take(SteadyClock::duration wait) {
-    const SteadyClock::time_point deadline = SteadyClock::now() + wait;
-    while (SteadyClock::now() < deadline) {
-      std::optional<FrameStamp> taken;
-      const recon::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
-          slot_, [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
-            taken = stamp;
-            player_->taken();
-            return true;
-          });
-      slot_ = (slot_ + 1) % kFramesInFlight;
-      if (outcome == recon::mesh::ExchangeOutcome::kCommitted) {
-        return taken;
-      }
-      std::this_thread::sleep_for(1ms);
-    }
-    return std::nullopt;
   }
 
   // The frames taken until one with `index` comes, each within kArrival.
@@ -2117,17 +2583,125 @@ TEST_F(LivePlayerTest, FramesArriveWithTheirSeqAsTheirIndex) {
     EXPECT_EQ(frame->records, 1u);
     EXPECT_EQ(frame->record_bytes, frame->bytes);
     EXPECT_TRUE(frame->deblock_on);
-    // No "read": the wait for the network is no stage.
+    // No "read": the wait for the network is no stage. Its decode is a
+    // batch of its own, and so is its mesh.
     const std::vector<core::StageRow>& rows = frame->stages.rows();
-    ASSERT_EQ(rows.size(), 2u) << "frame " << i;
+    ASSERT_EQ(rows.size(), 5u) << "frame " << i;
     EXPECT_STREQ(rows[0].name, "decode");
-    EXPECT_STREQ(rows[1].name, "mesh");
+    EXPECT_STREQ(rows[1].name, "submit");
+    EXPECT_STREQ(rows[2].name, "wait: GPU");
+    EXPECT_STREQ(rows[3].name, "finish");
+    EXPECT_STREQ(rows[4].name, "mesh");
+    // Due once its record came whole, and published after; its mesh is of
+    // its own decode, finished before it was meshed.
+    EXPECT_NE(frame->due, SteadyClock::time_point{});
+    EXPECT_LE(frame->due, frame->published);
+    EXPECT_NEAR(mean_x(exchange_.live()), kMetresAFrame * i, 0.02);
   }
   const LiveStatus status = player->live_status();
   EXPECT_EQ(status.state, LiveState::kLive);
   EXPECT_EQ(status.seq, kFrames - 1);
   EXPECT_EQ(status.address, "127.0.0.1:" + std::to_string(server->port()));
   EXPECT_TRUE(status.last_error.empty()) << status.last_error;
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Records one at a time, each taken before the next goes: each is decoded in
+// a batch of its own, read straight into one of the decoder's input slots,
+// and meshed in another, so a frame is two submits and, once the slots have
+// grown to the stream's records, no staging buffer. Taken with no device work
+// of the test's.
+TEST_F(LivePlayerTest, EachRecordIsOneDecodeBatchAndEachMeshOne) {
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  for (std::uint64_t n = 0; n < 2 * kFrames; ++n) {
+    const core::Status published =
+        server->publish(restamped(recording_.infos[n % kFrames], n / kFrames),
+                        recording_.payloads[n % kFrames].data(),
+                        recording_.payloads[n % kFrames].size());
+    ASSERT_TRUE(published.ok()) << published.message();
+    const std::optional<FrameStamp> frame = take();
+    ASSERT_TRUE(frame.has_value()) << "no frame " << n;
+    EXPECT_EQ(frame->records, 1u);
+    if (n >= kFrames) {
+      EXPECT_EQ(frame->counters.submits, 2u) << "frame " << n;
+      EXPECT_EQ(frame->counters.staging_buffers, 0u) << "frame " << n;
+    }
+  }
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// P2 arrives while P1's decode is held on the GPU. Its due stamp identifies
+// that arrival, so publication latency includes the wait for P1's decode.
+// Warm all capacities first, and leave K0's mesh untaken so the worker keeps
+// reading records rather than waiting to mesh P1.
+TEST_F(LivePlayerTest, ArrivalIncludesWaitingForThePreviousDecode) {
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    ASSERT_NO_FATAL_FAILURE(publish(*server, i));
+    ASSERT_TRUE(take().has_value()) << "warm frame " << i;
+  }
+  const auto send = [&](std::uint64_t i) {
+    const Bytes& bytes = recording_.payloads[i];
+    const core::Status published = server->publish(
+        restamped(recording_.infos[i], 1), bytes.data(), bytes.size());
+    EXPECT_TRUE(published.ok()) << published.message();
+    return published.ok() &&
+           eventually([&] { return player->live_status().seq == kFrames + i; });
+  };
+  ASSERT_TRUE(send(0));
+  const std::atomic<bool> cancel{false};
+  ASSERT_TRUE(
+      eventually([&] { return !exchange_.wait_collected(0ms, cancel); }));
+
+  core::Result<core::TimelineSemaphore> gate =
+      core::TimelineSemaphore::create(device());
+  ASSERT_TRUE(gate.ok()) << gate.status().message();
+  core::CommandBatch batch(device(), allocator());
+  core::Result<core::PendingBatch> pending =
+      batch.submit_async({{&*gate, 1}}, {});
+  ASSERT_TRUE(pending.ok()) << pending.status().message();
+  // Declared after the pending batch: an assertion failure still releases
+  // its wait before the batch's destructor or the fixture stops the worker.
+  struct Release {
+    core::TimelineSemaphore& gate;
+    bool done = false;
+    void signal() {
+      if (!done) {
+        const core::Status signalled = gate.signal(1);
+        EXPECT_TRUE(signalled.ok()) << signalled.message();
+        done = signalled.ok();
+      }
+    }
+    ~Release() { signal(); }
+  } release{*gate};
+  ASSERT_TRUE(send(1));
+  ASSERT_TRUE(send(2));
+  const SteadyClock::time_point arrived = player->live_status().last_record;
+  ASSERT_NE(arrived, SteadyClock::time_point{});
+  std::this_thread::sleep_for(50ms);  // a known stall, not a speed threshold
+  const SteadyClock::time_point released = SteadyClock::now();
+  release.signal();
+  const core::Status finished = pending->wait();
+  ASSERT_TRUE(finished.ok()) << finished.message();
+
+  const std::optional<FrameStamp> held = take();
+  ASSERT_TRUE(held.has_value());
+  EXPECT_EQ(held->index, kFrames);
+  const std::optional<FrameStamp> newest = take();
+  ASSERT_TRUE(newest.has_value());
+  ASSERT_EQ(newest->index, kFrames + 2);
+  EXPECT_EQ(newest->due, arrived);
+  EXPECT_LE(newest->due, released);
+  EXPECT_GE(newest->published, released);
+  EXPECT_GE(newest->published - newest->due, released - arrived);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
@@ -2502,9 +3076,12 @@ TEST_F(LivePlayerTest, AParkClosesTheConnectionWithinASlice) {
         std::chrono::milliseconds(20 * (n - 1) / (cycles - 1)));
     ASSERT_TRUE(player->park(kArrival));
     const SteadyClock::time_point parked = SteadyClock::now();
+    const std::uint64_t submits = device().counters().submits;
     const std::optional<SteadyClock::time_point> closed = peer.closed(n);
     ASSERT_TRUE(closed.has_value()) << "the connection stayed open";
     EXPECT_LT(*closed - parked, kClosed);
+    // A decode in flight was waited out at the park, and nothing since.
+    EXPECT_EQ(device().counters().submits, submits) << "submitted while parked";
     player->unpark();
   }
   EXPECT_TRUE(player->status().ok()) << player->status().message();

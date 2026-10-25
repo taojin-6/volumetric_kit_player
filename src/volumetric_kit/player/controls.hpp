@@ -22,6 +22,10 @@
 
 namespace volumetric_kit::player {
 
+/// The renderer's row for its one pass, the mesh and the UI together, as
+/// Apple GPUs time only a pass's bounds (PlayerView::frame); compact stats
+/// show it as "draw".
+inline constexpr const char* kDrawRow = "draw (mesh+UI)";
 /// The controls' ImGui window.
 inline constexpr const char* kControlsWindow = "##player_controls";
 /// The stats panel's header window; its body's is derived from it
@@ -105,22 +109,28 @@ std::string live_status_line(const LiveStatus& status,
 std::string status_line(const std::optional<FrameStamp>& shown,
                         std::uint64_t frame_count, bool playing, bool loop);
 
-/// @brief The stats panel's lines, in Mbit/s (10^6 bit/s), kB (1000 B) and
-///        mm.
+/// @brief The stats panel's lines, in Mbit/s (10^6 bit/s), kB (1000 B), mm
+///        and ms.
 ///
 /// @code
 /// // {"bitrate 11.8 Mbit/s", "frame P · 41.2 kB · 182 k tris",
 /// //  "deblock LG · T 0.500 mm · 12 of 1,920 blocks exact",
+/// //  "GPU 6.30 ms · idle 26.9 ms · queue 0.41 ms",
+/// //  "latency 9.8 ms · publish 0.2 · take 8.5 · present 1.1",
 /// //  "rate 29.8 / 30 fps"}
 /// const auto lines = stats_lines(stats, shown, triangles, now, false);
 /// // live: {"bitrate 9.7 Mbit/s · last 1 s", "frame P · ...",
-/// //        "deblock off · T 0.500 mm", "rate 29.8 fps · 30 rec/s"}
+/// //        "deblock off · T 0.500 mm", "GPU ...", "latency ...",
+/// //        "rate 29.8 fps · 30 rec/s"}
+/// // compact: the GPU and latency lines as one, "GPU 6.30 ms · latency
+/// //          9.8 ms"
 /// @endcode
 /// @param stats      The figures.
 /// @param shown      The newest frame drawn; empty before the first.
 /// @param triangles  Its mesh's triangles.
 /// @param now        The time, for the rates.
 /// @param live       Whether they are a live player's (StreamPlayer::live).
+/// @param compact    Whether for the compact stats (StatsPanel), a phone's.
 /// @return The track's mean bitrate, or live its bitrate over the last
 ///         second (`-` when unknown); the frame's type (I for a key record,
 ///         else P), payload and triangles (each `-` before the first); what
@@ -129,14 +139,23 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 ///         than every filter's, then its T to the micrometre (each `-`
 ///         before the first), and after a filter how many of the frame's
 ///         blocks recon's per-block fallback kept at their exact decode
-///         (`codec::DeblockInfo::exact_blocks`); and the rate frames are
-///         taken at, over the nominal when it is known, or live beside the
-///         records a second.
+///         (`codec::DeblockInfo::exact_blocks`); the frames' device time, the
+///         worker's queue idle before its batch and its queue latency
+///         (PlaybackStats::frame_means), each `n/t` while no frame of the
+///         window has it timed, the device time and the queue latency `n/a`
+///         where timed frames have none (a queue that cannot time, a device
+///         that cannot calibrate); the latency from a frame's due time to
+///         its present call, over the frames presented, and its legs, due to
+///         published, published to taken and taken to presented (each `-`
+///         while unknown); and the
+///         rate frames are taken at, over the nominal when it is known, or
+///         live beside the records a second. Compact, the device time and
+///         the latency share one line.
 std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
-                                     Playback::Clock::time_point now,
-                                     bool live);
+                                     Playback::Clock::time_point now, bool live,
+                                     bool compact = false);
 
 /// @brief The line over the stats' render table.
 ///
@@ -168,11 +187,14 @@ std::string display_line(const gfx::FrameMetrics& render);
 /// @ref PlaybackStats it reads keeps counting, so it reopens with current
 /// figures. Not thread-safe: the drawing thread owns it.
 ///
-/// **Compact**, for a phone: the worker's table without its breakdown rows,
-/// each table's window stated on a shorter line ("per stream frame · 30/30
-/// timed"), the rate over the renderer's table, and, in a work area wider than
-/// tall, the renderer's table beside the worker's, whose lines have the width
-/// it leaves them.
+/// **Compact**, for a phone: the worker's table holds its stages read, decode
+/// and mesh alone (no breakdown, "submit", "wait: GPU" or "finish"), the
+/// renderer's leaves out its loop's "submit" and names @ref kDrawRow "draw",
+/// each table's window is stated
+/// on a shorter line ("per stream frame · 30/30 timed"), the one "GPU ·
+/// latency" line and the rate sit over the renderer's table, and, in a work
+/// area wider than tall, the renderer's table is beside the worker's, whose
+/// lines have the width it leaves them.
 ///
 /// @code
 /// StatsPanel panel(/*compact=*/is_phone);
@@ -211,14 +233,15 @@ class StatsPanel {
   /// @return Its lines, as of their last rebuild.
   const std::vector<std::string>& lines() const noexcept { return lines_; }
   /// @return The worker's table's rows, as of their last rebuild: the stage
-  ///         means (PlaybackStats::stage_means), breakdowns included, which
-  ///         compact leaves undrawn.
+  ///         means (PlaybackStats::stage_means), the rows compact leaves
+  ///         undrawn included.
   const std::vector<core::StageRow>& rows() const noexcept { return rows_; }
   /// @return What they cover: the window's frames and how many were timed,
   ///         per "stream frame".
   const gfx::ui::StageWindow& window() const noexcept { return window_; }
   /// @return The renderer's table's rows, as of their last rebuild: one
-  ///         display frame's.
+  ///         display frame's, its loop's submit included, which compact
+  ///         leaves undrawn.
   const std::vector<core::StageRow>& render_rows() const noexcept {
     return render_rows_;
   }

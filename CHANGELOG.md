@@ -97,13 +97,48 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - build: `VP_DESKTOP_APP` (ON on a desktop): OFF builds the library, the
   tests but `cli_test`, and `vp_probe` with no GLFW, as the runner does on
   the lab.
+- One batch per frame: a file's frame is read into one of the decoder's
+  input slots, and its decode and mesh are recorded into one command batch,
+  one submit, finished once due; recorded ahead while playing, and a pause
+  publishes the frame recorded. Live, each record's body is read straight
+  into an input slot and decoded in a batch of its own, and the newest is
+  meshed in another. `FrameStamp` gains `rounds`, `due`, `taken`,
+  `presented`, `device_idle_ms` and `queue_ms`, and its stages "submit",
+  "wait: GPU" and "finish"; `StreamPlayer::set_tile_depth` and
+  `tile_depth`; `PlayerView::render_metrics` and `frame_waits`;
+  `PlayerViewConfig::tile_depth` and `debug_labels`.
+- The stats' GPU line (the frames' device time, the worker's queue idle and
+  queue latency) and latency line (due to presented over the frames
+  presented, and its legs: due to published, taken and presented), one "GPU ·
+  latency" line compact (`PlaybackStats::frame_means`, `FrameFigures`,
+  `frame_figures`).
+- Measure format 2 (`MeasureLog::add` takes the render rows; `rings_line`;
+  `MeasureContext`'s `rings`, `tile_depth`, `debug_labels`, `thermal` and
+  `low_power`), which the iOS app writes with the phone's thermal state and
+  Low Power Mode; `--tile-depth` and `--labels` for vp_probe, the iOS
+  measure launch (`parse_tile_depth`, `parse_switch`) and the runner, whose
+  summarizer reads formats 1 and 2 and shows the latency of frames with no
+  present, the worker alone's, apart, from due to taken.
+- CI reruns the stream and view suites under synchronization validation on
+  its Release legs.
 
 ### Changed
 
-- build: the player pins core main at #50's merge (0daced5, 0.20.0), gfx
-  main at #153's merge (123d013) and recon main at #274's merge (27bf656),
-  and requires core 0.20.0, which gfx and recon need too. The view presents
-  FIFO as gfx's default (gfx #150), naming no mode.
+- build: the player pins core #52's merge (4e16bbc, 0.21.0), gfx main at
+  #153's merge (123d013) and recon #277's merge (a23f7f5), and requires core
+  0.21.0. The view presents FIFO as gfx's default (gfx #150), naming no mode.
+- The extractor's ring is two slots past the frames in flight
+  (`mesh_wiring`); the draw waits on the GPU for the mesh's `ready` value;
+  a park waits out a batch in flight and finishes its frame at unpark.
+- The renderer's pass row is "draw (mesh+UI)". Compact, the worker's table
+  holds read, decode and mesh, and the renderer's leaves out its loop's
+  submit and names the draw "draw".
+- `device_line` states the core's memory facts
+  (`PhysicalDeviceInfo::device_mapped_memory`, `device_mapped_cached`).
+- The phone runner builds on 6 jobs, names each timing's log
+  `<utc>-<commit>-<mode>-<timing>.csv`, and lists the app's Documents before
+  its measure folder, so it never asks devicectl for a folder the app has
+  not made yet, and shows every other devicectl error.
 - The stats show two tables, each under the window it covers: the worker's
   stages per stream frame and the renderer's per display frame, under its
   rate, each as host (busy), wait and GPU ms (gfx #153). `StatsPanel::draw`
@@ -132,8 +167,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a vsync sooner; a file keeps gfx's default.
 - The iOS app draws at most 60 frames a second, so a ProMotion iPad no
   longer redraws the same frame at 120 Hz.
-- A file's frame is decoded once it is due rather than as soon as it is
-  read, so the grid holds the frame shown while paused.
+- A file's frame is recorded once due while paused, so the grid holds the
+  frame shown while paused.
 - A consumer of `StreamPlayer` calls `taken()` from the commit of each
   mesh it takes; the worker sleeps until then rather than waking every
   2 ms, as it did while a window was minimized. Live, a frame waiting on
@@ -172,3 +207,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Write a scenario in place of the command line (the core's CONFIG.md):
   `source.path` for the stream's path, `source.host` and `port` for
   `--connect host[:port]`, and `run.frames` for `--frames N`.
+- A consumer of `StreamPlayer` gives the extractor a `slot_count` two more
+  than its frames in flight (`mesh_wiring` does), and a measurement's log
+  passes `PlayerView::render_metrics().sections` to `MeasureLog::add`.

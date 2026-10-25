@@ -5,18 +5,23 @@
 
 usage: summarize.py LOG.csv [LOG.csv ...]
 
-A log is the player's (src/volumetric_kit/player/measure_log.hpp, format 1),
-as vp_probe and the iOS app's measure launch write it. Per log, under what it
-measured, and after its device the machine's load before the run if a
-<log>.load beside it says (the runner's mac mode writes one): per stage, the
-mean, p50 and p95 of its host (busy), wait and GPU
-milliseconds, and how many of its frames had the GPU measured; then the
-worker's device counts per frame. Given two logs, a before/after diff of the
-first and the second follows. A log of several passes leaves out its first,
-which warms up. p50 and p95 are nearest-rank. A stage first seen in a later
-frame, or only in the second log, goes after the row it follows there, so a
-breakdown stays under its stage, as the player's stats place it
-(PlaybackStats::stage_means).
+A log is the player's (src/volumetric_kit/player/measure_log.hpp, format 1
+or 2), as vp_probe and the iOS app's measure launch write it. Per log, under
+what it measured, and after its device the machine's load before the run if
+a <log>.load beside it says (the runner's mac mode writes one): per stage of
+the worker's, then of the renderer's (format 2), the mean, p50 and p95 of its
+host (busy), wait and GPU milliseconds, and how many of its frames had the
+GPU measured; then the worker's device counts per frame (format 2 adds its
+dispatches and barriers); then the frames' figures: the device time of a
+timed frame (its stages' GPU, breakdowns aside) and, from format 2, its queue
+idle and queue latency, its latency from due to the present call, or for a
+frame with no present (the worker alone) from due to taken, apart, and its
+legs, and the rounds its decode ran on the device. Given two logs, a
+before/after diff of the first and the second follows; a figure one log lacks
+shows as "-". A log of several passes leaves out its first, which warms up.
+p50 and p95 are nearest-rank. A stage first seen in a later frame, or only in
+the second log, goes after the row it follows there, so a breakdown stays
+under its stage, as the player's stats place it (PlaybackStats::stage_means).
 """
 
 from __future__ import annotations
@@ -27,7 +32,8 @@ import os
 import sys
 from dataclasses import dataclass, field
 
-FORMAT = "volumetric_kit_player measure 1"
+FORMAT_1 = "volumetric_kit_player measure 1"
+FORMAT_2 = "volumetric_kit_player measure 2"
 HEADER_KEYS = (
     "format",
     "player",
@@ -41,6 +47,9 @@ HEADER_KEYS = (
     "timing",
     "utc",
 )
+# Format 2's further keys; a phone's log adds thermal and low_power.
+HEADER_KEYS_2 = HEADER_KEYS + ("rings", "tile_depth", "labels")
+OPTIONAL_KEYS = ("rings", "tile_depth", "labels", "thermal", "low_power")
 COLUMNS = [
     "pass",
     "frame",
@@ -57,12 +66,48 @@ COLUMNS = [
     "blocked_ns",
     "staging_buffers",
 ]
+COLUMNS_2 = [
+    "pass",
+    "frame",
+    "type",
+    "bytes",
+    "triangles",
+    "table",
+    "stage",
+    "host_ms",
+    "wait_ms",
+    "gpu_ms",
+    "device",
+    "submits",
+    "host_waits",
+    "blocked_ns",
+    "staging_buffers",
+    "dispatches",
+    "barriers",
+    "deblock",
+    "exact_blocks",
+    "rounds",
+    "idle_ms",
+    "queue_ms",
+    "publish_ms",
+    "take_ms",
+    "present_ms",
+]
 DEVICES = ("none", "measured", "not_timed", "unavailable")
 COUNTS = ("submits", "host_waits", "blocked_ns", "staging_buffers")
+COUNTS_2 = COUNTS + ("dispatches", "barriers")
+LEGS = ("publish_ms", "take_ms", "present_ms")
+# The frames' figures, in the order the tables show them: a frame's device
+# time, read from its stages in either format, then format 2's own: the
+# latency of a frame presented, and of one taken with no present, apart.
+FIGURES = ("gpu_ms", "idle_ms", "queue_ms", "latency_ms",
+           "taken_latency_ms") + LEGS
+TABLES = ("worker", "render")
+BREAKDOWN = "  .."
 
 
 class LogError(ValueError):
-    """A file that is not a measure log of this format."""
+    """A file that is not a measure log of a format this reads."""
 
 
 @dataclass
@@ -76,18 +121,36 @@ class Stage:
 
 
 @dataclass
+class Table:
+    """A table's stages, in place order (place)."""
+
+    order: list = field(default_factory=list)
+    stages: dict = field(default_factory=dict)
+
+
+@dataclass
 class Log:
     """A log's header and its figures over the passes kept."""
 
     path: str
     header: dict
+    format: int
     passes: list  # every pass in the log
     kept: list  # the passes the figures are over
     frames: int = 0
-    order: list = field(default_factory=list)  # stage names (place)
-    stages: dict = field(default_factory=dict)
-    counts: dict = field(default_factory=lambda: {key: [] for key in COUNTS})
+    tables: dict = field(default_factory=lambda: {t: Table() for t in TABLES})
+    counts: dict = field(default_factory=lambda: {key: [] for key in COUNTS_2})
+    figures: dict = field(default_factory=lambda: {k: [] for k in FIGURES})
+    rounds: dict = field(default_factory=dict)  # rounds -> frames
     load: str = ""  # the machine's load before the run (read_load)
+
+    @property
+    def order(self):
+        return self.tables["worker"].order
+
+    @property
+    def stages(self):
+        return self.tables["worker"].stages
 
 
 def read_load(path):
@@ -126,10 +189,8 @@ def number(row, key, path, kind=float):
         raise LogError(f"{path}: {key} {row[key]!r} is not a number") from error
 
 
-def read_log(path):
-    """The log at path, or LogError naming what is wrong with it."""
-    with open(path, newline="", encoding="utf-8") as file:
-        lines = file.read().splitlines()
+def read_header(path, lines):
+    """The log's `# key: value` lines, its format, and where its CSV begins."""
     header = {}
     at = 0
     while at < len(lines) and lines[at].startswith("#"):
@@ -138,46 +199,96 @@ def read_log(path):
             raise LogError(f"{path}: header line {at + 1} is not '# key: value'")
         header[key.strip()] = value.strip()
         at += 1
-    missing = [key for key in HEADER_KEYS if key not in header]
+    formats = {FORMAT_1: 1, FORMAT_2: 2}
+    if "format" in header and header["format"] not in formats:
+        raise LogError(f"{path}: format {header['format']!r}, not "
+                       f"{FORMAT_1!r} or {FORMAT_2!r}")
+    version = formats.get(header.get("format"), 1)
+    keys = HEADER_KEYS_2 if version == 2 else HEADER_KEYS
+    missing = [key for key in keys if key not in header]
     if missing:
         raise LogError(f"{path}: the header lacks {', '.join(missing)}")
-    if header["format"] != FORMAT:
-        raise LogError(f"{path}: format {header['format']!r}, not {FORMAT!r}")
+    return header, version, at
+
+
+def read_stage(log, row, path, at):
+    """A stage row into its table; the index after it in its frame's order."""
+    device = row["device"]
+    if device not in DEVICES:
+        raise LogError(f"{path}: device {device!r} is none of {DEVICES}")
+    if (device == "measured") != (row["gpu_ms"] != ""):
+        raise LogError(
+            f"{path}: {row['stage']!r} has gpu_ms {row['gpu_ms']!r} "
+            f"with device {device}"
+        )
+    table_name = row.get("table", "worker")
+    if table_name not in TABLES:
+        raise LogError(f"{path}: table {table_name!r} is none of {TABLES}")
+    table = log.tables[table_name]
+    name = row["stage"]
+    at[table_name] = place(table.order, name, at[table_name])
+    stage = table.stages.setdefault(name, Stage())
+    stage.host.append(number(row, "host_ms", path))
+    stage.wait.append(number(row, "wait_ms", path))
+    gpu = None
+    if device == "measured":
+        gpu = number(row, "gpu_ms", path)
+        stage.gpu.append(gpu)
+    stage.devices[device] = stage.devices.get(device, 0) + 1
+    return gpu
+
+
+def read_frame(log, row, path, frame_gpu):
+    """A frame's row: its counts and, from format 2, its figures."""
+    log.frames += 1
+    for key in COUNTS_2 if log.format == 2 else COUNTS:
+        log.counts[key].append(number(row, key, path, int))
+    if frame_gpu is not None:
+        log.figures["gpu_ms"].append(frame_gpu)
+    if log.format != 2:
+        return
+    for key in ("idle_ms", "queue_ms") + LEGS:
+        if row[key] != "":
+            log.figures[key].append(number(row, key, path))
+    if all(row[key] != "" for key in LEGS):
+        log.figures["latency_ms"].append(
+            sum(number(row, key, path) for key in LEGS))
+    elif row["publish_ms"] != "" and row["take_ms"] != "":
+        log.figures["taken_latency_ms"].append(
+            number(row, "publish_ms", path) + number(row, "take_ms", path))
+    rounds = number(row, "rounds", path, int)
+    log.rounds[rounds] = log.rounds.get(rounds, 0) + 1
+
+
+def read_log(path):
+    """The log at path, or LogError naming what is wrong with it."""
+    with open(path, newline="", encoding="utf-8") as file:
+        lines = file.read().splitlines()
+    header, version, at = read_header(path, lines)
+    columns = COLUMNS_2 if version == 2 else COLUMNS
     reader = csv.DictReader(lines[at:])
-    if reader.fieldnames != COLUMNS:
-        raise LogError(f"{path}: columns {reader.fieldnames}, not {COLUMNS}")
+    if reader.fieldnames != columns:
+        raise LogError(f"{path}: columns {reader.fieldnames}, not {columns}")
     rows = list(reader)
     if not rows:
         raise LogError(f"{path}: no frames")
     passes = sorted({number(row, "pass", path, int) for row in rows})
-    log = Log(path, header, passes, passes[1:] if len(passes) > 1 else passes,
-              load=read_load(path))
-    at = 0  # where the frame's next new stage goes in log.order
+    log = Log(path, header, version, passes,
+              passes[1:] if len(passes) > 1 else passes, load=read_load(path))
+    at = {table: 0 for table in TABLES}  # where a frame's next new stage goes
+    frame_gpu = None  # the frame's worker stages' GPU, breakdowns aside
     for row in rows:
         if number(row, "pass", path, int) not in log.kept:
             continue
-        if row["stage"] == "":  # a frame's counts end it
-            log.frames += 1
-            for key in COUNTS:
-                log.counts[key].append(number(row, key, path, int))
-            at = 0
+        if row["stage"] == "":  # a frame's row ends it
+            read_frame(log, row, path, frame_gpu)
+            at = {table: 0 for table in TABLES}
+            frame_gpu = None
             continue
-        device = row["device"]
-        if device not in DEVICES:
-            raise LogError(f"{path}: device {device!r} is none of {DEVICES}")
-        if (device == "measured") != (row["gpu_ms"] != ""):
-            raise LogError(
-                f"{path}: {row['stage']!r} has gpu_ms {row['gpu_ms']!r} "
-                f"with device {device}"
-            )
-        name = row["stage"]
-        at = place(log.order, name, at)
-        stage = log.stages.setdefault(name, Stage())
-        stage.host.append(number(row, "host_ms", path))
-        stage.wait.append(number(row, "wait_ms", path))
-        if device == "measured":
-            stage.gpu.append(number(row, "gpu_ms", path))
-        stage.devices[device] = stage.devices.get(device, 0) + 1
+        gpu = read_stage(log, row, path, at)
+        if (gpu is not None and row.get("table", "worker") == "worker"
+                and not row["stage"].startswith(BREAKDOWN)):
+            frame_gpu = (frame_gpu or 0.0) + gpu
     return log
 
 
@@ -206,36 +317,70 @@ def passes_text(log):
             f"(pass {log.passes[0]} left out: warm-up)")
 
 
+def stage_table(table, unit):
+    """A table's markdown rows, per `unit`."""
+    out = [
+        f"| stage (ms per {unit}) | host mean | p50 | p95 "
+        "| wait mean | p50 | p95 | GPU mean | p50 | p95 | GPU measured |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for name in table.order:
+        stage = table.stages[name]
+        cells = (figures(stage.host) + figures(stage.wait)
+                 + figures(stage.gpu) + [timed_cell(stage)])
+        out.append(f"| {name} | " + " | ".join(cells) + " |")
+    return out
+
+
+def figure_label(key):
+    """A frame figure's label in a table."""
+    return {
+        "gpu_ms": "device time ms (timed frames)",
+        "idle_ms": "queue idle ms",
+        "queue_ms": "queue latency ms",
+        "latency_ms": "latency ms (due -> present)",
+        "taken_latency_ms": "latency ms (due -> taken; no present)",
+        "publish_ms": "  ..due -> published ms",
+        "take_ms": "  ..published -> taken ms",
+        "present_ms": "  ..taken -> presented ms",
+    }[key]
+
+
 def summary(log):
     """The markdown for one log."""
     h = log.header
+    settings = [f"{key} {h[key]}" for key in OPTIONAL_KEYS if key in h]
     out = [
         f"## {h['stream']} · timing {h['timing']} · {h['device'].split(';')[0]}",
         "",
         f"- device: {h['device']}",
         *([f"- load: {log.load}"] if log.load else []),
+        *([f"- {', '.join(settings)}"] if settings else []),
         f"- run: {h['run']}",
         f"- build: player {h['player']} ({h['build']}), core {h['core']}, "
         f"recon {h['recon']}, gfx {h['gfx']}",
         f"- {h['utc']} · {passes_text(log)} · {log.frames} frames · {log.path}",
         "",
-        "| stage (ms per stream frame) | host mean | p50 | p95 "
-        "| wait mean | p50 | p95 | GPU mean | p50 | p95 | GPU measured |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        *stage_table(log.tables["worker"], "stream frame"),
     ]
-    for name in log.order:
-        stage = log.stages[name]
-        cells = (figures(stage.host) + figures(stage.wait)
-                 + figures(stage.gpu) + [timed_cell(stage)])
-        out.append(f"| {name} | " + " | ".join(cells) + " |")
+    if log.tables["render"].order:
+        out += ["", *stage_table(log.tables["render"], "display frame")]
     out += [
         "",
         "| per frame | mean | p50 | p95 |",
         "|---|---:|---:|---:|",
     ]
-    for key in COUNTS:
+    for key in COUNTS_2 if log.format == 2 else COUNTS:
         label, values = count(log, key)
         out.append(f"| {label} | " + " | ".join(figures(values, 2)) + " |")
+    for key in FIGURES:
+        if log.figures[key]:
+            out.append(f"| {figure_label(key)} | "
+                       + " | ".join(figures(log.figures[key])) + " |")
+    if log.rounds:
+        out += ["", "- rounds on the device: " + ", ".join(
+            f"{rounds}: {frames}" for rounds, frames in sorted(log.rounds.items()))
+            + " frames"]
     return "\n".join(out)
 
 
@@ -259,12 +404,24 @@ def change(before, after):
     return f"{b:.3f} -> {a:.3f}{percent}"
 
 
-def diff(before, after):
-    """The markdown comparing two logs' means, stage by stage."""
+def table_diff(before, after, unit):
+    """The markdown rows comparing two tables' means, stage by stage."""
     names = list(before.order)
     at = 0
     for name in after.order:
         at = place(names, name, at)
+    out = [f"| stage (ms per {unit}) | host | wait | GPU |", "|---|---|---|---|"]
+    empty = Stage()
+    for name in names:
+        b = before.stages.get(name, empty)
+        a = after.stages.get(name, empty)
+        out.append(f"| {name} | {change(b.host, a.host)} | "
+                   f"{change(b.wait, a.wait)} | {change(b.gpu, a.gpu)} |")
+    return out
+
+
+def diff(before, after):
+    """The markdown comparing two logs' means, stage by stage."""
     out = [
         "## Before -> after (means)",
         "",
@@ -273,19 +430,20 @@ def diff(before, after):
         f"- after: {after.path} (player {after.header['player']}, "
         f"{after.header['run']}, timing {after.header['timing']})",
         "",
-        "| stage (ms per stream frame) | host | wait | GPU |",
-        "|---|---|---|---|",
+        *table_diff(before.tables["worker"], after.tables["worker"],
+                    "stream frame"),
     ]
-    empty = Stage()
-    for name in names:
-        b = before.stages.get(name, empty)
-        a = after.stages.get(name, empty)
-        out.append(f"| {name} | {change(b.host, a.host)} | "
-                   f"{change(b.wait, a.wait)} | {change(b.gpu, a.gpu)} |")
+    if before.tables["render"].order or after.tables["render"].order:
+        out += ["", *table_diff(before.tables["render"],
+                                after.tables["render"], "display frame")]
     out += ["", "| per frame | before -> after |", "|---|---|"]
-    for key in COUNTS:
+    for key in COUNTS_2:
         label, b = count(before, key)
         out.append(f"| {label} | {change(b, count(after, key)[1])} |")
+    for key in FIGURES:
+        if before.figures[key] or after.figures[key]:
+            out.append(f"| {figure_label(key)} | "
+                       f"{change(before.figures[key], after.figures[key])} |")
     return "\n".join(out)
 
 

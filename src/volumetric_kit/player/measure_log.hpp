@@ -5,41 +5,57 @@
 
 /// @file measure_log.hpp
 /// @brief The measurement log: one CSV per run, of each stream frame's stage
-///        rows and device counts under a header naming what was measured,
-///        which vp_probe and the iOS app's measure launch write and
-///        tools/measure/ summarizes (DECISIONS.md).
+///        rows, the renderer's newest rows as it was taken, and its device
+///        counts and figures, under a header naming what was measured, which
+///        vp_probe and the iOS app's measure launch write and tools/measure/
+///        summarizes (DECISIONS.md).
 ///
-/// The format, version 1. Header lines are `# key: value`: `format`, the
+/// The format, version 2. Header lines are `# key: value`: `format`, the
 /// commits of `player`, `core`, `recon` and `gfx`, `build`, `device`,
-/// `stream`, `run`, `timing` and `utc`. Then one CSV header and the rows:
+/// `rings`, `stream`, `run`, `timing`, `tile_depth`, `labels` and `utc`, and
+/// on a phone `thermal` and `low_power`. Then one CSV header and the rows:
 ///
 /// ```
-/// pass,frame,type,bytes,triangles,stage,host_ms,wait_ms,gpu_ms,device,submits,host_waits,blocked_ns,staging_buffers
-/// 1,0,I,17932,199020,decode,3.2101,1.0442,0.9518,measured,,,,
-/// 1,0,I,17932,199020,,,,,,5,5,1288731,5
+/// pass,frame,type,bytes,triangles,table,stage,host_ms,wait_ms,gpu_ms,device,submits,host_waits,blocked_ns,staging_buffers,dispatches,barriers,deblock,exact_blocks,rounds,idle_ms,queue_ms,publish_ms,take_ms,present_ms
+/// 2,7,P,17932,199020,worker,decode,0.4101,0.0000,4.9518,measured,,,,,,,,,,,,,,
+/// 2,7,P,17932,199020,render,present,0.0100,1.0441,,none,,,,,,,,,,,,,,
+/// 2,7,P,17932,199020,,,,,,,1,0,0,0,39,48,LG,1920,1,26.9100,0.4100,0.2000,8.5000,1.1000
 /// ```
 ///
-/// - One row per frame and stage, in the stamp's order: `host_ms` is busy
-///   time (`cpu_ms - wait_ms`), `gpu_ms` is set where `device` is
-///   `measured`, and `device` is `none`, `measured`, `not_timed` or
-///   `unavailable` (`core::DeviceTime`). A breakdown's `stage` keeps its
-///   leading "  ..".
-/// - Then one row per frame with no `stage`: the worker's device counts over
-///   it (`FrameStamp::counters`).
+/// - `table` `worker`: the stamp's rows, in its order, per stream frame.
+///   `host_ms` is busy time (`cpu_ms - wait_ms`), `gpu_ms` is set where
+///   `device` is `measured`, and `device` is `none`, `measured`, `not_timed`
+///   or `unavailable` (`core::DeviceTime`). A breakdown's `stage` keeps its
+///   leading "  ..". `table` `render`: the renderer's rows, alike, as the
+///   tick that took the frame left them: gfx's profiler's newest resolved
+///   frame, which lags the frames in flight (PlayerView::render_metrics), so
+///   a display frame drawn earlier, not the one that drew this frame; none
+///   while the draw is untimed.
+/// - Then the frame's row, with no table and no stage: the worker's device
+///   counts over it (`FrameStamp::counters`); the filter the deblock ran, or
+///   `off`, and the blocks it kept exact; its rounds; its queue idle and
+///   queue latency; and its latency legs, due to published, published to
+///   taken and taken to presented. A figure the frame lacks is empty.
 /// - `type` is `I` or `P`; `frame` is `FrameStamp::index` and `pass`
 ///   `FrameStamp::pass`.
 /// - A paused deblock toggle's rebuild (`FrameStamp::rebuild`) is the frame
 ///   before again, so no frame: it writes nothing.
+///
+/// Version 1 had neither `rings`, `tile_depth`, `labels` nor `table`, and its
+/// frame row held the first four counts alone; tools/measure reads both.
 
 #include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
@@ -79,11 +95,24 @@ const BuildInfo& build_info() noexcept;
 /// @param device  The worker's device (PlayerView::compute_device).
 /// @return Its name, its vendor's ID, its driver's name and version (on
 ///         Apple, MoltenVK's), the Vulkan version it runs, its memory heaps,
-///         whether a memory type is device-local and host-mapped and whether
-///         one such is cached, its queue's timestamp bits and period, and
-///         whether `core::Device::calibrate` reads both clocks, with its
-///         deviation.
+///         the core's memory facts (`core::PhysicalDeviceInfo`'s
+///         `device_mapped_memory` and `device_mapped_cached`), its queue's
+///         timestamp bits and period, and whether `core::Device::calibrate`
+///         reads both clocks, with its deviation.
 std::string device_line(const core::Device& device);
+
+/// @brief How recon's rings run on @p device, for a log's `rings` key: by
+///        the core's `HostRing::in_place` rule, in place where its
+///        device-mapped memory is cached
+///        (`core::PhysicalDeviceInfo::device_mapped_cached`), else copied
+///        through a device-only mirror.
+///
+/// @code
+/// context.rings = rings_line(view->compute_device());  // "copied"
+/// @endcode
+/// @param device  The worker's device.
+/// @return "in place" or "copied".
+std::string rings_line(const core::Device& device);
 
 /// @brief A time as UTC, to the second.
 /// @param at       The time.
@@ -110,6 +139,7 @@ std::string measure_file_name(std::chrono::system_clock::time_point started,
 /// @brief What a log's header states beside the build.
 struct MeasureContext {
   std::string device;  ///< @ref device_line.
+  std::string rings;   ///< @ref rings_line.
   /// What was played: a file's name and track ("rafa2.vrst, track 0"), or a
   /// sender's address.
   std::string stream;
@@ -119,10 +149,19 @@ struct MeasureContext {
   std::string run;
   /// The worker's device timing.
   DeviceTiming timing = DeviceTiming::kOff;
+  /// The worker's tile depth (StreamPlayer::set_tile_depth).
+  std::uint32_t tile_depth = 0;
+  /// Whether debug labels were asked for (PlayerViewConfig::debug_labels).
+  bool debug_labels = true;
   /// When it started, stated as UTC.
   std::chrono::system_clock::time_point started{};
-  // TODO: the deblock (StreamPlayer::deblock), which format 1 has no header
-  // key or column for.
+  /// A phone's thermal state as it started (`ProcessInfo.thermalState`):
+  /// "nominal", "fair", "serious" or "critical"; empty, and no header key,
+  /// elsewhere.
+  std::string thermal;
+  /// Whether a phone's Low Power Mode was on as it started; none, and no
+  /// header key, elsewhere.
+  std::optional<bool> low_power;
 };
 
 /// @brief Writes one measurement's log (the format above). Each frame is
@@ -155,14 +194,19 @@ class MeasureLog {
   MeasureLog(MeasureLog&&) = delete;
   MeasureLog& operator=(MeasureLog&&) = delete;
 
-  /// @brief Write a frame taken for drawing: its stage rows, then its counts;
-  ///        a rebuild (`FrameStamp::rebuild`) writes nothing and counts in
-  ///        no @ref frames.
-  /// @param stamp      Its stamp.
+  /// @brief Write a frame taken for drawing: its worker rows, the render rows
+  ///        as of the tick that took it, then its frame row; a rebuild
+  ///        (`FrameStamp::rebuild`) writes nothing and counts in no
+  ///        @ref frames.
+  /// @param stamp      Its stamp, taken, and presented where there is a
+  ///                   present.
   /// @param triangles  Its mesh's triangles.
+  /// @param render     PlayerView::render_metrics().sections; empty without a
+  ///                   view or while the draw is untimed.
   /// @return OK; `core::Status::Code::IoError` once a write fails, or after
   ///         @ref finish.
-  core::Status add(const FrameStamp& stamp, std::uint32_t triangles);
+  core::Status add(const FrameStamp& stamp, std::uint32_t triangles,
+                   const std::vector<core::StageRow>& render = {});
 
   /// @brief Flush, close, and rename `<path>.part` to `<path>`.
   /// @return OK; `core::Status::Code::IoError` for a write or the rename

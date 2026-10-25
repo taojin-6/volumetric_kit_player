@@ -11,8 +11,10 @@
 // no frame comes; the rate frames are taken at over the
 // last second; and the bitrate and records a second their records brought,
 // over the frames published in the last second, so a pause in taking does
-// not crowd them into a moment. A paused toggle's rebuild of the frame before
-// changes none of them.
+// not crowd them into a moment; and a frame's figures (its device time, its
+// breakdowns aside, its queue idle and latency, its latency legs), each
+// averaged over the window's frames that have it. A paused toggle's rebuild
+// of the frame before changes none of them.
 
 #include "volumetric_kit/player/playback_stats.hpp"
 
@@ -355,6 +357,87 @@ TEST(PlaybackStats, APauseInTakingDoesNotCrowdItsRecordsIntoAMoment) {
     ASSERT_TRUE(stats.rolling_mbit_per_s(at).has_value());
     EXPECT_NEAR(*stats.rolling_mbit_per_s(at), kMbit, 1e-9);
   }
+}
+
+// A frame's figures: its device time, timed and measured, its stage rows'
+// but its breakdowns', whose tiles its stages hold; its queue idle and
+// latency as stamped; each latency leg whose ends it has, in order; and with
+// all three, its latency, due to presented.
+TEST(FrameFigures, AreTheStampsEachAsTheFrameHasIt) {
+  using volumetric_kit::player::frame_figures;
+  FrameStamp stamp = frame(0.5, 2.0, 5.0);
+  stamp.stages.add_gpu("  ..rans decode", 4.0);
+  stamp.stages.add_gpu("mesh", 1.0);
+  EXPECT_FALSE(frame_figures(stamp).gpu_ms.has_value()) << "untimed";
+  stamp.timed = true;
+  stamp.device_idle_ms = 20.0;
+  stamp.queue_ms = 0.5;
+  stamp.due = t0;
+  stamp.published = t0 + milliseconds(2);
+  stamp.taken = t0 + milliseconds(10);
+  stamp.presented = t0 + milliseconds(13);
+  const volumetric_kit::player::FrameFigures figures = frame_figures(stamp);
+  EXPECT_DOUBLE_EQ(figures.gpu_ms.value_or(0.0), 6.0);
+  EXPECT_DOUBLE_EQ(figures.device_idle_ms.value_or(0.0), 20.0);
+  EXPECT_DOUBLE_EQ(figures.queue_ms.value_or(0.0), 0.5);
+  EXPECT_DOUBLE_EQ(figures.latency_ms.value_or(0.0), 13.0);
+  EXPECT_DOUBLE_EQ(figures.publish_ms.value_or(0.0), 2.0);
+  EXPECT_DOUBLE_EQ(figures.take_ms.value_or(0.0), 8.0);
+  EXPECT_DOUBLE_EQ(figures.present_ms.value_or(0.0), 3.0);
+  // No present: its other legs, and no latency.
+  stamp.presented.reset();
+  const volumetric_kit::player::FrameFigures unpresented = frame_figures(stamp);
+  EXPECT_TRUE(unpresented.publish_ms.has_value());
+  EXPECT_TRUE(unpresented.take_ms.has_value());
+  EXPECT_FALSE(unpresented.latency_ms.has_value());
+  // No present, no due, a leg out of order: none of those legs.
+  stamp.due = {};
+  stamp.taken = t0;  // before it was published
+  const volumetric_kit::player::FrameFigures some = frame_figures(stamp);
+  EXPECT_FALSE(some.publish_ms.has_value());
+  EXPECT_FALSE(some.take_ms.has_value());
+  EXPECT_FALSE(some.present_ms.has_value());
+  EXPECT_FALSE(some.latency_ms.has_value());
+  // Timed with nothing measured, as on a queue that cannot time: none.
+  FrameStamp unmeasured = frame(0.5);
+  unmeasured.timed = true;
+  unmeasured.stages.add_device("decode", core::DeviceTime::Unavailable);
+  EXPECT_FALSE(frame_figures(unmeasured).gpu_ms.has_value());
+}
+
+// The window's per-frame figures, each a mean over the frames that have it,
+// as their stage means are; a rebuild changes none of them.
+TEST(PlaybackStats, FrameMeansCoverTheFramesThatHaveEachFigure) {
+  PlaybackStats stats({}, {30, 1});
+  EXPECT_FALSE(stats.frame_means().gpu_ms.has_value()) << "no frame yet";
+  for (int i = 0; i < 4; ++i) {
+    FrameStamp stamp = frame(
+        0.5, 1.0, i % 2 == 0 ? std::optional<double>(2.0 * i) : std::nullopt);
+    stamp.timed = i % 2 == 0;
+    if (i > 0) {
+      stamp.device_idle_ms = 10.0 * i;
+    }
+    stamp.due = t0 + milliseconds(40 * i);
+    stamp.published = stamp.due + milliseconds(1 + i);
+    stamp.taken = stamp.published + milliseconds(5);
+    if (i < 2) {
+      stamp.presented = *stamp.taken + milliseconds(1);
+    }
+    stats.add_frame(stamp, *stamp.taken);
+  }
+  FrameStamp rebuild = frame(9.0, 9.0, 99.0);
+  rebuild.timed = true;
+  rebuild.rebuild = true;
+  rebuild.device_idle_ms = 999.0;
+  stats.add_frame(rebuild, t0 + seconds(1));
+  const volumetric_kit::player::FrameFigures means = stats.frame_means();
+  EXPECT_DOUBLE_EQ(means.gpu_ms.value_or(-1.0), 2.0) << "frames 0 and 2";
+  EXPECT_DOUBLE_EQ(means.device_idle_ms.value_or(-1.0), 20.0) << "1 to 3";
+  EXPECT_FALSE(means.queue_ms.has_value()) << "none calibrated";
+  EXPECT_DOUBLE_EQ(means.latency_ms.value_or(-1.0), 7.5) << "frames 0 and 1";
+  EXPECT_DOUBLE_EQ(means.publish_ms.value_or(-1.0), 2.5);
+  EXPECT_DOUBLE_EQ(means.take_ms.value_or(-1.0), 5.0);
+  EXPECT_DOUBLE_EQ(means.present_ms.value_or(-1.0), 1.0) << "frames 0 and 1";
 }
 
 }  // namespace

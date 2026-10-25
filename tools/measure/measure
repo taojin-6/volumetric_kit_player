@@ -6,12 +6,12 @@
 # Mac, which orchestrates, and with mac measures too (README.md, "Measure";
 # DECISIONS.md).
 #
-#   measure [--dry-run] lab <ref> [--passes P] [--frames N] [--timing T,...]
+#   measure [--dry-run] lab <ref> [options]
 #       On the lab's RTX 4090, in its own clone of the player under LAB_ROOT
 #       (one run at a time): check out <ref>, build vp_probe Release with no
 #       desktop app (so no GLFW) under uvrun, run it on rafa2.vrst under
 #       `uvrun --time` once per timing, and copy the logs home.
-#   measure [--dry-run] mac <ref> [--passes P] [--frames N] [--timing T,...]
+#   measure [--dry-run] mac <ref> [options]
 #       On this Mac, in the worktree the phones build in: build vp_probe as
 #       the lab does, on each sibling's checkout beside MAC_REPO (or a
 #       worktree of it) that is at its pin with no change to a tracked file,
@@ -21,20 +21,25 @@
 #       memory free), and before a run writes that load beside its log, as
 #       <log>.load, which the summary shows. It uses the Mac's GPU: run it
 #       only with the owner's go-ahead.
-#   measure [--dry-run] iphone|ipad <ref> [--passes P] [--frames N]
-#                                         [--timing T,...]
-#       Build the signed Release app at <ref> on the Mac, install it on the
-#       device, copy rafa2.vrst into its Documents if missing, then once per
-#       timing launch it with the measure arguments (the device must be
-#       unlocked), wait for its log, and copy it home. A launch that logs
-#       nothing stops the run with the app's reason (a .failed file), or when
-#       the app is gone. It starts an app on the owner's device: run it only
-#       with the owner's go-ahead.
+#   measure [--dry-run] iphone|ipad <ref> [options]
+#       Build the signed Release app at <ref> on the Mac (6 jobs, the Mac's
+#       load rule), install it on the device, copy rafa2.vrst into its
+#       Documents if missing, then once per timing launch it with the measure
+#       arguments (the device must be unlocked), wait for its log, which
+#       states the device's thermal state and Low Power Mode, and copy it
+#       home. A launch that logs nothing stops the run with the app's reason
+#       (a .failed file), or when the app is gone. It starts an app on the
+#       owner's device: run it only with the owner's go-ahead.
 #   measure summarize <log.csv>...
 #       The logs as markdown (summarize.py): two give a before/after diff.
 #
-# Defaults: 2 passes, the first a warm-up that the summary leaves out; every
-# frame of them; timing off, then all. <ref> is a branch, a tag, a commit, or
+# Options: --passes P, --frames N, --timing T,... (off, sampled, all),
+# --tile-depth 0|1 and --labels on|off, the last two for M4's A/B. Defaults:
+# 2 passes, the first a warm-up that the summary leaves out; every frame of
+# them; timing off, then all; tile depth 0; labels on. On mac and lab these
+# defaults also work with older probes; nondefaults need option support.
+# Each run's log is named
+# <utc>-<commit>-<mode>-<timing>.csv. <ref> is a branch, a tag, a commit, or
 # pr/<n>. --dry-run prints the commands and runs none. Settings come from the
 # environment, after ${MEASURE_CONFIG:-~/.config/volumetric_kit/measure.env}
 # if it exists:
@@ -118,11 +123,35 @@ build_probe() {
 
 # One run, by the command $1, of the vp_probe built in $2: the worker alone
 # on the stream $3, $passes passes (of $frames frames, if set), at timing $4,
-# logged to $5. The lab runs it too.
+# tile depth $depth and labels $labels, logged to $5. Omit their defaults
+# for older probes; reject a nondefault the target cannot apply. The lab
+# runs it too.
 run_probe() {
   local by="$1" build="$2" stream="$3" timing="$4" csv="$5"
-  "$by" "$build/tests/vp_probe" --worker --file "$stream" --passes "$passes" \
-    ${frames:+--frames "$frames"} --timing "$timing" --csv "$csv"
+  local help="" status=0 option value
+  if { [ "$depth" != 0 ] || [ "$labels" != on ]; } &&
+    [ "${dry:-0}" != 1 ]; then
+    # No arguments prints usage (status 2) without opening a device.
+    help="$("$build/tests/vp_probe" 2>&1)" || status=$?
+    if [ "$status" != 0 ] && [ "$status" != 2 ]; then
+      echo "measure: cannot read vp_probe options (status $status): $help" >&2
+      return 1
+    fi
+  fi
+  set -- --worker --file "$stream" --passes "$passes" \
+    ${frames:+--frames "$frames"} --timing "$timing"
+  for option in --tile-depth --labels; do
+    case "$option" in
+      --tile-depth) [ "$depth" != 0 ] || continue; value="$depth" ;;
+      --labels) [ "$labels" != on ] || continue; value="$labels" ;;
+    esac
+    if [ "${dry:-0}" != 1 ] && [[ "$help" != *"$option"* ]]; then
+      echo "measure: target vp_probe does not support $option $value" >&2
+      return 1
+    fi
+    set -- "$@" "$option" "$value"
+  done
+  "$by" "$build/tests/vp_probe" "$@" --csv "$csv"
 }
 
 summarize() {
@@ -130,17 +159,22 @@ summarize() {
   python3 -I "$here/summarize.py" "$@"
 }
 
-# The options every mode takes, into passes, frames and timings.
+# The options every mode takes, into passes, frames, timings, depth and
+# labels.
 options() {
   passes=2
   frames=""
   timings="off,all"
+  depth=0
+  labels=on
   while [ "$#" -gt 0 ]; do
     [ "$#" -ge 2 ] || usage
     case "$1" in
       --passes) passes="$2" ;;
       --frames) frames="$2" ;;
       --timing) timings="$2" ;;
+      --tile-depth) depth="$2" ;;
+      --labels) labels="$2" ;;
       *) usage ;;
     esac
     shift 2
@@ -151,7 +185,7 @@ options() {
 lab() {
   local ref="$1"
   shift
-  local passes frames timings
+  local passes frames timings depth labels
   options "$@"
   local stamp out
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -165,6 +199,7 @@ root=$(printf %q "$LAB_ROOT"); url=$(printf %q "$PLAYER_URL")
 uvrun=$(printf %q "$LAB_UVRUN"); agent=$(printf %q "$MEASURE_AGENT")
 stream=$(printf %q "$LAB_STREAM"); ref=$(printf %q "$ref")
 passes=$(printf %q "$passes"); frames=$(printf %q "$frames")
+depth=$(printf %q "$depth"); labels=$(printf %q "$labels")
 $(declare -f commit_of build_probe run_probe)
 uv() { "\$uvrun" "\$agent" -- "\$@"; }
 uvtime() { "\$uvrun" --time "\$agent" -- "\$@"; }
@@ -294,7 +329,7 @@ mac_idle() {
 mac() {
   local ref="$1"
   shift
-  local passes frames timings
+  local passes frames timings depth labels
   options "$@"
   local sha worktree stamp out build name timing csv
   local siblings=() logs=()
@@ -378,9 +413,26 @@ PY
   rm -f "$list"
 }
 
+# The app's Documents on $device listed into $listing; false, with
+# devicectl's error, when it cannot list it.
+list_documents() {
+  devicectl_json "$listing" device info files --device "$device" \
+    --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
+    --subdirectory Documents
+}
+
 # The names in the app's Documents/measure on $device, one a line, into the
-# file $1; false when devicectl cannot list it (none yet).
+# file $1: none before the app's first measure launch makes the folder, which
+# Documents' listing shows, so devicectl is never asked for it then; false,
+# with devicectl's error, when it cannot list.
 measure_files() {
+  list_documents || return
+  local folder
+  folder="$(json_strings "$listing" measure; json_strings "$listing" measure/)"
+  if [ -z "$folder" ]; then
+    : >"$1"
+    return
+  fi
   devicectl_json "$listing" device info files --device "$device" \
     --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
     --subdirectory Documents/measure &&
@@ -407,7 +459,7 @@ launch() {
   xcrun devicectl device process launch --device "$device" \
     --terminate-existing "$VP_BUNDLE_ID" -- --measure "$name" \
     --passes "$passes" ${frames:+--frames "$frames"} --timing "$timing" \
-    >/dev/null || return "$?"
+    --tile-depth "$depth" --labels "$labels" >/dev/null || return "$?"
   local deadline=$((SECONDS + 1200)) seen=0 file=""
   while [ -z "$file" ]; do
     [ "$SECONDS" -lt "$deadline" ] || fail "no log after 20 min"
@@ -427,7 +479,8 @@ launch() {
       fi
     fi
   done
-  local copy="$out/$mode-$(basename "$file")"
+  # Named as the lab's and the Mac's are: the timing tells two runs apart.
+  local copy="$out/$stamp-${sha:0:7}-$mode-$timing.${file##*.}"
   copy_measure_file "$file" "$copy" >/dev/null
   case "$file" in
     *.failed) fail "the app logged nothing: $(cat "$copy")" ;;
@@ -440,7 +493,7 @@ launch() {
 phone() {
   local mode="$1" kind="$2" ref="$3"
   shift 3
-  local passes frames timings
+  local passes frames timings depth labels
   options "$@"
   [ -n "${VP_DEVELOPMENT_TEAM:-}" ] || fail "set VP_DEVELOPMENT_TEAM (README.md, iOS)"
   local sha worktree app stamp device name out
@@ -448,8 +501,9 @@ phone() {
   run_worktree "$ref"
   run env MoltenVK_ROOT="$MoltenVK_ROOT" cmake -S "$worktree" --preset ios \
     -DVP_DEVELOPMENT_TEAM="$VP_DEVELOPMENT_TEAM" -DVP_BUNDLE_ID="$VP_BUNDLE_ID"
+  # 6 jobs: the Mac's load rule, as Xcode would take every core.
   run cmake --build "$worktree/build-ios" --config Release \
-    --target volumetric_kit_player -- -allowProvisioningUpdates
+    --target volumetric_kit_player -- -allowProvisioningUpdates -jobs 6
   app="$worktree/build-ios/apps/ios/Release-iphoneos/volumetric_kit_player.app"
   device="$(pick_device "$kind")"
   run xcrun devicectl device install app --device "$device" "$app"
@@ -464,9 +518,11 @@ phone() {
     for timing in $(echo "$timings" | tr , ' '); do
       run xcrun devicectl device process launch --device "$device" \
         --terminate-existing "$VP_BUNDLE_ID" -- --measure "$name" \
-        --passes "$passes" ${frames:+--frames "$frames"} --timing "$timing"
+        --passes "$passes" ${frames:+--frames "$frames"} --timing "$timing" \
+        --tile-depth "$depth" --labels "$labels"
       echo "+ (every 5 s, up to 20 min: list Documents/measure until a new" \
-        ".csv or .failed, or the app is gone; copy it into $out/)"
+        ".csv or .failed, or the app is gone; copy it into" \
+        "$out/$stamp-${sha:0:7}-$mode-$timing.csv)"
     done
     return
   fi
@@ -475,10 +531,7 @@ phone() {
   tmp_before="$(mktemp)"
   tmp_now="$(mktemp)"
   trap 'rm -f "$listing" "$tmp_before" "$tmp_now"' EXIT
-  if ! devicectl_json "$listing" device info files --device "$device" \
-    --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
-    --subdirectory Documents ||
-    [ -z "$(json_strings "$listing" "$name")" ]; then
+  if ! list_documents || [ -z "$(json_strings "$listing" "$name")" ]; then
     xcrun devicectl device copy to --device "$device" \
       --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
       --source "$MAC_STREAM" --destination "Documents/$name"

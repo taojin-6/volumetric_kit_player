@@ -7,12 +7,23 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <optional>
 
 namespace volumetric_kit::player {
 namespace {
 
 // The span the rate is taken over.
 constexpr std::chrono::seconds kRateSpan{1};
+
+// From `from` to `to`, in ms, when both are known and in order.
+std::optional<double> leg_ms(
+    PlaybackStats::Clock::time_point from,
+    std::optional<PlaybackStats::Clock::time_point> to) {
+  if (from == PlaybackStats::Clock::time_point{} || !to || *to < from) {
+    return std::nullopt;
+  }
+  return std::chrono::duration<double, std::milli>(*to - from).count();
+}
 
 // The frames of `period` in a second, rounded, from 1 to kMaxWindow; a period
 // of 0, from a rate past a billion, takes the most.
@@ -24,6 +35,31 @@ std::size_t frames_a_second(std::chrono::nanoseconds period) {
 }
 
 }  // namespace
+
+FrameFigures frame_figures(const FrameStamp& stamp) {
+  FrameFigures figures;
+  // Its measured stage rows, breakdowns aside, whose tiles add up to its
+  // batch.
+  const bool measured =
+      std::any_of(stamp.stages.rows().begin(), stamp.stages.rows().end(),
+                  [](const core::StageRow& row) {
+                    return row.device == core::DeviceTime::Measured;
+                  });
+  if (stamp.timed && measured) {
+    figures.gpu_ms = stamp.stages.total_gpu_ms();
+  }
+  figures.device_idle_ms = stamp.device_idle_ms;
+  figures.queue_ms = stamp.queue_ms;
+  figures.publish_ms = leg_ms(stamp.due, stamp.published);
+  if (stamp.taken) {
+    figures.take_ms = leg_ms(stamp.published, stamp.taken);
+    figures.present_ms = leg_ms(*stamp.taken, stamp.presented);
+  }
+  if (figures.publish_ms && figures.take_ms && figures.present_ms) {
+    figures.latency_ms = leg_ms(stamp.due, stamp.presented);
+  }
+  return figures;
+}
 
 PlaybackStats::PlaybackStats(const recon::stream::TrackStats& track,
                              recon::stream::Rate rate)
@@ -48,7 +84,29 @@ void PlaybackStats::add_frame(const FrameStamp& stamp, Clock::time_point now) {
   if (stages_.size() == window_) {
     stages_.pop_front();
   }
-  stages_.push_back({stamp.stages.rows(), stamp.timed});
+  stages_.push_back({stamp.stages.rows(), stamp.timed, frame_figures(stamp)});
+}
+
+FrameFigures PlaybackStats::frame_means() const {
+  FrameFigures means;
+  for (std::optional<double> FrameFigures::* figure :
+       {&FrameFigures::gpu_ms, &FrameFigures::device_idle_ms,
+        &FrameFigures::queue_ms, &FrameFigures::latency_ms,
+        &FrameFigures::publish_ms, &FrameFigures::take_ms,
+        &FrameFigures::present_ms}) {
+    double sum = 0.0;
+    int frames = 0;
+    for (const Stages& frame : stages_) {
+      if (frame.figures.*figure) {
+        sum += *(frame.figures.*figure);
+        ++frames;
+      }
+    }
+    if (frames > 0) {
+      means.*figure = sum / frames;
+    }
+  }
+  return means;
 }
 
 std::uint32_t PlaybackStats::timed_frames() const noexcept {

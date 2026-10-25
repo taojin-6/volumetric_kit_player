@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Tao Jin
 
 // mesh_wiring on the host: the draw's usage on the extractor's buffers, a ring
-// one slot deeper than the frames in flight, shared vertices, and the
+// two slots deeper than the frames in flight, shared vertices, and the
 // families: one family is EXCLUSIVE and read in place, two are CONCURRENT and
 // read across. And drawable on recon's exchange: a refused mesh fails every
 // frame after it.
@@ -82,7 +82,7 @@ TEST(MeshWiring, OneFamilyIsReadInPlace) {
   EXPECT_EQ(families(wiring), std::set<std::uint32_t>{3});
   EXPECT_FALSE(wiring.exchange.cross_family);
   EXPECT_EQ(wiring.exchange.frames_in_flight, 2u);
-  EXPECT_EQ(wiring.mc.slot_count, 3u);
+  EXPECT_EQ(wiring.mc.slot_count, 4u);
   expect_bindable(wiring);
 }
 
@@ -93,7 +93,7 @@ TEST(MeshWiring, TwoFamiliesAreReadAcross) {
   EXPECT_EQ(families(wiring), (std::set<std::uint32_t>{0, 1}));
   EXPECT_TRUE(wiring.exchange.cross_family);
   EXPECT_EQ(wiring.exchange.frames_in_flight, 3u);
-  EXPECT_EQ(wiring.mc.slot_count, 4u);
+  EXPECT_EQ(wiring.mc.slot_count, 5u);
   expect_bindable(wiring);
 }
 

@@ -29,15 +29,35 @@ std::optional<DeviceTiming> parse_device_timing(std::string_view text) {
   return std::nullopt;
 }
 
+std::optional<std::uint32_t> parse_tile_depth(std::string_view text) {
+  if (text == "0") {
+    return 0;
+  }
+  if (text == "1") {
+    return 1;
+  }
+  return std::nullopt;
+}
+
+std::optional<bool> parse_switch(std::string_view text) {
+  if (text == "on") {
+    return true;
+  }
+  if (text == "off") {
+    return false;
+  }
+  return std::nullopt;
+}
+
 core::Result<std::optional<MeasureArgs>> parse_measure_args(
     const std::vector<std::string>& args) {
   MeasureArgs measure;
   bool named = false;  // --measure came
-  bool other = false;  // --passes, --frames or --timing came
+  bool other = false;  // another of its options came
   for (std::size_t i = 0; i < args.size(); ++i) {
     const std::string& arg = args[i];
     if (arg != "--measure" && arg != "--passes" && arg != "--frames" &&
-        arg != "--timing") {
+        arg != "--timing" && arg != "--tile-depth" && arg != "--labels") {
       continue;  // the system's
     }
     if (i + 1 == args.size()) {
@@ -66,7 +86,7 @@ core::Result<std::optional<MeasureArgs>> parse_measure_args(
                                               "': a count from 1");
       }
       other = true;
-    } else {
+    } else if (arg == "--timing") {
       const std::optional<DeviceTiming> timing = parse_device_timing(value);
       if (!timing) {
         return core::Status::invalid_argument("--timing '" + value +
@@ -74,12 +94,29 @@ core::Result<std::optional<MeasureArgs>> parse_measure_args(
       }
       measure.timing = *timing;
       other = true;
+    } else if (arg == "--tile-depth") {
+      const std::optional<std::uint32_t> depth = parse_tile_depth(value);
+      if (!depth) {
+        return core::Status::invalid_argument("--tile-depth '" + value +
+                                              "': 0 or 1");
+      }
+      measure.tile_depth = *depth;
+      other = true;
+    } else {
+      const std::optional<bool> labels = parse_switch(value);
+      if (!labels) {
+        return core::Status::invalid_argument("--labels '" + value +
+                                              "': on or off");
+      }
+      measure.debug_labels = *labels;
+      other = true;
     }
   }
   if (!named) {
     if (other) {
       return core::Status::invalid_argument(
-          "--passes, --frames and --timing need --measure");
+          "--passes, --frames, --timing, --tile-depth and --labels need "
+          "--measure");
     }
     return std::optional<MeasureArgs>();
   }

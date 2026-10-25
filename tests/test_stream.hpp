@@ -11,8 +11,12 @@
 /// keeps at its exact decode; the same with frame kEmptyFrame meshing
 /// nothing; coded as a true SDF observed far enough out that no voxel is
 /// masked, so the deblock filters every block, its filter "R" (T 1.96 mm);
-/// and at twice the voxel size. A copy of one of them, and a stream
-/// that opens but never decodes, in a scratch directory of the test's own.
+/// at twice the voxel size; and with frame kGrownFrame a sphere so large that
+/// its blocks nearly fill the decode grid the first frame's sizes (recon's
+/// make_decode_grid: 8,192 slots), so the table refuses some on the device,
+/// and recon grows the grid and decodes it again at its finish. A copy of
+/// one of them, and a stream that opens but never decodes, in a scratch
+/// directory of the test's own.
 
 #include <gtest/gtest.h>
 #include <unistd.h>
@@ -40,12 +44,21 @@ constexpr std::uint64_t kGapNs = 500'000'000;
 
 // The streams' names in vp_write_stream's directory: the sphere; with frame
 // kEmptyFrame holding no block, so meshing nothing; as a true SDF, unmasked;
-// and at twice the voxel size.
+// at twice the voxel size; and with frame kGrownFrame, a key after the pause,
+// past what the decode grid's table can place.
 constexpr const char* kStream = "sphere.vrst";
 constexpr const char* kEmptyFrameStream = "empty_frame.vrst";
 constexpr const char* kTrueSdfStream = "true_sdf.vrst";
 constexpr const char* kCoarseStream = "coarse.vrst";
+constexpr const char* kGrowStream = "grow.vrst";
 constexpr std::uint64_t kEmptyFrame = 1;
+constexpr std::uint64_t kGrownFrame = kGapAt;
+// The decode grid the first frame sizes (recon's make_decode_grid: 1,024
+// buckets of 8), and the most free blocks below which its table places no
+// block outside its home bucket (an eighth): frame kGrownFrame holds more
+// than the slots less that, and no more than the slots.
+constexpr std::uint32_t kFirstGridSlots = 8192;
+constexpr std::uint32_t kTableFloor = kFirstGridSlots / 8;
 
 // Frame i's pts.
 inline std::uint64_t pts_of(std::uint64_t i) {

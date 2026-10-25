@@ -3,19 +3,28 @@
 # Copyright (c) 2026 Tao Jin
 """Tests of summarize.py, which ctest runs (tests/CMakeLists.txt).
 
-Summarize: on the fixtures in testdata/, it keeps a log's passes after the
-first, takes nearest-rank p50 and p95, takes the GPU over measured rows alone
-and says why the rest were not, counts the device per frame, shows the load
-in a <log>.load beside a log after its device, diffs two logs,
-keeps a breakdown that a later frame or the second log alone has under its
-stage, and refuses what is not a log of its format.
+Summarize: on the fixtures in testdata/, a format-1 log (before.csv, M0's)
+and a format-2 one (after.csv), it keeps a log's passes after the first,
+takes nearest-rank p50 and p95, takes the GPU over measured rows alone and
+says why the rest were not, counts the device per frame, shows the load in a
+<log>.load beside a log after its device; from format 2 it shows the
+settings, the renderer's table, the dispatches and barriers, the frames'
+figures, the latency of a frame with no present apart, and the rounds; in
+either it takes a timed frame's device time over
+its stages but their breakdowns; it diffs two logs, a format-1 against a
+format-2 one, a figure one lacks shown as "-", keeps a breakdown that a later
+frame or the second log alone has under its stage, and refuses what is not a
+log of a format it reads.
 
 ProbeLog: each log vp_probe writes of the tests' stream (VP_PROBE_CSV, the
 paths joined by os.pathsep), two passes of its six frames with every frame
-timed, reads as one: its header says how it ran; each frame has its read,
-decode and mesh rows, the decode's breakdowns where measured, and its device
-counts, each frame's waits no more than its submits and some staging; it
-skips without VP_PROBE_CSV, which ctest's check fails.
+timed, reads as one of format 2: its header says how it ran; each frame has
+its read, decode, mesh, submit, wait and finish rows, the decode's
+breakdowns where measured, and its frame row: in the kept pass, the second,
+one batch, one submit and no staging buffer, with dispatches, barriers and
+its rounds, its queue idle and latency in range as ms, and for the worker
+alone a latency to taken, as it presents nothing; it skips without
+VP_PROBE_CSV, which ctest's check fails.
 """
 
 import os
@@ -103,6 +112,53 @@ class Summarize(unittest.TestCase):
                       "timing all)", rows)
         self.assertNotIn("## Before", summarize.summarize([BEFORE]))
 
+    def test_a_format_2_log_shows_its_settings_render_counts_and_figures(self):
+        log = summarize.read_log(AFTER)
+        self.assertEqual(log.format, 2)
+        self.assertEqual(log.tables["render"].order, ["draw (mesh+UI)"])
+        self.assertEqual(log.rounds, {1: 2, 2: 1})
+        text = summarize.summary(log)
+        rows = text.splitlines()
+        self.assertIn("- rings in place, tile_depth 0, labels on", rows)
+        self.assertIn("| stage (ms per display frame) | host mean | p50 | p95 "
+                      "| wait mean | p50 | p95 | GPU mean | p50 | p95 "
+                      "| GPU measured |", rows)
+        self.assertIn("| draw (mesh+UI) | 0.500 | 0.500 | 0.500 | 0.000 "
+                      "| 0.000 | 0.000 | 1.100 | 1.000 | 1.200 | 2/2 |", rows)
+        self.assertIn("| dispatches | 39.00 | 39.00 | 39.00 |", rows)
+        self.assertIn("| barriers | 47.00 | 47.00 | 47.00 |", rows)
+        # A timed frame's device time is its stages' but their breakdowns'.
+        self.assertIn("| device time ms (timed frames) | 1.100 | 1.100 "
+                      "| 1.300 |", rows)
+        self.assertIn("| queue idle ms | 27.000 | 26.000 | 28.000 |", rows)
+        self.assertIn("| queue latency ms | 0.400 | 0.400 | 0.400 |", rows)
+        # The latency of the frames presented, and apart of frame 2's, taken
+        # with no present.
+        self.assertIn("| latency ms (due -> present) | 11.500 | 11.000 "
+                      "| 12.000 |", rows)
+        self.assertIn("| latency ms (due -> taken; no present) | 11.000 "
+                      "| 11.000 | 11.000 |", rows)
+        self.assertIn("|   ..taken -> presented ms | 2.000 | 2.000 | 2.000 |",
+                      rows)
+        self.assertIn("- rounds on the device: 1: 2, 2: 1 frames", rows)
+        # Format 1 had no breakdown-free frame time of its own: it is read
+        # from the stages, breakdowns aside, the unavailable mesh too.
+        before = summarize.read_log(BEFORE)
+        self.assertEqual([round(ms, 6) for ms in before.figures["gpu_ms"]],
+                         [0.9, 1.1, 0.9])
+        self.assertEqual(before.counts["dispatches"], [])
+
+    def test_a_format_1_log_diffs_against_a_format_2_one(self):
+        rows = summarize.summarize([BEFORE, AFTER]).split(
+            "## Before -> after (means)")[1].splitlines()
+        self.assertIn("| dispatches | - -> 39.000 |", rows)
+        self.assertIn("| staging buffers | 3.000 -> 0.000 (-100%) |", rows)
+        self.assertIn("| device time ms (timed frames) | 0.967 -> 1.100 (+14%) |",
+                      rows)
+        self.assertIn("| latency ms (due -> present) | - -> 11.500 |", rows)
+        self.assertIn("| draw (mesh+UI) | - -> 0.500 | - -> 0.000 "
+                      "| - -> 1.100 |", rows)
+
     @staticmethod
     def stage_names(rows):
         """The stage column of a markdown table's rows, header left out."""
@@ -136,8 +192,14 @@ class Summarize(unittest.TestCase):
         with open(BEFORE, encoding="utf-8") as file:
             good = file.read()
         header_only = good[:good.index("\n1,0,I") + 1]
+        with open(AFTER, encoding="utf-8") as file:
+            good_2 = file.read()
         for bad, why in (
-            (good.replace("measure 1", "measure 2"), "format"),
+            (good.replace("measure 1", "measure 3"), "format"),
+            (good.replace("measure 1", "measure 2"), "lacks rings"),
+            (good_2.replace("# labels: on\n", ""), "lacks labels"),
+            (good_2.replace("measure 2", "measure 1"), "columns"),
+            (good_2.replace(",render,", ",draw,"), "table"),
             (good.replace("# timing: all\n", ""), "lacks timing"),
             (good.replace("# run: vp_probe --worker --passes 2\n", ""),
              "lacks run"),
@@ -170,11 +232,15 @@ class ProbeLog(unittest.TestCase):
     def test_the_header_names_what_was_measured(self):
         for log in self.logs:
             with self.subTest(log=log.path):
+                self.assertEqual(log.format, 2)
                 header = log.header
                 self.assertEqual(header["stream"], "sphere.vrst, track 0")
                 self.assertRegex(header["run"],
                                  r"^vp_probe( --worker)? --passes 2$")
                 self.assertEqual(header["timing"], "all")
+                self.assertIn(header["rings"], ("in place", "copied"))
+                self.assertEqual(header["tile_depth"], "0")
+                self.assertEqual(header["labels"], "on")
                 self.assertNotEqual(header["build"], "none")
                 self.assertRegex(
                     header["device"],
@@ -190,10 +256,12 @@ class ProbeLog(unittest.TestCase):
     def check_frames(self, log):
         self.assertEqual(log.passes, [1, 2])
         self.assertEqual(log.frames, self.FRAMES)
-        for name in ("read", "decode", "mesh"):
+        for name in ("read", "decode", "mesh", "submit", "wait: GPU",
+                     "finish"):
             self.assertEqual(sum(log.stages[name].devices.values()),
                              self.FRAMES, name)
-        self.assertEqual(set(log.stages["read"].devices), {"none"})
+        for name in ("read", "submit", "wait: GPU", "finish"):
+            self.assertEqual(set(log.stages[name].devices), {"none"}, name)
         # Every frame timed: decode and mesh measured where the queue can
         # time, each over its breakdowns.
         for name in ("decode", "mesh"):
@@ -203,16 +271,33 @@ class ProbeLog(unittest.TestCase):
             self.assertIn("  ..rans decode", log.order)
             self.assertIn("  ..dispatch", log.order)
             self.assertTrue(all(ms > 0 for ms in log.stages["decode"].gpu))
-        # Each frame's decode and mesh submit, and their fences block, at
-        # most once a submit; and today's decode stages its payload.
+            self.assertEqual(len(log.figures["gpu_ms"]), self.FRAMES)
+        # The second pass's every frame one batch: one submit, at most its
+        # fence's wait, no staging buffer; and its dispatches, barriers and
+        # rounds on the device.
         counts = log.counts
-        self.assertTrue(all(n >= 2 for n in counts["submits"]))
-        self.assertGreater(sum(counts["host_waits"]), 0)
-        for frame, (waits, submits, staging) in enumerate(zip(
-                counts["host_waits"], counts["submits"],
-                counts["staging_buffers"])):
-            self.assertLessEqual(waits, submits, f"frame {frame}")
-            self.assertGreater(staging, 0, f"frame {frame}")
+        for frame in range(self.FRAMES):
+            self.assertEqual(counts["submits"][frame], 1, f"frame {frame}")
+            self.assertLessEqual(counts["host_waits"][frame], 1)
+            self.assertEqual(counts["staging_buffers"][frame], 0)
+            self.assertGreater(counts["dispatches"][frame], 0)
+            self.assertGreater(counts["barriers"][frame], 0)
+        self.assertEqual(sum(log.rounds.values()), self.FRAMES)
+        self.assertNotIn(0, log.rounds)
+        # The queue idle and latency in ms: the idle under a second, as the
+        # stream's longest pts step is 540 ms, and the latency, a submit's,
+        # under 100 ms, less than a calibration's deviation before it.
+        for idle in log.figures["idle_ms"]:
+            self.assertGreaterEqual(idle, 0)
+            self.assertLess(idle, 1000)
+        for queue in log.figures["queue_ms"]:
+            self.assertGreater(queue, -1)
+            self.assertLess(queue, 100)
+        # The worker alone presents nothing: its latency is to taken.
+        if "--worker" in log.header["run"]:
+            self.assertEqual(log.figures["latency_ms"], [])
+            self.assertEqual(len(log.figures["taken_latency_ms"]),
+                             self.FRAMES)
 
 
 if __name__ == "__main__":

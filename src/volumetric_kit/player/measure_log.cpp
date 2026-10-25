@@ -8,6 +8,7 @@
 #include <ctime>
 
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/player/playback_stats.hpp"
 
 // cmake/vp_build_info.cmake sets them on this file, and VP_BUILD_TYPE on the
 // library.
@@ -31,10 +32,14 @@ namespace volumetric_kit::player {
 namespace {
 
 // The format's version, which a reader checks (tools/measure/summarize.py).
-constexpr int kFormat = 1;
+constexpr int kFormat = 2;
 constexpr const char* kColumns =
-    "pass,frame,type,bytes,triangles,stage,host_ms,wait_ms,gpu_ms,device,"
-    "submits,host_waits,blocked_ns,staging_buffers";
+    "pass,frame,type,bytes,triangles,table,stage,host_ms,wait_ms,gpu_ms,"
+    "device,submits,host_waits,blocked_ns,staging_buffers,dispatches,"
+    "barriers,deblock,exact_blocks,rounds,idle_ms,queue_ms,publish_ms,"
+    "take_ms,present_ms";
+// After a stage row's device: the frame row's 14 columns, empty.
+constexpr const char* kNoFigures = ",,,,,,,,,,,,,,";
 
 std::string hex(std::uint32_t value) {
   char text[16];
@@ -96,6 +101,11 @@ std::string ms(double value) {
   return text;
 }
 
+// A figure the frame may lack: empty when it does.
+std::string ms(const std::optional<double>& value) {
+  return value ? ms(*value) : std::string();
+}
+
 const char* name_of(core::DeviceTime device) {
   switch (device) {
     case core::DeviceTime::None:
@@ -133,19 +143,9 @@ std::string device_line(const core::Device& device) {
         (i == 0 ? " " : ", ") + mib(heap.size) +
         ((heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 ? " local" : "");
   }
-  bool mapped = false;
-  bool cached = false;
-  constexpr VkMemoryPropertyFlags kMapped =
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
-  for (std::uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
-    const VkMemoryPropertyFlags flags = memory.memoryTypes[i].propertyFlags;
-    if ((flags & kMapped) == kMapped) {
-      mapped = true;
-      cached = cached || (flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0;
-    }
-  }
-  line += std::string("; local and mapped ") + (mapped ? "yes" : "no") +
-          ", cached " + (cached ? "yes" : "no");
+  line += std::string("; local and mapped ") +
+          (device.caps().device_mapped_memory() ? "yes" : "no") + ", cached " +
+          (device.caps().device_mapped_cached() ? "yes" : "no");
   char timestamps[64];
   std::snprintf(timestamps, sizeof timestamps,
                 "; timestamps %u bits, %.4g ns a tick",
@@ -157,6 +157,10 @@ std::string device_line(const core::Device& device) {
                           std::to_string(pair.value().deviation_ns) + " ns"
                     : std::string("; calibrated no");
   return line;
+}
+
+std::string rings_line(const core::Device& device) {
+  return device.caps().device_mapped_cached() ? "in place" : "copied";
 }
 
 std::string utc_text(std::chrono::system_clock::time_point at, bool compact) {
@@ -193,18 +197,28 @@ core::Result<std::unique_ptr<MeasureLog>> MeasureLog::open(
             << "# gfx: " << build.gfx << '\n'
             << "# build: " << build.build_type << '\n'
             << "# device: " << one_line(context.device) << '\n'
+            << "# rings: " << one_line(context.rings) << '\n'
             << "# stream: " << one_line(context.stream) << '\n'
             << "# run: " << one_line(context.run) << '\n'
             << "# timing: " << to_string(context.timing) << '\n'
-            << "# utc: " << utc_text(context.started) << '\n'
-            << kColumns << '\n';
+            << "# tile_depth: " << context.tile_depth << '\n'
+            << "# labels: " << (context.debug_labels ? "on" : "off") << '\n'
+            << "# utc: " << utc_text(context.started) << '\n';
+  if (!context.thermal.empty()) {
+    log->out_ << "# thermal: " << one_line(context.thermal) << '\n';
+  }
+  if (context.low_power) {
+    log->out_ << "# low_power: " << (*context.low_power ? "on" : "off") << '\n';
+  }
+  log->out_ << kColumns << '\n';
   if (!log->out_) {
     return core::Status::io_error("MeasureLog: cannot write " + path + ".part");
   }
   return log;
 }
 
-core::Status MeasureLog::add(const FrameStamp& stamp, std::uint32_t triangles) {
+core::Status MeasureLog::add(const FrameStamp& stamp, std::uint32_t triangles,
+                             const std::vector<core::StageRow>& render) {
   if (finished_) {
     return core::Status::io_error("MeasureLog: " + path_ + " is finished");
   }
@@ -215,16 +229,28 @@ core::Status MeasureLog::add(const FrameStamp& stamp, std::uint32_t triangles) {
       std::to_string(stamp.pass) + "," + std::to_string(stamp.index) + "," +
       (stamp.key ? "I" : "P") + "," + std::to_string(stamp.bytes) + "," +
       std::to_string(triangles) + ",";
-  for (const core::StageRow& row : stamp.stages.rows()) {
-    out_ << frame << field(row.name) << ','
-         << ms(std::max(0.0, row.cpu_ms - row.wait_ms)) << ','
-         << ms(row.wait_ms) << ','
-         << (row.device == core::DeviceTime::Measured ? ms(row.gpu_ms) : "")
-         << ',' << name_of(row.device) << ",,,,\n";
-  }
-  out_ << frame << ",,,,," << stamp.counters.submits << ','
-       << stamp.counters.host_waits << ',' << stamp.counters.blocked_ns << ','
-       << stamp.counters.staging_buffers << '\n';
+  const auto rows = [&](const char* table,
+                        const std::vector<core::StageRow>& of) {
+    for (const core::StageRow& row : of) {
+      out_ << frame << table << ',' << field(row.name) << ','
+           << ms(std::max(0.0, row.cpu_ms - row.wait_ms)) << ','
+           << ms(row.wait_ms) << ','
+           << (row.device == core::DeviceTime::Measured ? ms(row.gpu_ms) : "")
+           << ',' << name_of(row.device) << kNoFigures << '\n';
+    }
+  };
+  rows("worker", stamp.stages.rows());
+  rows("render", render);
+  const core::DeviceCounters& counted = stamp.counters;
+  const FrameFigures figures = frame_figures(stamp);
+  out_ << frame << ",,,,,," << counted.submits << ',' << counted.host_waits
+       << ',' << counted.blocked_ns << ',' << counted.staging_buffers << ','
+       << counted.dispatches << ',' << counted.barriers << ','
+       << field(stamp.deblock_on ? stamp.deblock.filter : "off") << ','
+       << stamp.deblock.exact_blocks << ',' << stamp.rounds << ','
+       << ms(figures.device_idle_ms) << ',' << ms(figures.queue_ms) << ','
+       << ms(figures.publish_ms) << ',' << ms(figures.take_ms) << ','
+       << ms(figures.present_ms) << '\n';
   if (!out_) {
     return core::Status::io_error("MeasureLog: cannot write " + path_ +
                                   ".part");
