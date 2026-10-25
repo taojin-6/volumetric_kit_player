@@ -49,9 +49,7 @@ vkc_require_core(0.21.0 VULKAN CONFIG)
 # #272's breakdown rows, #266's block ceiling for codec::make_decode_grid,
 # #260's networking::StreamClient and StreamServer, #256's empty mesh payload at
 # MeshExchange's commit and #255's volume::kDefaultBucketSize /
-# kDefaultMaxChain. #278 to #281 change only recon's examples, CI and video
-# decoders, which the player does not link; on Apple recon now builds those
-# decoders always, over VideoToolbox directly, with no FFmpeg.
+# kDefaultMaxChain.
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
