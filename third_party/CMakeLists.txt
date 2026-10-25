@@ -39,8 +39,8 @@ vkc_require_core(0.21.0 VULKAN CONFIG)
 # The stream reader, the codec's decode grid and its deblock, Marching Cubes,
 # the mesh exchange and the live stream's client. Its tests, examples and
 # -Werror stay off in a subproject, so its library's core floor is the one
-# checked; its own core pin is the player's. The pin is recon PR #277's head
-# (cdcabb9e): a frame decoded and meshed in the caller's batch
+# checked; its own core pin is the player's. The pin is recon #277's merge
+# (a23f7f5): a frame decoded and meshed in the caller's batch
 # (codec::record_growing, finish_growing; mesh::MarchingCubes::record_extract,
 # finish, abandon), DeviceMesh::ready, Decoder::claim_input and last_rounds, and
 # the reads straight into caller memory (StreamReader::read,
@@ -49,11 +49,10 @@ vkc_require_core(0.21.0 VULKAN CONFIG)
 # #260's networking::StreamClient and StreamServer, #256's empty mesh payload at
 # MeshExchange's commit and #255's volume::kDefaultBucketSize /
 # kDefaultMaxChain.
-# TODO(wave2): re-pin to recon's merge commit.
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG cdcabb9ebdd0fdc179f32ba8250ce2df9e9985d8)
+  GIT_TAG a23f7f54a49d939156431e39110ed56d21aa5b46)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------
