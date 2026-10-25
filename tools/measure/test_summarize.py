@@ -9,7 +9,8 @@ takes nearest-rank p50 and p95, takes the GPU over measured rows alone and
 says why the rest were not, counts the device per frame, shows the load in a
 <log>.load beside a log after its device; from format 2 it shows the
 settings, the renderer's table, the dispatches and barriers, the frames'
-figures and the rounds; in either it takes a timed frame's device time over
+figures, the latency of a frame with no present apart, and the rounds; in
+either it takes a timed frame's device time over
 its stages but their breakdowns; it diffs two logs, a format-1 against a
 format-2 one, a figure one lacks shown as "-", keeps a breakdown that a later
 frame or the second log alone has under its stage, and refuses what is not a
@@ -21,7 +22,9 @@ timed, reads as one of format 2: its header says how it ran; each frame has
 its read, decode, mesh, submit, wait and finish rows, the decode's
 breakdowns where measured, and its frame row: in the kept pass, the second,
 one batch, one submit and no staging buffer, with dispatches, barriers and
-its rounds; it skips without VP_PROBE_CSV, which ctest's check fails.
+its rounds, its queue idle and latency in range as ms, and for the worker
+alone a latency to taken, as it presents nothing; it skips without
+VP_PROBE_CSV, which ctest's check fails.
 """
 
 import os
@@ -129,8 +132,12 @@ class Summarize(unittest.TestCase):
                       "| 1.300 |", rows)
         self.assertIn("| queue idle ms | 27.000 | 26.000 | 28.000 |", rows)
         self.assertIn("| queue latency ms | 0.400 | 0.400 | 0.400 |", rows)
-        self.assertIn("| latency ms (due -> present) | 11.333 | 11.000 "
+        # The latency of the frames presented, and apart of frame 2's, taken
+        # with no present.
+        self.assertIn("| latency ms (due -> present) | 11.500 | 11.000 "
                       "| 12.000 |", rows)
+        self.assertIn("| latency ms (due -> taken; no present) | 11.000 "
+                      "| 11.000 | 11.000 |", rows)
         self.assertIn("|   ..taken -> presented ms | 2.000 | 2.000 | 2.000 |",
                       rows)
         self.assertIn("- rounds on the device: 1: 2, 2: 1 frames", rows)
@@ -148,7 +155,7 @@ class Summarize(unittest.TestCase):
         self.assertIn("| staging buffers | 3.000 -> 0.000 (-100%) |", rows)
         self.assertIn("| device time ms (timed frames) | 0.967 -> 1.100 (+14%) |",
                       rows)
-        self.assertIn("| latency ms (due -> present) | - -> 11.333 |", rows)
+        self.assertIn("| latency ms (due -> present) | - -> 11.500 |", rows)
         self.assertIn("| draw (mesh+UI) | - -> 0.500 | - -> 0.000 "
                       "| - -> 1.100 |", rows)
 
@@ -277,6 +284,20 @@ class ProbeLog(unittest.TestCase):
             self.assertGreater(counts["barriers"][frame], 0)
         self.assertEqual(sum(log.rounds.values()), self.FRAMES)
         self.assertNotIn(0, log.rounds)
+        # The queue idle and latency in ms: the idle under a second, as the
+        # stream's longest pts step is 540 ms, and the latency, a submit's,
+        # under 100 ms, less than a calibration's deviation before it.
+        for idle in log.figures["idle_ms"]:
+            self.assertGreaterEqual(idle, 0)
+            self.assertLess(idle, 1000)
+        for queue in log.figures["queue_ms"]:
+            self.assertGreater(queue, -1)
+            self.assertLess(queue, 100)
+        # The worker alone presents nothing: its latency is to taken.
+        if "--worker" in log.header["run"]:
+            self.assertEqual(log.figures["latency_ms"], [])
+            self.assertEqual(len(log.figures["taken_latency_ms"]),
+                             self.FRAMES)
 
 
 if __name__ == "__main__":

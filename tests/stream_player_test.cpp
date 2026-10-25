@@ -391,6 +391,31 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     return eventually([&] { return device().counters().submits > submits; });
   }
 
+  // Once the batch of the frame after `taken`, the frame taken last, has run,
+  // within kArrival: recorded ahead while playing, it sets the value after
+  // `taken`'s mesh's on the extractor's timeline, and its recording, a grow
+  // included, has submitted all it will. Whether that frame is still kAhead
+  // or more from due, so a control applied now finds its batch in flight: it
+  // is due no earlier than its pts step after `taken` was (FrameStamp::due).
+  // A test skips without, as a device too slow for this window cannot show
+  // what the test checks.
+  bool next_batch_in_flight(const FrameStamp& taken) {
+    constexpr auto kAhead = 100ms;
+    const core::TimelinePoint ready = exchange_.live().ready;
+    EXPECT_NE(ready.semaphore, nullptr);
+    if (ready.semaphore == nullptr) {
+      return false;
+    }
+    const core::Status ran = ready.semaphore->wait(
+        ready.value + 1,
+        std::chrono::duration_cast<std::chrono::nanoseconds>(kArrival).count());
+    EXPECT_TRUE(ran.ok()) << "frame " << taken.index + 1
+                          << "'s batch: " << ran.message();
+    const auto step =
+        std::chrono::nanoseconds(pts_of(taken.index + 1) - pts_of(taken.index));
+    return ran.ok() && SteadyClock::now() + kAhead < taken.due + step;
+  }
+
   // The index count the mesh's indirect draw command holds on the device.
   std::uint32_t index_count(const recon::mesh::DeviceMesh& mesh) {
     // A view of the extractor's buffer: its deleter frees nothing.
@@ -1275,6 +1300,71 @@ TEST_F(StreamPlayerTest, OneBatchPerFrame) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
+// A frame's due time is the one the clock set, not when the worker woke to
+// it: each frame's is its pts step after the frame before's, unless that one
+// was shown over a period late, which moves the clock on (Playback).
+TEST_F(StreamPlayerTest, AFramesDueTimeIsTheOneTheClockSet) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  std::optional<FrameStamp> before = take();
+  ASSERT_TRUE(before.has_value());
+  std::uint64_t compared = 0;
+  for (std::uint64_t i = 1; i < 2 * kFrames; ++i) {
+    std::optional<FrameStamp> frame = take();
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    if (frame->pass == before->pass &&
+        before->published - before->due <=
+            std::chrono::nanoseconds(kPeriodNs)) {
+      EXPECT_EQ(frame->due - before->due,
+                std::chrono::nanoseconds(pts_of(frame->index) -
+                                         pts_of(before->index)))
+          << "frame " << frame->index << " of pass " << frame->pass;
+      ++compared;
+    }
+    before = std::move(frame);
+  }
+  EXPECT_GT(compared, 0u);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A frame seen over a period late moves the clock on: the frame after it is
+// due its pts step after the late one was seen, not after the late one's due
+// time, so the frames behind it follow rather than come in a burst
+// (Playback). Frame 2 left untaken holds the worker in frame 3's publish,
+// so it sees frame 4 due no sooner than frame 2 is taken.
+TEST_F(StreamPlayerTest, AFrameSeenOverAPeriodLateMovesTheClockOn) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  std::optional<FrameStamp> frame;
+  while (!frame || frame->index < 1) {
+    frame = take();
+    ASSERT_TRUE(frame.has_value());
+  }
+  // Past frame 4's due time, frame 1's plus three steps, and a period on.
+  std::this_thread::sleep_for(
+      std::chrono::nanoseconds(pts_of(4) - pts_of(1) + 2 * kPeriodNs) + 250ms);
+  const SteadyClock::time_point taken = SteadyClock::now();
+  std::optional<FrameStamp> late;
+  while (!frame || frame->index < 5) {
+    frame = take();
+    ASSERT_TRUE(frame.has_value());
+    if (frame->index == 4) {
+      late = frame;
+    }
+  }
+  ASSERT_TRUE(late.has_value());
+  const auto period = std::chrono::nanoseconds(kPeriodNs);
+  if (taken - late->due <= period) {
+    GTEST_SKIP() << "frame 4 was not seen a period late";
+  }
+  EXPECT_GE(
+      frame->due - late->due,
+      std::chrono::nanoseconds(pts_of(5) - pts_of(4)) + (taken - late->due))
+      << "frame 5 is due its step after frame 4's due time, not after frame "
+         "4 was seen";
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
 // Every mesh carries the value its batch set on the extractor's timeline,
 // reached by its hand-over (take checks), each frame's past the one before.
 TEST_F(StreamPlayerTest, EveryMeshCarriesAReachedReadyValue) {
@@ -1294,8 +1384,15 @@ TEST_F(StreamPlayerTest, EveryMeshCarriesAReachedReadyValue) {
 // Timed, a frame's batch shows the queue's idle since the worker's batch
 // before when both were timed and nothing came between: not the first
 // frame's, and in the steady pass, the second, every frame's; and its queue
-// latency where the device calibrates its clocks. Untimed, neither.
+// latency where the device calibrates its clocks. Untimed, neither. Both are
+// in ms: the idle under a second, as the stream's longest pts step is
+// kGapNs + kPeriodNs, and the latency, a submit's, under 100 ms (a
+// calibration may place the first timestamp a little before the submit
+// call, by its deviation).
 TEST_F(StreamPlayerTest, DeviceIdleNeedsTwoTimedBatchesInARow) {
+  constexpr double kMaxIdleMs = 1000.0;
+  constexpr double kMaxQueueMs = 100.0;
+  constexpr double kCalibrationMs = 1.0;
   core::Result<core::GpuTimer> timer = core::GpuTimer::create(device());
   ASSERT_TRUE(timer.ok()) << timer.status().message();
   const bool times = timer.value().available();
@@ -1314,9 +1411,14 @@ TEST_F(StreamPlayerTest, DeviceIdleNeedsTwoTimedBatchesInARow) {
     }
     if (frame->device_idle_ms) {
       EXPECT_GE(*frame->device_idle_ms, 0.0);
+      EXPECT_LT(*frame->device_idle_ms, kMaxIdleMs) << "frame " << i;
     }
     EXPECT_EQ(frame->queue_ms.has_value(), times && calibrates)
         << "frame " << i;
+    if (frame->queue_ms) {
+      EXPECT_GT(*frame->queue_ms, -kCalibrationMs) << "frame " << i;
+      EXPECT_LT(*frame->queue_ms, kMaxQueueMs) << "frame " << i;
+    }
   }
   player->set_device_timing(DeviceTiming::kOff);
   // The frame after the next is recorded untimed.
@@ -1389,7 +1491,10 @@ TEST_F(StreamPlayerTest, APauseShowsTheFrameInHandThenHolds) {
     ASSERT_TRUE(frame.has_value());
   }
   // Frame kGapAt is due kGapNs on; the worker records it meanwhile.
-  std::this_thread::sleep_for(150ms);
+  if (!next_batch_in_flight(*frame)) {
+    GTEST_SKIP() << "frame " << vp_test::kGapAt << " was not in flight "
+                 << "well ahead of its due time";
+  }
   const SteadyClock::time_point paused = SteadyClock::now();
   player->pause();
   const std::optional<FrameStamp> held = next_frame();
@@ -1419,7 +1524,10 @@ TEST_F(StreamPlayerTest,
     frame = take();
     ASSERT_TRUE(frame.has_value());
   }
-  std::this_thread::sleep_for(150ms);  // frame kGapAt recorded, not yet due
+  if (!next_batch_in_flight(*frame)) {
+    GTEST_SKIP() << "frame " << vp_test::kGapAt << " was not in flight "
+                 << "well ahead of its due time";
+  }
   const std::uint64_t submits = device().counters().submits;
   const SteadyClock::time_point parking = SteadyClock::now();
   ASSERT_TRUE(player->park(kArrival));
@@ -1457,7 +1565,10 @@ TEST_F(StreamPlayerTest, AParkWhileARecoveryIsDueRunsItAtUnpark) {
     frame = take();
     ASSERT_TRUE(frame.has_value());
   }
-  std::this_thread::sleep_for(150ms);  // its batch submitted, not yet due
+  if (!next_batch_in_flight(*frame)) {
+    GTEST_SKIP() << "frame " << vp_test::kGrownFrame << " was not in flight "
+                 << "well ahead of its due time";
+  }
   // From the park's call to the unpark: no submit, the park's own wait
   // included.
   const std::uint64_t submits = device().counters().submits;

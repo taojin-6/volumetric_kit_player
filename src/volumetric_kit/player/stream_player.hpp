@@ -172,7 +172,8 @@ struct FrameStamp {
   /// frame, which neither PlaybackStats nor MeasureLog counts. Its "decode"
   /// is the rebuild's.
   bool rebuild = false;
-  /// When it was due: a file's, when the clock let it go; live, when its
+  /// When it was due: a file's, the time the clock set for it, not when the
+  /// worker woke to it, or when a pause or step let it go; live, when its
   /// record arrived whole. Its latency counts from here.
   Playback::Clock::time_point due{};
   /// When the consumer took it; the consumer sets it.
@@ -456,6 +457,13 @@ class StreamPlayer {
   // A frame recorded and submitted, until finished: its stamp, its pending
   // decode and extract (live, none), its step and its batch.
   struct InFlight;
+  // When a frame was let go: when the clock had it due (FrameStamp::due),
+  // and when the worker saw that, later by its wake-up, from which the
+  // clock's late rule counts (Playback::shown).
+  struct Due {
+    Playback::Clock::time_point at;
+    Playback::Clock::time_point seen;
+  };
 
   // The worker: builds, then plays the track or the live stream until quit or
   // a fatal error, into status_.
@@ -487,13 +495,25 @@ class StreamPlayer {
   // refusal.
   core::Result<bool> finish_decode(InFlight decoding, FrameStamp* newest,
                                    std::uint32_t* blocks);
+  // Record into `batch` the decode of the record of `size` bytes at the
+  // start of `slot`, with the deblock as set_deblock last set it: `stamp`'s
+  // "decode" row, and when it is timed recon's breakdowns under it. The
+  // first frame read builds grid_ first. On a refusal the caller drops
+  // `batch`.
+  core::Result<recon::codec::PendingDecode> record_decode(
+      core::CommandBatch& batch, const core::HostSlot& slot, std::size_t size,
+      FrameStamp& stamp);
+  // Wait for `frame`'s batch, as its "wait: GPU" row, then note it
+  // (note_batch).
+  core::Status wait_batch(InFlight& frame);
   // Build grid_ for the stream of the record of `size` bytes at the start of
   // `slot`, the first frame read.
   core::Status make_grid(const core::HostSlot& slot, std::size_t size);
-  // Whether the next frame's device work is timed, as timing_ asks; a timed
-  // frame's batch then times in timer_, at the tile depth now set.
+  // Whether the next frame's device work is timed, as timing_ asks.
   bool time_next_frame();
-  void time_batch(core::CommandBatch& batch);
+  // A batch on the worker's device; when `timed`, timed in timer_ at the
+  // tile depth now set.
+  core::CommandBatch new_batch(bool timed);
   // Submit `batch`, setting `signal` when given, timed into `rows`' "submit"
   // row when given.
   core::Result<Batch> submit(core::CommandBatch& batch,
@@ -511,15 +531,15 @@ class StreamPlayer {
   // `stamp`'s deblock fields and rounds, from the decoder's last finish or
   // rebuild.
   void stamp_deblock(FrameStamp& stamp) const;
-  // Wait until the frame at pts_ns is due: the time it was found due, or
-  // none on quit. Without `frame`, it rebuilds last_ meanwhile when
-  // rebuild_wanted. With `frame`, recorded: a pause publishes it now, and a
-  // park waits out its batch and ends its step, to finish it at unpark.
-  core::Result<std::optional<Playback::Clock::time_point>> wait_due(
-      std::uint64_t pts_ns, InFlight* frame);
-  // Count the frame at pts_ns shown as of due_at, when wait_due found it due,
+  // Wait until the frame at pts_ns is due: when, or none on quit. Without
+  // `frame`, it rebuilds last_ meanwhile when rebuild_wanted. With `frame`,
+  // recorded: a pause publishes it now, and a park waits out its batch and
+  // ends its step, to finish it at unpark.
+  core::Result<std::optional<Due>> wait_due(std::uint64_t pts_ns,
+                                            InFlight* frame);
+  // Count the frame at pts_ns shown as of `seen`, when wait_due saw it due,
   // once it decoded: the clock takes a step.
-  void count_shown(std::uint64_t pts_ns, Playback::Clock::time_point due_at);
+  void count_shown(std::uint64_t pts_ns, Playback::Clock::time_point seen);
   // Under the lock: whether a paused toggle asks for last_ to be rebuilt.
   bool rebuild_wanted() const;
   // Rebuild last_ under the deblock as now set, untimed, mesh it and publish

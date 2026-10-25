@@ -188,11 +188,12 @@ A measurement is one CSV log per run, which the player writes itself
 format, version 2): a header naming the commits, the build, the device, how
 recon's rings run on it, the stream, how it ran, the timing, the tile depth,
 the labels and the time (and on a phone its thermal state and Low Power
-Mode), then each stream frame's stage rows (host, wait and GPU ms), the rows
-of the display frame that drew it, and its frame row: the worker's device
-counts (submits, waits, blocked time, staging buffers, dispatches,
-barriers), what the deblock did, the rounds its decode ran, the queue's idle
-and latency, and its latency from due to published, taken and presented.
+Mode), then each stream frame's stage rows (host, wait and GPU ms), the
+renderer's newest rows as it was taken (gfx's profiler's, two display frames
+behind), and its frame row: the worker's device counts (submits, waits,
+blocked time, staging buffers, dispatches, barriers), what the deblock did,
+the rounds its decode ran, the queue's idle and latency, and its latency
+from due to published, taken and presented.
 
 `vp_probe` writes one on a desktop, with no window:
 
@@ -239,8 +240,8 @@ the device, so they run only with the owner's go-ahead. Each log is named
 `<utc>-<commit>-<mode>-<timing>.csv`. `summarize` reads formats 1 and 2, and
 gives per stage, the worker's and the renderer's, the mean, p50 and p95 of
 host, wait and GPU, the counts per frame, the frames' figures (device time,
-queue idle and latency, latency and its legs, rounds), a run's load, and with
-two logs their diff.
+queue idle and latency, the latency to the present, or to taken for frames
+with none, its legs, rounds), a run's load, and with two logs their diff.
 
 ## Development
 

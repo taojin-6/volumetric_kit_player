@@ -240,9 +240,9 @@ class Run {
     return {};
   }
 
-  // A frame taken, with the render rows of the display frame that took it:
-  // false once the run is done. A file's next pass's first frame past the
-  // last pass ends it, uncounted.
+  // A frame taken, with the render rows as of the tick that took it
+  // (PlayerView::render_metrics): false once the run is done. A file's next
+  // pass's first frame past the last pass ends it, uncounted.
   core::Result<bool> take(const vkp::FrameStamp& stamp, std::uint32_t triangles,
                           const std::vector<core::StageRow>& render = {}) {
     if (!live_ && stamp.pass > args_.passes.value_or(1)) {

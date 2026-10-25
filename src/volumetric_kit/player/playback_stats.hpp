@@ -20,37 +20,42 @@
 
 namespace volumetric_kit::player {
 
-/// @brief A window's per-frame figures beside its stage means, each a mean
-///        over the frames that have it, in ms; empty where none has.
+/// @brief A frame's figures beside its stage rows, in ms, each empty where
+///        the frame lacks it: one frame's (@ref frame_figures), or a
+///        window's, each a mean over the frames that have it
+///        (PlaybackStats::frame_means).
 ///
 /// @code
-/// const FrameMeans means = stats.frame_means();
-/// if (means.publish_ms) {
-///   std::printf("due -> published %.2f ms\n", *means.publish_ms);
+/// const FrameFigures means = stats.frame_means();
+/// if (means.latency_ms) {
+///   std::printf("due -> presented %.2f ms\n", *means.latency_ms);
 /// }
 /// @endcode
-struct FrameMeans {
+struct FrameFigures {
   /// A timed frame's device time: its measured stage rows, breakdowns aside,
   /// whose tiles add up to its batch.
   std::optional<double> gpu_ms;
   std::optional<double> device_idle_ms;  ///< FrameStamp::device_idle_ms.
   std::optional<double> queue_ms;        ///< FrameStamp::queue_ms.
-  std::optional<double> publish_ms;      ///< FrameStamp::due to published.
-  std::optional<double> take_ms;         ///< Published to taken.
-  std::optional<double> present_ms;      ///< Taken to presented.
+  /// Its latency, FrameStamp::due to presented: only a frame with all three
+  /// legs below has it.
+  std::optional<double> latency_ms;
+  std::optional<double> publish_ms;  ///< FrameStamp::due to published.
+  std::optional<double> take_ms;     ///< Published to taken.
+  std::optional<double> present_ms;  ///< Taken to presented.
 };
 
-/// @brief One frame's figures, as @ref FrameMeans averages them: what
-///        PlaybackStats keeps of each frame and MeasureLog writes in its
-///        frame row.
+/// @brief One frame's figures: what PlaybackStats keeps of each frame and
+///        MeasureLog writes in its frame row.
 ///
 /// @code
-/// const FrameMeans one = frame_figures(stamp);  // each as the frame has it
+/// const FrameFigures one = frame_figures(stamp);  // as the frame has each
 /// @endcode
 /// @param stamp  The frame's stamp.
 /// @return Its device time when timed and measured, its queue idle and
-///         latency, and each latency leg whose ends it has, in order.
-FrameMeans frame_figures(const FrameStamp& stamp);
+///         latency, each latency leg whose ends it has, in order, and with
+///         all three its latency.
+FrameFigures frame_figures(const FrameStamp& stamp);
 
 /// @brief Figures over the frames taken for drawing: the track's mean
 ///        bitrate, the rate frames are taken at, the worker's stage means,
@@ -119,9 +124,9 @@ class PlaybackStats {
   ///         timed it measured it, and its time over those measured. Empty
   ///         before the first frame.
   std::vector<core::StageRow> stage_means() const;
-  /// @return The window's per-frame figures (@ref FrameMeans), each over the
-  ///         frames that have it.
-  FrameMeans frame_means() const;
+  /// @return The window's per-frame figures (@ref FrameFigures), each a mean
+  ///         over the frames that have it.
+  FrameFigures frame_means() const;
   /// @return The frames the stage means are taken over: the window's.
   std::uint32_t window_frames() const noexcept {
     return static_cast<std::uint32_t>(stages_.size());
@@ -146,12 +151,11 @@ class PlaybackStats {
                                    Clock::time_point Taken::* when,
                                    double (*value)(const Taken&)) const;
 
-  // A frame's rows, whether its device work was timed, and its figures
-  // (FrameMeans' fields, as that frame has them).
+  // A frame's rows, whether its device work was timed, and its figures.
   struct Stages {
     std::vector<core::StageRow> rows;
     bool timed = false;
-    FrameMeans figures;
+    FrameFigures figures;
   };
 
   recon::stream::TrackStats track_;

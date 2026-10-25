@@ -229,6 +229,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
     frame.target->end(frame.cmd);
   }
   // 5. Every path from begin_frame ends the frame.
+  frame_waits_ = frame.waits;
   const core::Status ended = app_.end_frame(frame);
   if (took) {
     if (ended.ok()) {

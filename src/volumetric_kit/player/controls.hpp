@@ -145,8 +145,9 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 ///         window has it timed, the device time and the queue latency `n/a`
 ///         where timed frames have none (a queue that cannot time, a device
 ///         that cannot calibrate); the latency from a frame's due time to
-///         its present call and its legs, due to published, published to
-///         taken and taken to presented (each `-` while unknown); and the
+///         its present call, over the frames presented, and its legs, due to
+///         published, published to taken and taken to presented (each `-`
+///         while unknown); and the
 ///         rate frames are taken at, over the nominal when it is known, or
 ///         live beside the records a second. Compact, the device time and
 ///         the latency share one line.

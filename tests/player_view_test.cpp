@@ -38,6 +38,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -58,6 +59,7 @@
 #include "volumetric_kit/gfx/app/shared_device_config.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
+#include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/player/controls.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
@@ -868,18 +870,32 @@ TEST_F(PlayerViewTest, AMeasurementsTimingHoldsWhateverTheStatsShow) {
   }
 }
 
-// The draw waits on the GPU for its mesh's ready value, which the worker
-// reached before it published, so every frame drawing a mesh presents, and
-// the layer, sync validation included where the test policy asks, reports
-// nothing: on the device's families (MoltenVK's two, and its specialized
-// ones in their rerun).
+// The draw waits on the GPU for its mesh's ready value: each frame drawing a
+// mesh goes to the queue behind that value at the draw's stages
+// (frame_waits). The worker reached it before it published, so every such
+// frame presents, and the layer, sync validation included where the test
+// policy asks, reports nothing: on the device's families (MoltenVK's two,
+// and its specialized ones in their rerun).
 TEST_F(PlayerViewTest, TheDrawWaitsOnTheMeshesReadyValue) {
   ASSERT_TRUE(make_view());
+  constexpr VkPipelineStageFlags kDrawStages =
+      VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
   int drawn = 0;
   ASSERT_TRUE(tick_until([&] {
     const recon::mesh::DeviceMesh& mesh = view_->mesh();
     if (mesh.valid() && !mesh.empty()) {
       EXPECT_NE(mesh.ready.semaphore, nullptr);
+      // The frame went to the queue behind that value, at the draw's stages.
+      const std::vector<gfx::windowing::FrameWait>& waits =
+          view_->frame_waits();
+      EXPECT_TRUE(std::any_of(waits.begin(), waits.end(),
+                              [&](const gfx::windowing::FrameWait& wait) {
+                                return wait.point.semaphore ==
+                                           mesh.ready.semaphore &&
+                                       wait.point.value == mesh.ready.value &&
+                                       wait.stages == kDrawStages;
+                              }))
+          << "no wait on generation " << mesh.generation << "'s ready value";
       if (mesh.ready.semaphore != nullptr) {
         const core::Result<std::uint64_t> reached =
             mesh.ready.semaphore->value();

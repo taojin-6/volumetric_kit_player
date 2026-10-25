@@ -455,9 +455,13 @@ bool StreamPlayer::time_next_frame() {
   return false;
 }
 
-void StreamPlayer::time_batch(core::CommandBatch& batch) {
-  timer_->set_max_depth(tile_depth());
-  batch.time(*timer_);
+core::CommandBatch StreamPlayer::new_batch(bool timed) {
+  core::CommandBatch batch(*device_, *allocator_);
+  if (timed) {
+    timer_->set_max_depth(tile_depth());
+    batch.time(*timer_);
+  }
+  return batch;
 }
 
 core::Status StreamPlayer::play_track() {
@@ -484,12 +488,12 @@ core::Status StreamPlayer::play_track() {
       // Ahead of its due time only while playing, so whenever the clock is
       // paused the grid holds the frame shown (DECISIONS.md).
       if (!playing()) {
-        VKC_ASSIGN(const std::optional<Clock::time_point> due,
+        VKC_ASSIGN(const std::optional<Due> due,
                    wait_due(next->stamp.pts_ns, nullptr));
         if (!due) {
           return {};
         }
-        next->stamp.due = *due;
+        next->stamp.due = due->at;
       }
       VKC_TRY(record_frame(std::move(*next), pass, &frame));
     }
@@ -563,34 +567,19 @@ core::Status StreamPlayer::record_frame(Next next, Pass& pass,
   }
   FrameStamp& stamp = next.stamp;
   stamp.timed = time_next_frame();
-  // recon's rows: with them it tags its commands, whose tiles count to every
-  // scope open around them, the player's included; without, it writes no
-  // timestamp, and the player's rows have their host and wait halves alone.
-  core::StageMetrics recon;
-  core::StageMetrics* const timed = stamp.timed ? &recon : nullptr;
-  core::CommandBatch batch(*device_, *allocator_);
-  if (stamp.timed) {
-    time_batch(batch);
-  }
+  core::CommandBatch batch = new_batch(stamp.timed);
   core::Result<codec::PendingDecode> decode =
-      [&]() -> core::Result<codec::PendingDecode> {
-    const core::StageScope host(stamp.stages, "decode");
-    if (!grid_.has_value()) {
-      VKC_TRY(make_grid(next.slot, next.size));
-    }
-    decoder_->set_deblock(deblock());
-    return codec::record_growing(*decoder_, batch, next.slot, next.size, *grid_,
-                                 kMaxFrameBlocks, timed);
-  }();
+      record_decode(batch, next.slot, next.size, stamp);
   if (!decode.ok()) {
-    return pass.skip(decode.status());  // nothing was recorded
+    return pass.skip(decode.status());  // the batch is dropped
   }
-  forward_breakdowns(std::exchange(recon, core::StageMetrics()), stamp.stages);
+  core::StageMetrics recon;  // as record_decode's
   core::Result<mesh::PendingExtract> extract = [&] {
     const core::StageScope host(stamp.stages, "mesh");
     exchange_->release_and_may_publish(*extractor_);  // the consumer's first
     return extractor_->record_extract(batch, *grid_, decode->blocks,
-                                      &decode->gate, 0.0f, timed);
+                                      &decode->gate, 0.0f,
+                                      stamp.timed ? &recon : nullptr);
   }();
   if (!extract.ok()) {
     decoder_->abandon(*decode);
@@ -610,13 +599,16 @@ core::Status StreamPlayer::record_frame(Next next, Pass& pass,
 }
 
 core::Result<bool> StreamPlayer::finish_frame(InFlight frame, Pass& pass) {
-  VKC_ASSIGN(const std::optional<Clock::time_point> due,
+  VKC_ASSIGN(const std::optional<Due> due,
              wait_due(frame.stamp.pts_ns, &frame));
   if (!due) {
     return false;
   }
+  // Recorded once due, while paused, it was let go at once, so seen then.
+  Clock::time_point seen = frame.stamp.due;
   if (frame.stamp.due == Clock::time_point{}) {
-    frame.stamp.due = *due;
+    frame.stamp.due = due->at;
+    seen = due->seen;
   }
   if (!frame.step) {  // a park waited out its batch and ended its step
     frame.step = Step(*this);
@@ -624,12 +616,8 @@ core::Result<bool> StreamPlayer::finish_frame(InFlight frame, Pass& pass) {
       return false;
     }
   }
-  {
-    // About 0: the GPU kept up, and its fence signalled before it was due.
-    const core::WaitScope wait(&frame.stamp.stages, "wait: GPU");
-    VKC_TRY(frame.batch.pending.wait());
-  }
-  note_batch(frame.batch, frame.stamp);
+  // About 0: the GPU kept up, and its fence signalled before it was due.
+  VKC_TRY(wait_batch(frame));
   core::StageMetrics recon;
   core::StageMetrics* const timed = frame.stamp.timed ? &recon : nullptr;
   core::Status refused;
@@ -657,7 +645,7 @@ core::Result<bool> StreamPlayer::finish_frame(InFlight frame, Pass& pass) {
     return true;
   }
   stamp_deblock(frame.stamp);
-  count_shown(frame.stamp.pts_ns, frame.stamp.due);
+  count_shown(frame.stamp.pts_ns, seen);
   last_ = frame.stamp;
   last_->stages.clear();
   pass.shown = true;
@@ -773,25 +761,10 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
         if (!read.ok()) {
           return end(read);
         }
-        core::StageMetrics recon;  // as record_frame's
-        core::StageMetrics* const timed = stamp.timed ? &recon : nullptr;
-        core::CommandBatch batch(*device_, *allocator_);
-        if (stamp.timed) {
-          time_batch(batch);
-        }
-        core::Result<codec::PendingDecode> decode =
-            [&]() -> core::Result<codec::PendingDecode> {
-          const core::StageScope host(stamp.stages, "decode");
-          if (!grid_.has_value()) {
-            VKC_TRY(make_grid(*slot, static_cast<std::size_t>(record.size)));
-          }
-          decoder_->set_deblock(deblock());
-          return codec::record_growing(*decoder_, batch, *slot,
-                                       static_cast<std::size_t>(record.size),
-                                       *grid_, kMaxFrameBlocks, timed);
-        }();
+        core::CommandBatch batch = new_batch(stamp.timed);
+        core::Result<codec::PendingDecode> decode = record_decode(
+            batch, *slot, static_cast<std::size_t>(record.size), stamp);
         if (decode.ok()) {
-          forward_breakdowns(recon, stamp.stages);
           core::Result<Batch> submitted = submit(batch, nullptr, &stamp.stages);
           if (!submitted.ok()) {
             decoder_->abandon(*decode);
@@ -866,11 +839,7 @@ core::Result<bool> StreamPlayer::finish_decode(InFlight decoding,
                                                FrameStamp* newest,
                                                std::uint32_t* blocks) {
   FrameStamp& stamp = decoding.stamp;
-  {
-    const core::WaitScope wait(&stamp.stages, "wait: GPU");
-    VKC_TRY(decoding.batch.pending.wait());
-  }
-  note_batch(decoding.batch, stamp);
+  VKC_TRY(wait_batch(decoding));
   core::StageMetrics recon;
   const core::Result<codec::Finished> done = [&] {
     const core::StageScope host(stamp.stages, "finish");
@@ -889,6 +858,39 @@ core::Result<bool> StreamPlayer::finish_decode(InFlight decoding,
   *blocks = decoding.decode.blocks;
   *newest = std::move(stamp);
   return true;
+}
+
+core::Result<codec::PendingDecode> StreamPlayer::record_decode(
+    core::CommandBatch& batch, const core::HostSlot& slot, std::size_t size,
+    FrameStamp& stamp) {
+  // recon's rows: with them it tags its commands, whose tiles count to every
+  // scope open around them, the player's included; without, it writes no
+  // timestamp, and the player's rows have their host and wait halves alone.
+  core::StageMetrics recon;
+  core::Result<codec::PendingDecode> decode =
+      [&]() -> core::Result<codec::PendingDecode> {
+    const core::StageScope host(stamp.stages, "decode");
+    if (!grid_.has_value()) {
+      VKC_TRY(make_grid(slot, size));
+    }
+    decoder_->set_deblock(deblock());
+    return codec::record_growing(*decoder_, batch, slot, size, *grid_,
+                                 kMaxFrameBlocks,
+                                 stamp.timed ? &recon : nullptr);
+  }();
+  if (decode.ok()) {
+    forward_breakdowns(recon, stamp.stages);
+  }
+  return decode;
+}
+
+core::Status StreamPlayer::wait_batch(InFlight& frame) {
+  {
+    const core::WaitScope wait(&frame.stamp.stages, "wait: GPU");
+    VKC_TRY(frame.batch.pending.wait());
+  }
+  note_batch(frame.batch, frame.stamp);
+  return {};
 }
 
 core::Status StreamPlayer::make_grid(const core::HostSlot& slot,
@@ -958,16 +960,13 @@ void StreamPlayer::note_batch(const Batch& batch, FrameStamp& stamp) {
 core::Result<std::optional<mesh::DeviceMesh>> StreamPlayer::mesh_alone(
     FrameStamp& stamp, std::uint32_t blocks, const char* row) {
   const bool timed = row != nullptr && stamp.timed;
-  core::StageMetrics recon;  // as record_frame's
+  core::StageMetrics recon;  // as record_decode's
   std::optional<Batch> ran;
   core::Result<std::optional<mesh::DeviceMesh>> meshed =
       [&]() -> core::Result<std::optional<mesh::DeviceMesh>> {
     const core::StageScope host(row != nullptr ? &stamp.stages : nullptr,
                                 row != nullptr ? row : "mesh");
-    core::CommandBatch batch(*device_, *allocator_);
-    if (timed) {
-      time_batch(batch);
-    }
+    core::CommandBatch batch = new_batch(timed);
     exchange_->release_and_may_publish(*extractor_);  // the consumer's first
     VKC_ASSIGN(const mesh::PendingExtract extract,
                extractor_->record_extract(batch, *grid_, blocks, nullptr, 0.0f,
@@ -995,7 +994,7 @@ void StreamPlayer::stamp_deblock(FrameStamp& stamp) const {
   stamp.rounds = decoder_->last_rounds();
 }
 
-core::Result<std::optional<Clock::time_point>> StreamPlayer::wait_due(
+core::Result<std::optional<StreamPlayer::Due>> StreamPlayer::wait_due(
     std::uint64_t pts_ns, InFlight* frame) {
   for (;;) {
     bool settle = false;  // parked with frame's batch in flight
@@ -1003,7 +1002,7 @@ core::Result<std::optional<Clock::time_point>> StreamPlayer::wait_due(
       std::unique_lock<std::mutex> lock(mutex_);
       for (;;) {
         if (quit_) {
-          return std::optional<Clock::time_point>();
+          return std::optional<Due>();
         }
         const Clock::time_point now = Clock::now();
         // Parked, nothing is due: a control takes effect at unpark.
@@ -1018,11 +1017,11 @@ core::Result<std::optional<Clock::time_point>> StreamPlayer::wait_due(
         // A pause publishes the frame recorded ahead, so the grid holds the
         // frame shown (DECISIONS.md).
         if (frame != nullptr && !clock_.playing()) {
-          return std::optional<Clock::time_point>(now);
+          return std::optional<Due>(Due{now, now});
         }
         const std::optional<Clock::time_point> due = clock_.due(pts_ns, now);
         if (due && *due <= now) {
-          return std::optional<Clock::time_point>(now);
+          return std::optional<Due>(Due{*due, now});
         }
         if (frame == nullptr && rebuild_wanted()) {
           break;
@@ -1043,19 +1042,19 @@ core::Result<std::optional<Clock::time_point>> StreamPlayer::wait_due(
     }
     VKC_ASSIGN(const bool rebuilt, rebuild());
     if (!rebuilt) {
-      return std::optional<Clock::time_point>();
+      return std::optional<Due>();
     }
   }
 }
 
-void StreamPlayer::count_shown(std::uint64_t pts_ns, Clock::time_point due_at) {
+void StreamPlayer::count_shown(std::uint64_t pts_ns, Clock::time_point seen) {
   std::lock_guard<std::mutex> lock(mutex_);
   last_by_step_ = !clock_.playing();
-  // Shown as of when it was due, so a slow decode does not push the frames
-  // after it back; a pause since, with no step to take, leaves the clock as
-  // it is (Playback::shown's precondition).
-  if (clock_.due(pts_ns, due_at)) {
-    clock_.shown(pts_ns, due_at);
+  // Shown as of when it was seen due, so a slow decode does not push the
+  // frames after it back; a pause since, with no step to take, leaves the
+  // clock as it is (Playback::shown's precondition).
+  if (clock_.due(pts_ns, seen)) {
+    clock_.shown(pts_ns, seen);
   }
   last_pts_ns_ = pts_ns;
 }

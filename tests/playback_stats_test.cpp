@@ -361,7 +361,8 @@ TEST(PlaybackStats, APauseInTakingDoesNotCrowdItsRecordsIntoAMoment) {
 
 // A frame's figures: its device time, timed and measured, its stage rows'
 // but its breakdowns', whose tiles its stages hold; its queue idle and
-// latency as stamped; and each latency leg whose ends it has, in order.
+// latency as stamped; each latency leg whose ends it has, in order; and with
+// all three, its latency, due to presented.
 TEST(FrameFigures, AreTheStampsEachAsTheFrameHasIt) {
   using volumetric_kit::player::frame_figures;
   FrameStamp stamp = frame(0.5, 2.0, 5.0);
@@ -375,21 +376,28 @@ TEST(FrameFigures, AreTheStampsEachAsTheFrameHasIt) {
   stamp.published = t0 + milliseconds(2);
   stamp.taken = t0 + milliseconds(10);
   stamp.presented = t0 + milliseconds(13);
-  const volumetric_kit::player::FrameMeans figures = frame_figures(stamp);
+  const volumetric_kit::player::FrameFigures figures = frame_figures(stamp);
   EXPECT_DOUBLE_EQ(figures.gpu_ms.value_or(0.0), 6.0);
   EXPECT_DOUBLE_EQ(figures.device_idle_ms.value_or(0.0), 20.0);
   EXPECT_DOUBLE_EQ(figures.queue_ms.value_or(0.0), 0.5);
+  EXPECT_DOUBLE_EQ(figures.latency_ms.value_or(0.0), 13.0);
   EXPECT_DOUBLE_EQ(figures.publish_ms.value_or(0.0), 2.0);
   EXPECT_DOUBLE_EQ(figures.take_ms.value_or(0.0), 8.0);
   EXPECT_DOUBLE_EQ(figures.present_ms.value_or(0.0), 3.0);
-  // No present, no due, a leg out of order: none of those legs.
+  // No present: its other legs, and no latency.
   stamp.presented.reset();
+  const volumetric_kit::player::FrameFigures unpresented = frame_figures(stamp);
+  EXPECT_TRUE(unpresented.publish_ms.has_value());
+  EXPECT_TRUE(unpresented.take_ms.has_value());
+  EXPECT_FALSE(unpresented.latency_ms.has_value());
+  // No present, no due, a leg out of order: none of those legs.
   stamp.due = {};
   stamp.taken = t0;  // before it was published
-  const volumetric_kit::player::FrameMeans some = frame_figures(stamp);
+  const volumetric_kit::player::FrameFigures some = frame_figures(stamp);
   EXPECT_FALSE(some.publish_ms.has_value());
   EXPECT_FALSE(some.take_ms.has_value());
   EXPECT_FALSE(some.present_ms.has_value());
+  EXPECT_FALSE(some.latency_ms.has_value());
   // Timed with nothing measured, as on a queue that cannot time: none.
   FrameStamp unmeasured = frame(0.5);
   unmeasured.timed = true;
@@ -422,10 +430,11 @@ TEST(PlaybackStats, FrameMeansCoverTheFramesThatHaveEachFigure) {
   rebuild.rebuild = true;
   rebuild.device_idle_ms = 999.0;
   stats.add_frame(rebuild, t0 + seconds(1));
-  const volumetric_kit::player::FrameMeans means = stats.frame_means();
+  const volumetric_kit::player::FrameFigures means = stats.frame_means();
   EXPECT_DOUBLE_EQ(means.gpu_ms.value_or(-1.0), 2.0) << "frames 0 and 2";
   EXPECT_DOUBLE_EQ(means.device_idle_ms.value_or(-1.0), 20.0) << "1 to 3";
   EXPECT_FALSE(means.queue_ms.has_value()) << "none calibrated";
+  EXPECT_DOUBLE_EQ(means.latency_ms.value_or(-1.0), 7.5) << "frames 0 and 1";
   EXPECT_DOUBLE_EQ(means.publish_ms.value_or(-1.0), 2.5);
   EXPECT_DOUBLE_EQ(means.take_ms.value_or(-1.0), 5.0);
   EXPECT_DOUBLE_EQ(means.present_ms.value_or(-1.0), 1.0) << "frames 0 and 1";

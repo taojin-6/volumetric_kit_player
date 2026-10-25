@@ -30,8 +30,9 @@ everywhere, we do not need the older pipelines".
   Paused or held, a frame is recorded only once due, and a pause publishes
   the frame already recorded, so whenever the clock is paused the grid holds
   the frame shown, which `Decoder::rebuild` redoes after a toggle. A pause
-  lands at most a frame early, and a toggle while playing reaches the second
-  frame after it.
+  lands at most one frame period late: it shows the frame already recorded,
+  ahead of its due time. A toggle while playing reaches the second frame
+  after it.
 - **The ring is two slots past the frames in flight** (`mesh_wiring`): one
   mesh published and not yet taken, one meshed in the next frame's batch
   before that take. One more vertex arena: about 19 MiB for rafa2, 119 MiB
@@ -53,24 +54,36 @@ everywhere, we do not need the older pipelines".
   device rows folded in once after its wait; the queue's idle before the
   worker's batch, from raw ticks when the batch before was timed and nothing
   came between; its queue latency where the device calibrates; and the
-  latency from due to published, taken and the present call. The renderer's
-  pass row is "draw (mesh+UI)", as Apple GPUs time only a pass's bounds. Tile
-  depth and debug labels are measure options for M4 (`--tile-depth`,
-  `--labels`).
+  latency from due, the time the clock set rather than the worker's wake-up,
+  to published, taken and the present call, the whole over the frames
+  presented: a mean of a frame set with each leg's own would mix frames
+  presented with the worker alone's. The renderer's pass row is "draw
+  (mesh+UI)", as Apple GPUs time only a pass's bounds. Tile depth and debug
+  labels are measure options for M4 (`--tile-depth`, `--labels`).
 - **The compact stats keep their height:** one "GPU · latency" line over the
   renderer's table beside the rate, the worker's table read, decode and mesh,
   and the renderer's without its loop's submit, its draw named "draw". Why:
   on the view tests' shortest notched phone in landscape the panel already
   ended at the controls' top, and two more rows took it 35 pt past them; in
   portrait "draw (mesh+UI)" took the body 2 pt past the narrowest phone.
-- **Measure format 2:** the render rows of the display frame that took a
+- **Measure format 2:** the renderer's rows as of the tick that took a
   frame, the dispatches and barriers, what the deblock did, the rounds, the
   idle, the queue latency and the latency legs per frame, under `rings`,
   `tile_depth` and `labels`, and a phone's thermal state and Low Power Mode.
   The summarizer reads formats 1 and 2, so M2 diffs against M0 row for row.
+  The render rows are gfx's profiler's newest resolved frame, two display
+  frames behind the one that drew the stream frame, as its snapshot lags the
+  frames in flight and carries no frame number to pair by; their means are
+  the renderer's all the same.
 - **The phone runner** builds on 6 jobs (the Mac's load rule), names each
-  timing's log as the lab's and the Mac's are, and shows no devicectl error
-  for the measure folder the app has not made yet.
+  timing's log as the lab's and the Mac's are, and lists the app's Documents
+  before its measure folder, so it never asks devicectl for the folder the
+  app has not made yet, and every other devicectl error shows.
+- **CI reruns the worker's and the view's suites under synchronization
+  validation** (`VKC_TEST_SYNC_VALIDATION`) on the Release legs: NVIDIA's,
+  the rings copied, and the Mac's, in place and across MoltenVK's two
+  families, where a regression in the one batch's barriers or the draw's
+  wait would show.
 - **The tests' grow stream** has a key whose blocks nearly fill the decode
   grid its first frame sized, so the table refuses some on the device and
   recon grows the grid at the frame's finish: a recovery the park tests can

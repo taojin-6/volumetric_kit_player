@@ -136,8 +136,9 @@ TEST(StatsLines, SayDashForTheFrameBeforeTheFirst) {
 // The device's figures over the frames that have each: the GPU over the
 // timed frames' stage rows, the idle and the queue latency as stamped; and
 // the latency's legs, due to published, published to taken and taken to
-// presented, and their sum. Timed with no queue latency, it is n/a; a timer
-// that cannot time leaves the GPU n/a.
+// presented, and the latency over the frames presented, so a frame with no
+// present counts in its legs alone. Timed with no queue latency, it is n/a;
+// a timer that cannot time leaves the GPU and the queue latency n/a.
 TEST(StatsLines, SayTheDeviceTimeTheIdleTheQueueAndTheLatency) {
   PlaybackStats stats(a_track(), {30, 1});
   for (int i = 0; i < 2; ++i) {
@@ -154,9 +155,14 @@ TEST(StatsLines, SayTheDeviceTimeTheIdleTheQueueAndTheLatency) {
     stamp.presented = *stamp.taken + milliseconds(2);
     stats.add_frame(stamp, *stamp.taken);
   }
+  FrameStamp unpresented = stamp_of(2, 41'000, false);
+  unpresented.due = t0 + milliseconds(80);
+  unpresented.published = unpresented.due + milliseconds(4);
+  unpresented.taken = unpresented.published + milliseconds(8);
+  stats.add_frame(unpresented, *unpresented.taken);
   const Lines lines = stats_lines(stats, std::nullopt, 0, t0, false);
   EXPECT_EQ(lines[3], "GPU 6.75 ms · idle 27.0 ms · queue 0.40 ms");
-  EXPECT_EQ(lines[4], "latency 11.0 ms · publish 1.0 · take 8.0 · present 2.0");
+  EXPECT_EQ(lines[4], "latency 11.0 ms · publish 2.0 · take 8.0 · present 2.0");
   EXPECT_EQ(stats_lines(stats, std::nullopt, 0, t0, false, true)[3],
             "GPU 6.75 ms · latency 11.0 ms");
   // Timed, measured, with no calibration; and a queue that cannot time.
@@ -172,7 +178,7 @@ TEST(StatsLines, SayTheDeviceTimeTheIdleTheQueueAndTheLatency) {
   stamp.stages.add_device("decode", core::DeviceTime::Unavailable);
   untimeable.add_frame(stamp, t0);
   EXPECT_EQ(stats_lines(untimeable, std::nullopt, 0, t0, false)[3],
-            "GPU n/a · idle n/t · queue n/t");
+            "GPU n/a · idle n/t · queue n/a");
 }
 
 // recon's filter names as they come, T to the micrometre, and the blocks its

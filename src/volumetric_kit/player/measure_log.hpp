@@ -5,7 +5,7 @@
 
 /// @file measure_log.hpp
 /// @brief The measurement log: one CSV per run, of each stream frame's stage
-///        rows, the rows of the display frame that drew it, and its device
+///        rows, the renderer's newest rows as it was taken, and its device
 ///        counts and figures, under a header naming what was measured, which
 ///        vp_probe and the iOS app's measure launch write and tools/measure/
 ///        summarizes (DECISIONS.md).
@@ -26,8 +26,11 @@
 ///   `host_ms` is busy time (`cpu_ms - wait_ms`), `gpu_ms` is set where
 ///   `device` is `measured`, and `device` is `none`, `measured`, `not_timed`
 ///   or `unavailable` (`core::DeviceTime`). A breakdown's `stage` keeps its
-///   leading "  ..". `table` `render`: the rows of the display frame that
-///   took it, alike; none while the draw is untimed.
+///   leading "  ..". `table` `render`: the renderer's rows, alike, as the
+///   tick that took the frame left them: gfx's profiler's newest resolved
+///   frame, which lags the frames in flight (PlayerView::render_metrics), so
+///   a display frame drawn earlier, not the one that drew this frame; none
+///   while the draw is untimed.
 /// - Then the frame's row, with no table and no stage: the worker's device
 ///   counts over it (`FrameStamp::counters`); the filter the deblock ran, or
 ///   `off`, and the blocks it kept exact; its rounds; its queue idle and
@@ -192,7 +195,7 @@ class MeasureLog {
   MeasureLog& operator=(MeasureLog&&) = delete;
 
   /// @brief Write a frame taken for drawing: its worker rows, the render rows
-  ///        of the display frame that took it, then its frame row; a rebuild
+  ///        as of the tick that took it, then its frame row; a rebuild
   ///        (`FrameStamp::rebuild`) writes nothing and counts in no
   ///        @ref frames.
   /// @param stamp      Its stamp, taken, and presented where there is a

@@ -242,7 +242,7 @@ core::Status MeasureLog::add(const FrameStamp& stamp, std::uint32_t triangles,
   rows("worker", stamp.stages.rows());
   rows("render", render);
   const core::DeviceCounters& counted = stamp.counters;
-  const FrameMeans figures = frame_figures(stamp);
+  const FrameFigures figures = frame_figures(stamp);
   out_ << frame << ",,,,,," << counted.submits << ',' << counted.host_waits
        << ',' << counted.blocked_ns << ',' << counted.staging_buffers << ','
        << counted.dispatches << ',' << counted.barriers << ','

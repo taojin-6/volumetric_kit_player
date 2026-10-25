@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -23,6 +24,7 @@
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
+#include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 #include "volumetric_kit/player/controls.hpp"
@@ -200,9 +202,19 @@ class PlayerView {
   /// @return The stats panel, for a read-out of its figures (vp_probe).
   const StatsPanel& stats_panel() const noexcept { return stats_panel_; }
   /// @return The renderer's figures this tick: gfx's profiler's newest
-  ///         resolved frame while the draw is timed, else empty. For a
-  ///         measurement's log (MeasureLog::add).
+  ///         resolved frame while the draw is timed, else empty. It lags the
+  ///         frames in flight, 2: the display frame drawn two ticks before.
+  ///         For a measurement's log (MeasureLog::add).
+  // TODO: hand a measurement the rows of the display frame that drew each
+  // stream frame, once gfx's FrameMetrics names its frame (a gfx task).
   const gfx::FrameMetrics& render_metrics() const noexcept;
+  /// @return The GPU waits the last frame submitted with
+  ///         (gfx::windowing::Frame::waits): its mesh's `ready` value at
+  ///         `VERTEX_INPUT | DRAW_INDIRECT` when it drew one. For a read-out
+  ///         (the tests).
+  const std::vector<gfx::windowing::FrameWait>& frame_waits() const noexcept {
+    return frame_waits_;
+  }
 
  private:
   static constexpr std::uint32_t kFramesInFlight = 2;
@@ -241,6 +253,7 @@ class PlayerView {
   std::uint32_t shown_triangles_ = 0;  // shown_'s mesh's
   std::uint64_t frames_taken_ = 0;
   StatsPanel stats_panel_;
+  std::vector<gfx::windowing::FrameWait> frame_waits_;  // the last frame's
 };
 
 }  // namespace volumetric_kit::player

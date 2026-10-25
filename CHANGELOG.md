@@ -105,23 +105,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   meshed in another. `FrameStamp` gains `rounds`, `due`, `taken`,
   `presented`, `device_idle_ms` and `queue_ms`, and its stages "submit",
   "wait: GPU" and "finish"; `StreamPlayer::set_tile_depth` and
-  `tile_depth`; `PlayerView::render_metrics`;
+  `tile_depth`; `PlayerView::render_metrics` and `frame_waits`;
   `PlayerViewConfig::tile_depth` and `debug_labels`.
 - The stats' GPU line (the frames' device time, the worker's queue idle and
-  queue latency) and latency line (due to published, taken and presented),
-  one "GPU · latency" line compact (`PlaybackStats::frame_means`,
-  `FrameMeans`, `frame_figures`).
+  queue latency) and latency line (due to presented over the frames
+  presented, and its legs: due to published, taken and presented), one "GPU ·
+  latency" line compact (`PlaybackStats::frame_means`, `FrameFigures`,
+  `frame_figures`).
 - Measure format 2 (`MeasureLog::add` takes the render rows; `rings_line`;
   `MeasureContext`'s `rings`, `tile_depth`, `debug_labels`, `thermal` and
   `low_power`), which the iOS app writes with the phone's thermal state and
   Low Power Mode; `--tile-depth` and `--labels` for vp_probe, the iOS
   measure launch (`parse_tile_depth`, `parse_switch`) and the runner, whose
-  summarizer reads formats 1 and 2.
+  summarizer reads formats 1 and 2 and shows the latency of frames with no
+  present, the worker alone's, apart, from due to taken.
+- CI reruns the stream and view suites under synchronization validation on
+  its Release legs.
 
 ### Changed
 
 - build: the player pins core PR #52's head (eaf142e, 0.21.0), gfx main at
-  #153's merge (123d013) and recon PR #277's head (1f42ed0b), and requires
+  #153's merge (123d013) and recon PR #277's head (2fef7bc5), and requires
   core 0.21.0; both heads are re-pinned to their merge commits before this
   merges. The view presents FIFO as gfx's default (gfx #150), naming no mode.
 - The extractor's ring is two slots past the frames in flight
@@ -133,8 +137,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `device_line` states the core's memory facts
   (`PhysicalDeviceInfo::device_mapped_memory`, `device_mapped_cached`).
 - The phone runner builds on 6 jobs, names each timing's log
-  `<utc>-<commit>-<mode>-<timing>.csv`, and shows no devicectl error for a
-  measure folder the app has not made yet.
+  `<utc>-<commit>-<mode>-<timing>.csv`, and lists the app's Documents before
+  its measure folder, so it never asks devicectl for a folder the app has
+  not made yet, and shows every other devicectl error.
 - The stats show two tables, each under the window it covers: the worker's
   stages per stream frame and the renderer's per display frame, under its
   rate, each as host (busy), wait and GPU ms (gfx #153). `StatsPanel::draw`

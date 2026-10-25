@@ -388,13 +388,29 @@ PY
   rm -f "$list"
 }
 
-# The names in the app's Documents/measure on $device, one a line, into the
-# file $1; false when devicectl cannot list it: none yet, as before the app's
-# first measure launch, which is no error to show.
-measure_files() {
+# The app's Documents on $device listed into $listing; false, with
+# devicectl's error, when it cannot list it.
+list_documents() {
   devicectl_json "$listing" device info files --device "$device" \
     --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
-    --subdirectory Documents/measure 2>/dev/null &&
+    --subdirectory Documents
+}
+
+# The names in the app's Documents/measure on $device, one a line, into the
+# file $1: none before the app's first measure launch makes the folder, which
+# Documents' listing shows, so devicectl is never asked for it then; false,
+# with devicectl's error, when it cannot list.
+measure_files() {
+  list_documents || return
+  local folder
+  folder="$(json_strings "$listing" measure; json_strings "$listing" measure/)"
+  if [ -z "$folder" ]; then
+    : >"$1"
+    return
+  fi
+  devicectl_json "$listing" device info files --device "$device" \
+    --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
+    --subdirectory Documents/measure &&
     { json_strings "$listing" .csv; json_strings "$listing" .failed; } >"$1"
 }
 
@@ -490,11 +506,7 @@ phone() {
   tmp_before="$(mktemp)"
   tmp_now="$(mktemp)"
   trap 'rm -f "$listing" "$tmp_before" "$tmp_now"' EXIT
-  # A folder devicectl cannot list is one the app has not made yet: no error.
-  if ! devicectl_json "$listing" device info files --device "$device" \
-    --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
-    --subdirectory Documents 2>/dev/null ||
-    [ -z "$(json_strings "$listing" "$name")" ]; then
+  if ! list_documents || [ -z "$(json_strings "$listing" "$name")" ]; then
     xcrun devicectl device copy to --device "$device" \
       --domain-type appDataContainer --domain-identifier "$VP_BUNDLE_ID" \
       --source "$MAC_STREAM" --destination "Documents/$name"

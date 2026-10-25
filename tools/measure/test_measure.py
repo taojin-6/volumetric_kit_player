@@ -18,8 +18,9 @@ does not know fetches every sibling.
 Runner: failed fetches cannot use cached refs on the Mac or lab, a failed
 phone launch stops before polling, and lab logs with spaces in their paths
 are copied and summarized in order; a phone's first launch, before the app
-has made its measure folder, shows no devicectl error, and each timing's
-log is named for its mode and timing.
+has made its measure folder, never asks devicectl for it, so shows no
+error, while any other devicectl error shows; and each timing's log is
+named for its mode and timing.
 """
 
 import json
@@ -307,9 +308,18 @@ class Runner(MeasureCase):
                 print('mock launch diagnostic', file=sys.stderr)
                 sys.exit(int(os.environ['TEST_LAUNCH_STATUS']))
             if args[:4] == ['devicectl', 'device', 'info', 'files']:
+                launched = os.path.exists(os.environ['TEST_LAUNCHED'])
+                # Locked once, at the first poll after the launch.
+                locked = os.environ.get('TEST_LOCKED_ONCE', '')
+                if locked and launched and not os.path.exists(locked):
+                    with open(locked, 'w') as marker:
+                        marker.write('locked')
+                    print('ERROR: mock device locked', file=sys.stderr)
+                    sys.exit(1)
                 if value('--subdirectory') == 'Documents':
-                    names = ['rafa2.vrst']
-                elif os.path.exists(os.environ['TEST_LAUNCHED']):
+                    # The app makes its measure folder at its first launch.
+                    names = ['rafa2.vrst'] + (['measure'] if launched else [])
+                elif launched:
                     names = ['result.csv']
                 else:
                     # As devicectl says of a folder the app has not made.
@@ -340,8 +350,8 @@ class Runner(MeasureCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue(any(args[0] == "sleep" for args in self.commands()))
         self.assertIn("fixture.vrst", done.stdout)
-        # The first launch, before the app made its measure folder, shows
-        # devicectl's error nowhere.
+        # The first launch, before the app made its measure folder, never
+        # asks devicectl for it, so shows no error.
         self.assertNotIn("mock no such folder", done.stderr)
         launch = [args for args in self.commands()
                   if args[1:5] == ['devicectl', 'device', 'process', 'launch']]
@@ -357,6 +367,14 @@ class Runner(MeasureCase):
         self.assertEqual(len(logs), 1, logs)
         self.assertRegex(logs[0],
                          r"^\d{8}T\d{6}Z-" + sha[:7] + r"-iphone-off\.csv$")
+
+    def test_any_other_devicectl_error_shows(self):
+        sha = self.phone_stubs(0)
+        self.env["TEST_LOCKED_ONCE"] = os.path.join(self.root, "locked")
+        done = self.measure("iphone", sha, "--timing", "off")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("mock device locked", done.stderr)
+        self.assertNotIn("mock no such folder", done.stderr)
 
     def test_lab_copies_whole_log_paths_in_order(self):
         logs = ["/lab/measure runs/out/test-off.csv",

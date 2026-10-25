@@ -123,7 +123,7 @@ FrameStamp stamp() {
   return stamp;
 }
 
-// The render rows of the display frame that took it: its draw, timed, and
+// The renderer's rows as the tick that took it left them: a draw, timed, and
 // its loop's present, a wait.
 std::vector<core::StageRow> render() {
   core::StageMetrics rows;

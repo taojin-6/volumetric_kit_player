@@ -14,7 +14,8 @@ host (busy), wait and GPU milliseconds, and how many of its frames had the
 GPU measured; then the worker's device counts per frame (format 2 adds its
 dispatches and barriers); then the frames' figures: the device time of a
 timed frame (its stages' GPU, breakdowns aside) and, from format 2, its queue
-idle and queue latency, its latency from due to the present call and its
+idle and queue latency, its latency from due to the present call, or for a
+frame with no present (the worker alone) from due to taken, apart, and its
 legs, and the rounds its decode ran on the device. Given two logs, a
 before/after diff of the first and the second follows; a figure one log lacks
 shows as "-". A log of several passes leaves out its first, which warms up.
@@ -97,8 +98,10 @@ COUNTS = ("submits", "host_waits", "blocked_ns", "staging_buffers")
 COUNTS_2 = COUNTS + ("dispatches", "barriers")
 LEGS = ("publish_ms", "take_ms", "present_ms")
 # The frames' figures, in the order the tables show them: a frame's device
-# time, read from its stages in either format, then format 2's own.
-FIGURES = ("gpu_ms", "idle_ms", "queue_ms", "latency_ms") + LEGS
+# time, read from its stages in either format, then format 2's own: the
+# latency of a frame presented, and of one taken with no present, apart.
+FIGURES = ("gpu_ms", "idle_ms", "queue_ms", "latency_ms",
+           "taken_latency_ms") + LEGS
 TABLES = ("worker", "render")
 BREAKDOWN = "  .."
 
@@ -247,9 +250,12 @@ def read_frame(log, row, path, frame_gpu):
     for key in ("idle_ms", "queue_ms") + LEGS:
         if row[key] != "":
             log.figures[key].append(number(row, key, path))
-    if row["publish_ms"] != "":
+    if all(row[key] != "" for key in LEGS):
         log.figures["latency_ms"].append(
-            sum(number(row, key, path) for key in LEGS if row[key] != ""))
+            sum(number(row, key, path) for key in LEGS))
+    elif row["publish_ms"] != "" and row["take_ms"] != "":
+        log.figures["taken_latency_ms"].append(
+            number(row, "publish_ms", path) + number(row, "take_ms", path))
     rounds = number(row, "rounds", path, int)
     log.rounds[rounds] = log.rounds.get(rounds, 0) + 1
 
@@ -333,6 +339,7 @@ def figure_label(key):
         "idle_ms": "queue idle ms",
         "queue_ms": "queue latency ms",
         "latency_ms": "latency ms (due -> present)",
+        "taken_latency_ms": "latency ms (due -> taken; no present)",
         "publish_ms": "  ..due -> published ms",
         "take_ms": "  ..published -> taken ms",
         "present_ms": "  ..taken -> presented ms",

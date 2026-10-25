@@ -36,8 +36,8 @@ std::size_t frames_a_second(std::chrono::nanoseconds period) {
 
 }  // namespace
 
-FrameMeans frame_figures(const FrameStamp& stamp) {
-  FrameMeans figures;
+FrameFigures frame_figures(const FrameStamp& stamp) {
+  FrameFigures figures;
   // Its measured stage rows, breakdowns aside, whose tiles add up to its
   // batch.
   const bool measured =
@@ -54,6 +54,9 @@ FrameMeans frame_figures(const FrameStamp& stamp) {
   if (stamp.taken) {
     figures.take_ms = leg_ms(stamp.published, stamp.taken);
     figures.present_ms = leg_ms(*stamp.taken, stamp.presented);
+  }
+  if (figures.publish_ms && figures.take_ms && figures.present_ms) {
+    figures.latency_ms = leg_ms(stamp.due, stamp.presented);
   }
   return figures;
 }
@@ -84,12 +87,13 @@ void PlaybackStats::add_frame(const FrameStamp& stamp, Clock::time_point now) {
   stages_.push_back({stamp.stages.rows(), stamp.timed, frame_figures(stamp)});
 }
 
-FrameMeans PlaybackStats::frame_means() const {
-  FrameMeans means;
-  for (std::optional<double> FrameMeans::* figure :
-       {&FrameMeans::gpu_ms, &FrameMeans::device_idle_ms, &FrameMeans::queue_ms,
-        &FrameMeans::publish_ms, &FrameMeans::take_ms,
-        &FrameMeans::present_ms}) {
+FrameFigures PlaybackStats::frame_means() const {
+  FrameFigures means;
+  for (std::optional<double> FrameFigures::* figure :
+       {&FrameFigures::gpu_ms, &FrameFigures::device_idle_ms,
+        &FrameFigures::queue_ms, &FrameFigures::latency_ms,
+        &FrameFigures::publish_ms, &FrameFigures::take_ms,
+        &FrameFigures::present_ms}) {
     double sum = 0.0;
     int frames = 0;
     for (const Stages& frame : stages_) {

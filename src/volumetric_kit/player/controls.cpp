@@ -261,27 +261,21 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
   }
   // The device's figures: n/t while no frame of the window was timed; the
   // GPU and the queue latency n/a where timed frames have none.
-  const FrameMeans means = stats.frame_means();
+  const FrameFigures means = stats.frame_means();
   const auto figure = [](const std::optional<double>& ms, int decimals,
                          const char* unknown) {
     return ms ? fixed(*ms, decimals) + " ms" : std::string(unknown);
   };
-  const bool timed = stats.timed_frames() > 0;
-  const std::string gpu =
-      "GPU " + figure(means.gpu_ms, 2, timed ? "n/a" : "n/t");
+  const char* const untimed = stats.timed_frames() > 0 ? "n/a" : "n/t";
+  const std::string gpu = "GPU " + figure(means.gpu_ms, 2, untimed);
   const std::string idle = "idle " + figure(means.device_idle_ms, 1, "n/t");
-  const std::string queue =
-      "queue " + figure(means.queue_ms, 2, means.gpu_ms ? "n/a" : "n/t");
-  // The latency from due to the present call: its legs' means, added.
+  const std::string queue = "queue " + figure(means.queue_ms, 2, untimed);
+  // The latency from due to the present call, over the frames presented,
+  // and its legs, each over the frames that have it.
   const auto leg = [](const std::optional<double>& ms) {
     return ms ? fixed(*ms, 1) : std::string("-");
   };
-  std::optional<double> total;
-  if (means.publish_ms) {
-    total = *means.publish_ms + means.take_ms.value_or(0.0) +
-            means.present_ms.value_or(0.0);
-  }
-  const std::string latency = "latency " + figure(total, 1, "-");
+  const std::string latency = "latency " + figure(means.latency_ms, 1, "-");
   std::string rate = "rate " + fixed(stats.frames_per_s(now), 1);
   if (const std::optional<double> nominal = stats.nominal_fps()) {
     rate += " / " + rate_text(*nominal);
