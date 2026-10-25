@@ -36,7 +36,9 @@
 # Options: --passes P, --frames N, --timing T,... (off, sampled, all),
 # --tile-depth 0|1 and --labels on|off, the last two for M4's A/B. Defaults:
 # 2 passes, the first a warm-up that the summary leaves out; every frame of
-# them; timing off, then all; tile depth 0; labels on. Each run's log is named
+# them; timing off, then all; tile depth 0; labels on. On mac and lab these
+# defaults also work with older probes; nondefaults need option support.
+# Each run's log is named
 # <utc>-<commit>-<mode>-<timing>.csv. <ref> is a branch, a tag, a commit, or
 # pr/<n>. --dry-run prints the commands and runs none. Settings come from the
 # environment, after ${MEASURE_CONFIG:-~/.config/volumetric_kit/measure.env}
@@ -121,12 +123,35 @@ build_probe() {
 
 # One run, by the command $1, of the vp_probe built in $2: the worker alone
 # on the stream $3, $passes passes (of $frames frames, if set), at timing $4,
-# tile depth $depth and labels $labels, logged to $5. The lab runs it too.
+# tile depth $depth and labels $labels, logged to $5. Omit their defaults
+# for older probes; reject a nondefault the target cannot apply. The lab
+# runs it too.
 run_probe() {
   local by="$1" build="$2" stream="$3" timing="$4" csv="$5"
-  "$by" "$build/tests/vp_probe" --worker --file "$stream" --passes "$passes" \
-    ${frames:+--frames "$frames"} --timing "$timing" --tile-depth "$depth" \
-    --labels "$labels" --csv "$csv"
+  local help="" status=0 option value
+  if { [ "$depth" != 0 ] || [ "$labels" != on ]; } &&
+    [ "${dry:-0}" != 1 ]; then
+    # No arguments prints usage (status 2) without opening a device.
+    help="$("$build/tests/vp_probe" 2>&1)" || status=$?
+    if [ "$status" != 0 ] && [ "$status" != 2 ]; then
+      echo "measure: cannot read vp_probe options (status $status): $help" >&2
+      return 1
+    fi
+  fi
+  set -- --worker --file "$stream" --passes "$passes" \
+    ${frames:+--frames "$frames"} --timing "$timing"
+  for option in --tile-depth --labels; do
+    case "$option" in
+      --tile-depth) [ "$depth" != 0 ] || continue; value="$depth" ;;
+      --labels) [ "$labels" != on ] || continue; value="$labels" ;;
+    esac
+    if [ "${dry:-0}" != 1 ] && [[ "$help" != *"$option"* ]]; then
+      echo "measure: target vp_probe does not support $option $value" >&2
+      return 1
+    fi
+    set -- "$@" "$option" "$value"
+  done
+  "$by" "$build/tests/vp_probe" "$@" --csv "$csv"
 }
 
 summarize() {

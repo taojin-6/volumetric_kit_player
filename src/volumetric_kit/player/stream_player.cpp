@@ -715,6 +715,9 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
     if (!got.ok()) {
       return end(got.status());
     }
+    // A complete record is due now, including any wait or recovery needed
+    // to finish the preceding decode before this record can be decoded.
+    const Clock::time_point arrived = Clock::now();
     if (!track && client.session() != nullptr) {
       track = first_geometry_track(*client.session());
       if (!track) {
@@ -731,7 +734,7 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
         std::lock_guard<std::mutex> lock(mutex_);
         live_status_.state = LiveState::kLive;
         live_status_.seq = record.info.seq;
-        live_status_.last_record = Clock::now();
+        live_status_.last_record = arrived;
       }
       // The decode before it finishes first: the next parses against the
       // reference it leaves.
@@ -750,7 +753,7 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
       stamp.pts_ns = record.info.pts_ns;
       stamp.bytes = record.size;
       stamp.key = record.info.key;
-      stamp.due = Clock::now();
+      stamp.due = arrived;
       stamp.timed = time_next_frame();
       // The body straight into one of the decoder's input slots: the other
       // is free, as the decode before has finished.

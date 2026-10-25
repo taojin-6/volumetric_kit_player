@@ -49,6 +49,8 @@ everywhere, we do not need the older pipelines".
   straight into an input slot (`StreamClient::read`) and finished before the
   next is recorded, as the next parses against its reference; the newest
   frame decoded is meshed in a batch of its own once its decode is judged.
+  The arrival stamp is taken when the complete record is received, before
+  finishing the preceding decode, so latency includes that wait or recovery.
 - **The timing:** a frame's rows are read, decode and mesh (recording),
   submit, `wait: GPU` (about 0 while the GPU keeps up) and finish, the batch's
   device rows folded in once after its wait; the queue's idle before the
@@ -60,6 +62,8 @@ everywhere, we do not need the older pipelines".
   presented with the worker alone's. The renderer's pass row is "draw
   (mesh+UI)", as Apple GPUs time only a pass's bounds. Tile depth and debug
   labels are measure options for M4 (`--tile-depth`, `--labels`).
+  The runner omits these options at their defaults so older probes can
+  still measure a baseline; a nondefault requires support from that probe.
 - **The compact stats keep their height:** one "GPU · latency" line over the
   renderer's table beside the rate, the worker's table read, decode and mesh,
   and the renderer's without its loop's submit, its draw named "draw". Why:

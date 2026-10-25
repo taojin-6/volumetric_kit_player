@@ -20,7 +20,9 @@ phone launch stops before polling, and lab logs with spaces in their paths
 are copied and summarized in order; a phone's first launch, before the app
 has made its measure folder, never asks devicectl for it, so shows no
 error, while any other devicectl error shows; and each timing's log is
-named for its mode and timing.
+named for its mode and timing. Mac and lab runs omit the new probe options
+at their defaults so older baselines still run, and reject nondefaults an
+older probe cannot apply.
 """
 
 import json
@@ -119,8 +121,7 @@ class DryRun(MeasureCase):
         parsed = subprocess.run(["bash", "-n"], input=script, text=True,
                                 capture_output=True)
         self.assertEqual(parsed.returncode, 0, parsed.stderr)
-        self.assertIn('--tile-depth "$depth"', script)
-        self.assertIn('--labels "$labels"', script)
+        self.assertIn('for option in --tile-depth --labels', script)
         for line in ("passes=3; frames=9", "depth=1; labels=off", "ref=pr/7",
                      'build_probe uv "$repo" "$root/build"',
                      'run_probe uvtime "$root/build" "$stream" "$timing" '
@@ -197,8 +198,7 @@ class DryRun(MeasureCase):
             self.assertEqual(probe, [
                 os.path.join(build, "tests", "vp_probe"), "--worker", "--file",
                 self.env["MAC_STREAM"], "--passes", "3", "--frames", "9",
-                "--timing", timing, "--tile-depth", "0", "--labels", "on",
-                "--csv", probe[-1]])
+                "--timing", timing, "--csv", probe[-1]])
             logs.append(probe[-1])
         self.assertEqual(commands[9], "(the logs summarized into "
                          f"{logs[0][:-len('-off.csv')]}.md)")
@@ -398,6 +398,111 @@ class Runner(MeasureCase):
                          ['lab.example:' + path for path in logs])
         self.assertLess(done.stdout.index("test-off.csv"),
                         done.stdout.index("test-all.csv"))
+
+    def probe_stubs(self):
+        """Local Mac/lab builds of a probe with a configurable option set."""
+        sha = self.player_at({})
+        origin = os.path.join(self.root, "origin.git")
+        git(self.root, "clone", "--bare", "-q", self.player, origin)
+        git(self.player, "remote", "add", "origin", origin)
+        self.env["LAB_ROOT"] = os.path.join(self.root, "lab with spaces")
+        self.env["PLAYER_URL"] = origin
+        self.env["LAB_UVRUN"] = os.path.join(self.bin, "uvrun")
+        self.env["TEST_PROBE"] = os.path.join(self.bin, "vp_probe")
+        self.command("ssh", "sys.exit(subprocess.run(['bash', '-s']).returncode)")
+        self.command("flock", "pass")
+        self.command("uvrun", """
+            args = sys.argv[1:]
+            sys.exit(subprocess.run(args[args.index('--') + 1:]).returncode)
+        """)
+        self.command("cmake", """
+            if '--build' in sys.argv:
+                build = sys.argv[sys.argv.index('--build') + 1]
+                os.makedirs(os.path.join(build, 'tests'), exist_ok=True)
+                shutil.copy(os.environ['TEST_PROBE'],
+                            os.path.join(build, 'tests', 'vp_probe'))
+        """)
+        self.command("scp", """
+            source = sys.argv[2].split(':', 1)[1]
+            shutil.copyfile(source, os.path.join(sys.argv[3],
+                                                os.path.basename(source)))
+        """)
+        self.command("vp_probe", """
+            args = sys.argv[1:]
+            extra = json.loads(os.environ['TEST_PROBE_FLAGS'])
+            known = ['--file', '--passes', '--frames', '--timing', '--csv']
+            known += extra
+            if not args:
+                print('usage: vp_probe --worker ' + ' '.join(known),
+                      file=sys.stderr)
+                sys.exit(2)
+            if args.pop(0) != '--worker':
+                sys.exit('expected worker mode')
+            while args:
+                option, value = args[:2]
+                if option not in known:
+                    print('unknown option: ' + option, file=sys.stderr)
+                    sys.exit(2)
+                if option == '--csv':
+                    shutil.copyfile(os.environ['TEST_CSV'], value)
+                del args[:2]
+        """)
+        return sha
+
+    def test_default_mac_and_lab_runs_support_old_and_new_probes(self):
+        sha = self.probe_stubs()
+        for flags in ([], ["--tile-depth", "--labels"]):
+            self.env["TEST_PROBE_FLAGS"] = json.dumps(flags)
+            for mode in ("mac", "lab"):
+                for defaults in ([], ["--tile-depth", "0", "--labels", "on"]):
+                    with self.subTest(flags=flags, mode=mode, defaults=defaults):
+                        before = len(self.commands())
+                        done = self.measure(mode, sha, "--timing", "off",
+                                            "--passes", "3", "--frames", "9",
+                                            *defaults)
+                        self.assertEqual(done.returncode, 0, done.stderr)
+                        self.assertIn("fixture.vrst", done.stdout)
+                        probes = [args for args in self.commands()[before:]
+                                  if args[0] == "vp_probe" and len(args) > 1]
+                        self.assertEqual(len(probes), 1, probes)
+                        self.assertNotIn("--tile-depth", probes[0])
+                        self.assertNotIn("--labels", probes[0])
+                        self.assertIn("--worker", probes[0])
+                        at = probes[0].index("--passes")
+                        self.assertEqual(probes[0][at:at + 4],
+                                         ["--passes", "3", "--frames", "9"])
+
+    def test_mac_and_lab_reject_nondefaults_the_probe_cannot_apply(self):
+        sha = self.probe_stubs()
+        self.env["TEST_PROBE_FLAGS"] = "[]"
+        for mode in ("mac", "lab"):
+            for option, value in (("--tile-depth", "1"), ("--labels", "off")):
+                with self.subTest(mode=mode, option=option):
+                    before = len(self.commands())
+                    done = self.measure(mode, sha, "--timing", "off",
+                                        option, value)
+                    self.assertNotEqual(done.returncode, 0)
+                    self.assertIn(f"vp_probe does not support {option}",
+                                  done.stderr)
+                    self.assertFalse(any(args[0] == "vp_probe" and len(args) > 1
+                                         for args in self.commands()[before:]))
+
+    def test_mac_and_lab_pass_supported_nondefaults_to_the_probe(self):
+        sha = self.probe_stubs()
+        self.env["TEST_PROBE_FLAGS"] = '["--tile-depth", "--labels"]'
+        for mode in ("mac", "lab"):
+            with self.subTest(mode=mode):
+                before = len(self.commands())
+                done = self.measure(mode, sha, "--timing", "off",
+                                    "--tile-depth", "1", "--labels", "off")
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertIn("fixture.vrst", done.stdout)
+                probes = [args for args in self.commands()[before:]
+                          if args[0] == "vp_probe" and len(args) > 1]
+                self.assertEqual(len(probes), 1, probes)
+                at = probes[0].index("--tile-depth")
+                self.assertEqual(probes[0][at:at + 4],
+                                 ["--tile-depth", "1", "--labels", "off"])
 
 
 if __name__ == "__main__":

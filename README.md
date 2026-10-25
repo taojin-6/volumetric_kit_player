@@ -229,7 +229,9 @@ tools/measure/measure --dry-run lab <ref>   # prints the commands, runs none
 ```
 
 Each runs two passes of rafa2.vrst, the first a warm-up, with timing off and
-then all; `--tile-depth` and `--labels` pass through. `lab` builds
+then all; `--tile-depth` and `--labels` select the probe's settings. For
+`mac` and `lab`, their defaults (0 and on) also work with older probes;
+nondefaults require the target probe to support the option. `lab` builds
 `vp_probe` in its own clone of the player on the lab and runs it under
 `uvrun --time`. `mac` builds it in the Mac's worktree for runs, on the
 siblings' checkouts that are clean at their pins, and runs it once the Mac is

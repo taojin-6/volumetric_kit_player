@@ -116,6 +116,7 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
@@ -2630,6 +2631,77 @@ TEST_F(LivePlayerTest, EachRecordIsOneDecodeBatchAndEachMeshOne) {
       EXPECT_EQ(frame->counters.staging_buffers, 0u) << "frame " << n;
     }
   }
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// P2 arrives while P1's decode is held on the GPU. Its due stamp identifies
+// that arrival, so publication latency includes the wait for P1's decode.
+// Warm all capacities first, and leave K0's mesh untaken so the worker keeps
+// reading records rather than waiting to mesh P1.
+TEST_F(LivePlayerTest, ArrivalIncludesWaitingForThePreviousDecode) {
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    ASSERT_NO_FATAL_FAILURE(publish(*server, i));
+    ASSERT_TRUE(take().has_value()) << "warm frame " << i;
+  }
+  const auto send = [&](std::uint64_t i) {
+    const Bytes& bytes = recording_.payloads[i];
+    const core::Status published = server->publish(
+        restamped(recording_.infos[i], 1), bytes.data(), bytes.size());
+    EXPECT_TRUE(published.ok()) << published.message();
+    return published.ok() &&
+           eventually([&] { return player->live_status().seq == kFrames + i; });
+  };
+  ASSERT_TRUE(send(0));
+  const std::atomic<bool> cancel{false};
+  ASSERT_TRUE(
+      eventually([&] { return !exchange_.wait_collected(0ms, cancel); }));
+
+  core::Result<core::TimelineSemaphore> gate =
+      core::TimelineSemaphore::create(device());
+  ASSERT_TRUE(gate.ok()) << gate.status().message();
+  core::CommandBatch batch(device(), allocator());
+  core::Result<core::PendingBatch> pending =
+      batch.submit_async({{&*gate, 1}}, {});
+  ASSERT_TRUE(pending.ok()) << pending.status().message();
+  // Declared after the pending batch: an assertion failure still releases
+  // its wait before the batch's destructor or the fixture stops the worker.
+  struct Release {
+    core::TimelineSemaphore& gate;
+    bool done = false;
+    void signal() {
+      if (!done) {
+        const core::Status signalled = gate.signal(1);
+        EXPECT_TRUE(signalled.ok()) << signalled.message();
+        done = signalled.ok();
+      }
+    }
+    ~Release() { signal(); }
+  } release{*gate};
+  ASSERT_TRUE(send(1));
+  ASSERT_TRUE(send(2));
+  const SteadyClock::time_point arrived = player->live_status().last_record;
+  ASSERT_NE(arrived, SteadyClock::time_point{});
+  std::this_thread::sleep_for(50ms);  // a known stall, not a speed threshold
+  const SteadyClock::time_point released = SteadyClock::now();
+  release.signal();
+  const core::Status finished = pending->wait();
+  ASSERT_TRUE(finished.ok()) << finished.message();
+
+  const std::optional<FrameStamp> held = take();
+  ASSERT_TRUE(held.has_value());
+  EXPECT_EQ(held->index, kFrames);
+  const std::optional<FrameStamp> newest = take();
+  ASSERT_TRUE(newest.has_value());
+  ASSERT_EQ(newest->index, kFrames + 2);
+  EXPECT_EQ(newest->due, arrived);
+  EXPECT_LE(newest->due, released);
+  EXPECT_GE(newest->published, released);
+  EXPECT_GE(newest->published - newest->due, released - arrived);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 

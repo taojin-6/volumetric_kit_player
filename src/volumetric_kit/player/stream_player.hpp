@@ -174,7 +174,8 @@ struct FrameStamp {
   bool rebuild = false;
   /// When it was due: a file's, the time the clock set for it, not when the
   /// worker woke to it, or when a pause or step let it go; live, when its
-  /// record arrived whole. Its latency counts from here.
+  /// record arrived whole, before finishing the preceding decode. Its latency
+  /// counts from here, including any wait for that decode.
   Playback::Clock::time_point due{};
   /// When the consumer took it; the consumer sets it.
   std::optional<Playback::Clock::time_point> taken;
