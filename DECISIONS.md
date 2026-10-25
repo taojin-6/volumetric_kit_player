@@ -11,8 +11,7 @@ is implemented.
   `VP_BUILD_APPS`, `VP_BUILD_TESTS` and `VP_WARNINGS_AS_ERRORS` default ON
   only when the player is the top-level project. Why: the project that adds
   it then builds the library alone, with no GLFW and under its own
-  compiler's warnings. The player stays an application that installs and
-  exports nothing (2026-10-18).
+  compiler's warnings.
 - **`VP_DESKTOP_APP` stays, under `VP_BUILD_APPS`,** which turns it off. Why:
   the measurement runner passes it to every commit it builds, older ones
   too.
