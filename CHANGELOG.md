@@ -129,6 +129,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: the iOS app needs iOS 26 or newer: `cmake --preset ios` targets
+  iOS 26.0, the family's iOS floor.
 - build: the player pins core #52's merge (4e16bbc, 0.21.0), gfx main at
   #153's merge (123d013) and recon #277's merge (a23f7f5), and requires core
   0.21.0. The view presents FIFO as gfx's default (gfx #150), naming no mode.
