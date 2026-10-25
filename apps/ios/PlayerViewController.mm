@@ -146,8 +146,9 @@ vkc::Result<std::optional<cfg::Source>> MeasureSource(
 // The view over `source`, on `layer`, with fingertip-sized controls, the
 // Source button, on an iPhone the compact stats, and the deblock as
 // `deblock`, if set, as a view before had it; the worker's device timing, its
-// tile depth and the labels as a measurement fixes them, or else the timing
-// the stats panel's. No validation: iOS has no layer to load (DECISIONS.md).
+// tile depth and the labels as a `measure` launch fixes them, or else timed
+// while the stats panel is open. No validation: iOS has no layer to load
+// (DECISIONS.md).
 vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
     CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source,
     const std::optional<vkp::MeasureArgs>& measure,
