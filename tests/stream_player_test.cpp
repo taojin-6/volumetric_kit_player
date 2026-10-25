@@ -1328,6 +1328,27 @@ TEST_F(StreamPlayerTest, DeviceIdleNeedsTwoTimedBatchesInARow) {
   EXPECT_FALSE(untimed->timed);
   EXPECT_FALSE(untimed->device_idle_ms.has_value());
   EXPECT_FALSE(untimed->queue_ms.has_value());
+  // Timed again, the first timed frame follows an untimed batch: no idle.
+  player->set_device_timing(DeviceTiming::kAll);
+  std::optional<FrameStamp> timed;
+  for (int i = 0; i < 3 && (!timed || !timed->timed); ++i) {
+    timed = take();
+    ASSERT_TRUE(timed.has_value());
+  }
+  EXPECT_TRUE(timed->timed);
+  EXPECT_FALSE(timed->device_idle_ms.has_value()) << "an untimed batch before";
+  // Stepped, with the test's own readback of each mesh submitted between two
+  // frames' batches: no idle either.
+  player->pause();
+  for (std::uint64_t i = 0; i < 3; ++i) {
+    player->step();
+    const std::optional<FrameStamp> stepped = next_frame();
+    ASSERT_TRUE(stepped.has_value()) << "step " << i;
+    if (stepped->timed && i > 0) {
+      EXPECT_FALSE(stepped->device_idle_ms.has_value())
+          << "a submit between, step " << i;
+    }
+  }
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
@@ -1399,10 +1420,10 @@ TEST_F(StreamPlayerTest,
     ASSERT_TRUE(frame.has_value());
   }
   std::this_thread::sleep_for(150ms);  // frame kGapAt recorded, not yet due
+  const std::uint64_t submits = device().counters().submits;
   const SteadyClock::time_point parking = SteadyClock::now();
   ASSERT_TRUE(player->park(kArrival));
   EXPECT_LT(SteadyClock::now() - parking, kPrompt);
-  const std::uint64_t submits = device().counters().submits;
   EXPECT_FALSE(take(std::chrono::nanoseconds(vp_test::kGapNs)).has_value())
       << "published while parked";
   EXPECT_EQ(device().counters().submits, submits) << "submitted while parked";
@@ -1436,9 +1457,11 @@ TEST_F(StreamPlayerTest, AParkWhileARecoveryIsDueRunsItAtUnpark) {
     frame = take();
     ASSERT_TRUE(frame.has_value());
   }
-  std::this_thread::sleep_for(150ms);  // its batch recorded, not yet due
-  ASSERT_TRUE(player->park(kArrival));
+  std::this_thread::sleep_for(150ms);  // its batch submitted, not yet due
+  // From the park's call to the unpark: no submit, the park's own wait
+  // included.
   const std::uint64_t submits = device().counters().submits;
+  ASSERT_TRUE(player->park(kArrival));
   EXPECT_FALSE(take(std::chrono::nanoseconds(vp_test::kGapNs)).has_value())
       << "published while parked";
   EXPECT_EQ(device().counters().submits, submits) << "recovered while parked";
