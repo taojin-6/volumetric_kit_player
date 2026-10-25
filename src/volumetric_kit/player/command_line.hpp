@@ -38,6 +38,24 @@ std::optional<std::uint64_t> parse_count(std::string_view text);
 /// @return The timing; none for any other text.
 std::optional<DeviceTiming> parse_device_timing(std::string_view text);
 
+/// @brief Parse `--tile-depth`'s value (StreamPlayer::set_tile_depth).
+///
+/// @code
+/// const std::optional<std::uint32_t> depth = parse_tile_depth("1");
+/// @endcode
+/// @param text  "0" or "1".
+/// @return The depth; none for any other text.
+std::optional<std::uint32_t> parse_tile_depth(std::string_view text);
+
+/// @brief Parse an on/off switch's value, such as `--labels`'.
+///
+/// @code
+/// const std::optional<bool> labels = parse_switch("off");
+/// @endcode
+/// @param text  "on" or "off".
+/// @return Whether on; none for any other text.
+std::optional<bool> parse_switch(std::string_view text);
+
 /// @brief A measurement the iOS app's launch arguments ask for (README.md,
 ///        tools/measure/).
 struct MeasureArgs {
@@ -49,12 +67,17 @@ struct MeasureArgs {
   std::optional<std::uint64_t> frames;
   /// The worker's device timing.
   DeviceTiming timing = DeviceTiming::kAll;
+  /// The worker's tile depth (PlayerViewConfig::tile_depth), `--tile-depth`.
+  std::uint32_t tile_depth = 0;
+  /// Debug labels (PlayerViewConfig::debug_labels), `--labels on|off`.
+  bool debug_labels = true;
 };
 
 /// @brief Parse the iOS app's launch arguments: `--measure <name>`, with
-///        `--passes P`, `--frames N` and `--timing off|sampled|all`, in any
-///        order, on the host alone. Arguments it does not name are left to
-///        the system, which adds its own.
+///        `--passes P`, `--frames N`, `--timing off|sampled|all`,
+///        `--tile-depth 0|1` and `--labels on|off`, in any order, on the host
+///        alone. Arguments it does not name are left to the system, which
+///        adds its own.
 ///
 /// @code
 /// VKC_ASSIGN(const std::optional<MeasureArgs> measure,
@@ -65,8 +88,7 @@ struct MeasureArgs {
 /// @return None without `--measure`; the measurement;
 ///         `core::Status::Code::InvalidArgument` naming the argument for a
 ///         missing or bad value, a name that is no file's in a folder (empty,
-///         or holding a '/'), or `--passes`, `--frames` or `--timing` with no
-///         `--measure`.
+///         or holding a '/'), or any of the others with no `--measure`.
 core::Result<std::optional<MeasureArgs>> parse_measure_args(
     const std::vector<std::string>& args);
 

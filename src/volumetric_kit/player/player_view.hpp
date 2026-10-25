@@ -60,6 +60,13 @@ struct PlayerViewConfig {
   /// display frame, only while the panel is open and the worker's timing is
   /// not off.
   std::optional<DeviceTiming> device_timing;
+  /// The worker's tile depth (StreamPlayer::set_tile_depth): 0, every scope;
+  /// 1, "decode" and "mesh" alone. For M4's A/B.
+  std::uint32_t tile_depth = 0;
+  /// Debug labels on the shared instance
+  /// (`core::InstanceConfig::request_debug_utils`): on, as recon labels its
+  /// dispatches in Release; off for M4's A/B. Validation keeps them on.
+  bool debug_labels = true;
 };
 
 /// @brief The swapchain @ref PlayerView asks gfx for: gfx's FIFO default and
@@ -102,17 +109,18 @@ class PlayerView {
   /// @brief Make the shared device on @p surface (gfx::app::make_shared_device)
   ///        and adopt it for gfx (@ref view_swapchain, 2 frames in flight)
   ///        and for recon. Build the mesh pipeline, the overlay (no imgui.ini)
-  ///        and a gfx::Profiler for the stats' "draw" row, which @ref frame
-  ///        attaches to the frame loop while the draw is timed
+  ///        and a gfx::Profiler for the stats' "draw (mesh+UI)" row, which
+  ///        @ref frame attaches to the frame loop while the draw is timed
   ///        (PlayerViewConfig::device_timing). Aim the camera at the first
-  ///        view: target (0, 0.85, 0),
-  ///        3 m. Then start @p player; its worker builds its kernels, and it
-  ///        plays unless the caller paused it.
+  ///        view: target (0, 0.85, 0), 3 m. Then start @p player at the
+  ///        config's tile depth; its worker builds its kernels, and it plays
+  ///        unless the caller paused it.
   /// @param surface  The window system's source; its window or layer must
   ///                 outlive the view.
   /// @param extent   The drawable now, in pixels; both sides > 0.
   /// @param player   An opened player, not started.
-  /// @param config   The UI's sizes, the Source button and validation.
+  /// @param config   The UI's sizes, the Source button, validation, and a
+  ///                 measurement's timing, tile depth and labels.
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
   ///         @p player or an empty @p extent; or the first failure (device,
   ///         swapchain, pipeline, overlay, profiler, StreamPlayer::start).
@@ -130,7 +138,11 @@ class PlayerView {
   PlayerView& operator=(PlayerView&&) = delete;
 
   /// @brief One tick: draw the controls and the stats, take the newest mesh,
-  ///        draw it, and present.
+  ///        draw it behind a GPU wait on its `ready` value (already reached,
+  ///        so it stalls nothing; it carries the worker's writes across
+  ///        queues), and present. A frame taken is stamped when taken and
+  ///        when presented (FrameStamp::taken, presented), and counted in the
+  ///        stats once presented.
   /// @pre The UI platform half bound to @ref ui_context ran its new_frame this
   ///      tick, unless @p extent is 0 x 0 (a touch shell skips the tick's
   ///      new_frame then).
@@ -187,6 +199,10 @@ class PlayerView {
   }
   /// @return The stats panel, for a read-out of its figures (vp_probe).
   const StatsPanel& stats_panel() const noexcept { return stats_panel_; }
+  /// @return The renderer's figures this tick: gfx's profiler's newest
+  ///         resolved frame while the draw is timed, else empty. For a
+  ///         measurement's log (MeasureLog::add).
+  const gfx::FrameMetrics& render_metrics() const noexcept;
 
  private:
   static constexpr std::uint32_t kFramesInFlight = 2;
@@ -218,6 +234,7 @@ class PlayerView {
   bool source_button_ = false;   // frame() draws Source
   bool source_request_ = false;  // pressed since take_source_request
   std::optional<DeviceTiming> device_timing_;  // fixed; else the panel's
+  bool profiled_ = false;  // the draw timed this tick (render_metrics)
   std::unique_ptr<StreamPlayer> player_;
   PlaybackStats stats_;  // from player_'s track
   std::optional<FrameStamp> shown_;

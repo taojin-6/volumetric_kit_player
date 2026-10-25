@@ -20,6 +20,26 @@
 
 namespace volumetric_kit::player {
 
+/// @brief A window's per-frame figures beside its stage means, each a mean
+///        over the frames that have it, in ms; empty where none has.
+///
+/// @code
+/// const FrameMeans means = stats.frame_means();
+/// if (means.publish_ms) {
+///   std::printf("due -> published %.2f ms\n", *means.publish_ms);
+/// }
+/// @endcode
+struct FrameMeans {
+  /// A timed frame's device time: its measured stage rows, breakdowns aside,
+  /// whose tiles add up to its batch.
+  std::optional<double> gpu_ms;
+  std::optional<double> device_idle_ms;  ///< FrameStamp::device_idle_ms.
+  std::optional<double> queue_ms;        ///< FrameStamp::queue_ms.
+  std::optional<double> publish_ms;      ///< FrameStamp::due to published.
+  std::optional<double> take_ms;         ///< Published to taken.
+  std::optional<double> present_ms;      ///< Taken to presented.
+};
+
 /// @brief Figures over the frames taken for drawing: the track's mean
 ///        bitrate, the rate frames are taken at, the worker's stage means,
 ///        and for a live stream, which has no track mean, the bitrate and
@@ -51,10 +71,11 @@ class PlaybackStats {
   PlaybackStats(const recon::stream::TrackStats& track,
                 recon::stream::Rate rate);
 
-  /// @brief A frame taken for drawing (MeshExchange's commit), at @p now; a
-  ///        rebuild (FrameStamp::rebuild) is the frame before again, so it
-  ///        changes nothing.
-  /// @param stamp  Its stamp; its rows are copied.
+  /// @brief A frame taken for drawing (MeshExchange's commit), at @p now,
+  ///        added once presented (or with no present); a rebuild
+  ///        (FrameStamp::rebuild) is the frame before again, so it changes
+  ///        nothing.
+  /// @param stamp  Its stamp; its rows and figures are copied.
   /// @param now    When it was taken; no earlier than the last frame's.
   void add_frame(const FrameStamp& stamp, Clock::time_point now);
 
@@ -86,6 +107,9 @@ class PlaybackStats {
   ///         timed it measured it, and its time over those measured. Empty
   ///         before the first frame.
   std::vector<core::StageRow> stage_means() const;
+  /// @return The window's per-frame figures (@ref FrameMeans), each over the
+  ///         frames that have it.
+  FrameMeans frame_means() const;
   /// @return The frames the stage means are taken over: the window's.
   std::uint32_t window_frames() const noexcept {
     return static_cast<std::uint32_t>(stages_.size());
@@ -110,10 +134,12 @@ class PlaybackStats {
                                    Clock::time_point Taken::* when,
                                    double (*value)(const Taken&)) const;
 
-  // A frame's rows, and whether its device work was timed.
+  // A frame's rows, whether its device work was timed, and its figures
+  // (FrameMeans' fields, as that frame has them).
   struct Stages {
     std::vector<core::StageRow> rows;
     bool timed = false;
+    FrameMeans figures;
   };
 
   recon::stream::TrackStats track_;

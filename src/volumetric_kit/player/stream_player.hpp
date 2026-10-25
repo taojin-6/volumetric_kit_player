@@ -23,7 +23,9 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/player/playback.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
@@ -120,15 +122,21 @@ struct FrameStamp {
   std::uint64_t bytes = 0;   ///< Its record's payload bytes.
   bool key = false;          ///< A key record: an intra (I) frame; else P.
   /// Its stages, each with its host time and the part of it blocked on the
-  /// device (`core::StageRow::wait_ms`): "read" (its record's header and
-  /// payload, CRC included, and other tracks' records passed on the way),
-  /// "decode" (the first frame's grid included) and "mesh"; decode and mesh
-  /// each block on their fences. Live, there is no "read" (the wait for the
-  /// network is no stage), and "decode" is this record's alone. A @ref timed
-  /// frame's "decode" and "mesh" have device halves too, each over recon's
-  /// breakdown rows that follow it: decode's "  ..rans decode", "  ..apply"
-  /// and "  ..inverse", mesh's "  ..compact" (when it compacts) and
-  /// "  ..dispatch".
+  /// device (`core::StageRow::wait_ms`): "read" (its record, CRC included,
+  /// into one of the decoder's input slots, and other tracks' records passed
+  /// on the way), "decode" (parsing and recording its decode; the first
+  /// frame's grid), "mesh" (recording its extract), "submit" (the commands'
+  /// recording and `vkQueueSubmit`; on MoltenVK this includes encoding the
+  /// Metal command buffer), "wait: GPU" (the worker blocked on its batch:
+  /// about 0 while the GPU keeps up) and "finish" (judging the decode and the
+  /// mesh, a rare grow, retry or refit inside). Live, there is no "read" (the
+  /// wait for the network is no stage), and "mesh" is its own batch,
+  /// recorded, submitted and waited on. A @ref timed frame's "decode" and
+  /// "mesh" have device halves too, each over recon's breakdown rows that
+  /// follow it: decode's "  ..rans decode", "  ..apply" and "  ..inverse",
+  /// mesh's "  ..compact" and "  ..dispatch"; "finish" is followed by a
+  /// recovery's "  ..grow", "  ..retry" or "  ..refit". A rebuild's are
+  /// "decode" (the rebuild) and "mesh".
   core::StageMetrics stages;
   /// The records received since the frame before was published, this one's
   /// included: 1 for a file; live, more when only the newest was meshed.
@@ -143,31 +151,53 @@ struct FrameStamp {
   std::uint64_t pass = 1;
   /// What the worker's device did since the frame before was published, up
   /// to this one's publish (`core::Device::counters`): the submits, the
-  /// waits that blocked and their time, and the staging buffers.
+  /// waits that blocked and their time, the staging buffers, and the
+  /// dispatches and pipeline barriers its batches recorded.
   core::DeviceCounters counters;
   /// Whether the deblock was on for its decode or rebuild
   /// (@ref StreamPlayer::set_deblock).
   bool deblock_on = false;
   /// What the deblock did to it: recon's `codec::Decoder::last_deblock`
-  /// after its decode or rebuild: the filter, `"off"` with the deblock off
-  /// or a T finer than every filter's; T; and the frame's blocks, with
-  /// those recon's per-block fallback kept at their exact decode (all of
-  /// them with no filter).
+  /// once its decode or rebuild finished: the filter, `"off"` with the
+  /// deblock off or a T finer than every filter's; T; and the frame's
+  /// blocks, with those recon's per-block fallback kept at their exact
+  /// decode (all of them with no filter).
   recon::codec::DeblockInfo deblock{};
+  /// recon's `codec::Decoder::last_rounds` once its decode finished: the most
+  /// rounds its removal or allocation ran on the device. A rebuild keeps its
+  /// frame's.
+  std::uint32_t rounds = 0;
   /// A paused toggle's rebuild (@ref StreamPlayer::set_deblock): the frame
   /// published last, published again under the deblock as now set, so no new
   /// frame, which neither PlaybackStats nor MeasureLog counts. Its "decode"
   /// is the rebuild's.
   bool rebuild = false;
+  /// When it was due: a file's, when the clock let it go; live, when its
+  /// record arrived whole. Its latency counts from here.
+  Playback::Clock::time_point due{};
+  /// When the consumer took it; the consumer sets it.
+  std::optional<Playback::Clock::time_point> taken;
+  /// When the present call of the display frame that took it returned; set by
+  /// PlayerView, none without a present.
+  std::optional<Playback::Clock::time_point> presented;
+  /// The worker's queue idle before its batch, in ms, on the queue's own
+  /// counter: set when this and the worker's previous batch were timed and
+  /// nothing was submitted between them. Not the GPU's idle: the draw's queue
+  /// may run meanwhile.
+  std::optional<double> device_idle_ms;
+  /// Its batch's queue latency, in ms (submit call to first timestamp, on the
+  /// host's clock): set only where `core::Device::calibrate` works and the
+  /// batch was timed.
+  std::optional<double> queue_ms;
 };
 
 /// @brief The handoff of the worker's meshes to the thread that draws them.
 using FrameExchange = recon::mesh::MeshExchange<FrameStamp>;
 
 /// The most blocks a frame may hold: the ceiling the worker passes recon's
-/// `codec::make_decode_grid` and `decode_growing`, which bounds the decode
-/// grid (DECISIONS.md). A frame past it, or a grow past the grid for it, is
-/// skipped as a damaged record is.
+/// `codec::make_decode_grid`, `record_growing` and `finish_growing`, which
+/// bounds the decode grid (DECISIONS.md). A frame past it, or a grow past the
+/// grid for it, is skipped as a damaged record is.
 inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 
 /// @brief Plays the first geometry track of a `.vrst` file, like a video
@@ -176,17 +206,23 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 ///        mesh to a @ref FrameExchange for the caller to draw.
 ///
 /// **The worker** first builds the decoder and the extractor. Then, per record
-/// of a file's track, it reads it, waits until it is due (@ref Playback),
-/// `codec::decode_growing` it into a grid `codec::make_decode_grid` built from
-/// the first frame, with the deblock as @ref set_deblock last set it, waits
-/// until the consumer has taken the last mesh (@ref taken), then extracts it
-/// with Marching Cubes and publishes it. The mesh lives in the extractor's ring
-/// slot, so the next frame decodes while it is drawn; and the grid holds the
-/// frame published last until the next is due, so a deblock toggled while
-/// paused rebuilds it. A damaged record, or one this version cannot read, is
-/// skipped, and playback resumes at the next key record. At the track's end it
-/// plays the track again with loop on; with loop off it holds the last frame,
-/// paused, until @ref play restarts it.
+/// of a file's track, it reads the record into one of the decoder's input
+/// slots, records its decode (`codec::record_growing`, into a grid
+/// `codec::make_decode_grid` built from the first frame, with the deblock as
+/// @ref set_deblock last set it) and its mesh into one command batch, and
+/// submits it without waiting. Once the frame is due (@ref Playback) and the
+/// consumer has taken the mesh before it (@ref taken), the worker finishes the
+/// batch, whose fence has normally signalled, and publishes the mesh. The
+/// drawing frame waits for the mesh's `ready` value on the GPU, which is
+/// already reached, so nothing stalls. While playing, it records each frame
+/// as soon as the one before is published, so a mesh is ready when due. While
+/// paused or held, it records a frame only once it is due, and a pause
+/// publishes the frame already recorded, so whenever the clock is paused the
+/// grid holds the frame shown, which a deblock toggle then rebuilds. A
+/// damaged record, one this version cannot read, or one recon refuses is
+/// skipped, the shown mesh stays, and playback resumes at the next key
+/// record. At the track's end it plays the track again with loop on; with
+/// loop off it holds the last frame, paused, until @ref play restarts it.
 ///
 /// **Errors.** A failed build, any other failure, or a pass of the track that
 /// shows no frame (its first refusal in the message), stops the worker, and
@@ -207,10 +243,10 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 ///
 /// **Teardown**, on every path out, so nothing the GPU may still read is
 /// freed early: @ref stop, wait until the consumer's queue is idle, and
-/// destroy this (the extractor, the grid and the decoder), all before the
-/// exchange and the device go. A caller that opens the player before it makes
-/// the device declares the player first, so it tears down in a scope guard,
-/// as below.
+/// destroy this (the extractor, whose timeline the drawing frames wait on,
+/// the grid and the decoder), all before the exchange and the device go. A
+/// caller that opens the player before it makes the device declares the
+/// player first, so it tears down in a scope guard, as below.
 ///
 /// @code
 /// VKC_ASSIGN(std::unique_ptr<StreamPlayer> player, StreamPlayer::open(path));
@@ -248,10 +284,12 @@ class StreamPlayer {
   ///        (recon::networking::StreamServer). It does no I/O, so it is safe
   ///        on the main thread.
   ///
-  /// Once started, the worker builds, then connects. It decodes every record
-  /// of the session's first geometry track, and meshes the newest once the
-  /// consumer has taken the last mesh. It drains available input before
-  /// waiting for a take, which wakes it immediately. A
+  /// Once started, the worker builds, then connects. It reads every record
+  /// of the session's first geometry track straight into one of the
+  /// decoder's input slots and decodes it in a batch of its own, finished
+  /// before the next is recorded, and meshes the newest decoded in a batch of
+  /// its own once the consumer has taken the last mesh. It drains available
+  /// input before waiting for a take, which wakes it immediately. A
   /// connection that ends or cannot be made is never an error:
   /// the worker shows why (@ref live_status), and about a second later
   /// connects again, with a new grid, until stopped. Play, pause, step and
@@ -290,7 +328,9 @@ class StreamPlayer {
   /// @param device     The compute device; it must outlive this.
   /// @param allocator  Its allocator; it must outlive this.
   /// @param config     The extractor's: the consumer's usage, queue families
-  ///                   and a `slot_count` one more than its frames in flight.
+  ///                   and a `slot_count` two more than its frames in flight
+  ///                   (mesh_wiring), as a frame is meshed before the one
+  ///                   before it is taken.
   /// @param exchange   Where the meshes go; it must outlive the worker.
   /// @return OK; `Status::Code::InvalidArgument` once started or stopped; or
   ///         the thread's failure.
@@ -314,30 +354,36 @@ class StreamPlayer {
 
   /// @brief Turns the decoder-side deblock on or off (recon's
   ///        `codec::Decoder::set_deblock`), on by default: from the next
-  ///        frame decoded, live too. While a file's playback is paused or
-  ///        held at the end, the worker also rebuilds the frame it published
-  ///        last under the new setting (recon's `codec::Decoder::rebuild`),
-  ///        meshes it and publishes it again (@ref FrameStamp::rebuild), so
-  ///        the change shows at once; parked, it does so at @ref unpark.
-  ///        Safe before @ref start: the first decode takes it.
+  ///        frame recorded, live too. Playing, that is the second frame after
+  ///        the toggle, as the next is recorded already. While a file's
+  ///        playback is paused or held at the end, the worker also rebuilds
+  ///        the frame it published last under the new setting (recon's
+  ///        `codec::Decoder::rebuild`), meshes it and publishes it again
+  ///        (@ref FrameStamp::rebuild), so the change shows at once; parked,
+  ///        it does so at @ref unpark. Safe before @ref start: the first
+  ///        decode takes it.
   /// @param on  Whether the deblock runs.
   void set_deblock(bool on);
   /// @return Whether the deblock is on: true until @ref set_deblock.
   bool deblock() const;
 
   /// @brief Hold the worker for a suspend (iOS resign-active, Android
-  ///        onPause). From this call on, the worker starts no new step (its
-  ///        kernel build, a read, a decode, a rebuild or an extract), even
-  ///        after a timed-out return; the call waits for the step under
-  ///        way. @ref playing does not change; a control applied meanwhile
-  ///        takes effect at @ref unpark. Call it after the consumer stops
-  ///        drawing. Live, a step is GPU work alone and never waits: the
-  ///        worker drops the record in hand and closes the connection within
-  ///        a slice (about 10 ms).
+  ///        onPause).
+  ///
+  /// From this call on, even after a timed-out return, the worker starts no
+  /// new step (its build, a read, recording and submitting a frame, finishing
+  /// one, a rebuild, a mesh) and publishes nothing. The call waits for the
+  /// step under way, which includes a frame's batch in flight: the worker
+  /// waits that batch out, submitting nothing, and finishes and publishes the
+  /// frame at @ref unpark, a grow, retry or refit it needs included.
+  /// @ref playing does not change; a control applied meanwhile takes effect
+  /// at @ref unpark. Call it after the consumer stops drawing. Live, a step
+  /// never waits: the worker waits out a decode in flight, drops it and the
+  /// record in hand, and closes the connection within a slice (about 10 ms).
   /// @param timeout  The longest wait for the step under way.
-  /// @return true once the worker is idle, or when stopped or never started;
-  ///         false if @p timeout passed first: the step under way may still
-  ///         submit, and the hold stays in force.
+  /// @return true once the worker is idle with no batch in flight, or when
+  ///         stopped or never started; false if @p timeout passed first: the
+  ///         step under way may still submit, and the hold stays in force.
   [[nodiscard]] bool park(std::chrono::milliseconds timeout);
   /// @brief End a @ref park. The worker carries on from the same frame,
   ///        playing or paused as before; live, it connects again, with a new
@@ -361,10 +407,28 @@ class StreamPlayer {
     return timing_.load(std::memory_order_relaxed);
   }
 
+  /// @brief Tile the worker's timed batches only @p depth scopes deep, from
+  ///        the next frame recorded (`core::GpuTimer::set_max_depth`): 0,
+  ///        every scope, recon's breakdowns included; 1, "decode" and "mesh"
+  ///        alone, with the fewest timestamps. Safe from any thread; for
+  ///        M4's A/B.
+  ///
+  /// @code
+  /// player.set_tile_depth(measure.tile_depth);
+  /// @endcode
+  /// @param depth  0 or 1.
+  void set_tile_depth(std::uint32_t depth) noexcept {
+    tile_depth_.store(depth, std::memory_order_relaxed);
+  }
+  /// @return What @ref set_tile_depth last set; 0 before.
+  std::uint32_t tile_depth() const noexcept {
+    return tile_depth_.load(std::memory_order_relaxed);
+  }
+
   /// @brief Tell the worker the consumer has taken a mesh: call it from the
   ///        commit of each FrameExchange::begin_frame that takes one. The
-  ///        worker sleeps until then before it meshes the next frame, rather
-  ///        than polling the exchange.
+  ///        worker sleeps until then before it publishes the next mesh,
+  ///        rather than polling the exchange.
   void taken();
 
   /// @brief Stop the worker, playing or paused, and join it. Idempotent.
@@ -377,56 +441,97 @@ class StreamPlayer {
                std::uint16_t track);
   explicit StreamPlayer(LiveAddress address);
 
-  // A step of the worker's, as park counts them: its kernel build, a record's
-  // read, its decode, a rebuild or an extract; live, a decode or an extract.
+  // A step of the worker's, as park counts them: its build, a record's read,
+  // a frame from its recording to its finish (its batch in flight included),
+  // a rebuild; live, a decode from its recording to its finish, or a mesh.
+  // Movable, so a frame's step goes with its batch.
   class Step;
+  // A pass of a file's track: the next record's place, whether a frame was
+  // shown, the first record skipped, and the next frame's rows so far.
+  struct Pass;
+  // A file's record read into one of the decoder's input slots, stamped.
+  struct Next;
+  // A batch the worker submitted, with what its idle and queue latency need.
+  struct Batch;
+  // A frame recorded and submitted, until finished: its stamp, its pending
+  // decode and extract (live, none), its step and its batch.
+  struct InFlight;
 
   // The worker: builds, then plays the track or the live stream until quit or
   // a fatal error, into status_.
   void run();
-  // Build decoder_ and extractor_ on the worker.
+  // Build decoder_, extractor_ and timer_ on the worker.
   core::Status build();
   core::Status play_track();
+  // The next record of the track read into `*next` (empty at the pass's
+  // end), within a step; skippable refusals skipped: false on quit.
+  core::Result<bool> read_next(recon::stream::Position* pos, Pass& pass,
+                               std::optional<Next>* next);
+  // Record `next`'s decode and its mesh into one batch and submit it, into
+  // `*frame`, within a step that the frame keeps; a record recon refuses
+  // leaves it empty, as does quit.
+  core::Status record_frame(Next next, Pass& pass,
+                            std::optional<InFlight>* frame);
+  // Once `frame` is due, finish it and publish its mesh (a refused frame
+  // publishes nothing): false on quit.
+  core::Result<bool> finish_frame(InFlight frame, Pass& pass);
   // Connect, play the connection until it ends, and connect again, until
   // quit; only a GPU failure is returned.
   core::Status play_live();
   // Play `client`'s connection until it ends, into `*ended`, or quit or a
-  // park ends it (`*ended` OK). `payload` is the worker's buffer. Only a GPU
-  // failure is returned.
+  // park ends it (`*ended` OK). Only a GPU failure is returned.
   core::Status play_connection(recon::networking::StreamClient& client,
-                               std::vector<std::uint8_t>& payload,
                                core::Status* ended);
-  // Build grid_ for the stream of `payload`, the first frame read.
-  core::Status make_grid(const std::vector<std::uint8_t>& payload);
-  // Decode `payload` into grid_, built from it if there is none, with the
-  // deblock as set_deblock last set it, timed into `stages`' "decode" row,
-  // and with `timed` its device half and recon's breakdowns.
-  core::Status decode(const std::vector<std::uint8_t>& payload,
-                      core::StageMetrics& stages, bool timed);
-  // Whether the next frame's device work is timed, as timing_ asks.
+  // Live: wait for `decoding`'s batch and finish it; into `*newest`, with
+  // its blocks, once it succeeded. A skippable refusal leaves them.
+  core::Status finish_decode(InFlight decoding, FrameStamp* newest,
+                             std::uint32_t* blocks);
+  // Build grid_ for the stream of the record of `size` bytes at the start of
+  // `slot`, the first frame read.
+  core::Status make_grid(const core::HostSlot& slot, std::size_t size);
+  // Whether the next frame's device work is timed, as timing_ asks; a timed
+  // frame's batch then times in timer_, at the tile depth now set.
   bool time_next_frame();
-  // `stamp`'s deblock fields, from the decoder's last decode or rebuild.
+  void time_batch(core::CommandBatch& batch);
+  // Submit `batch`, setting `signal` when given, timed into `rows`' "submit"
+  // row when given.
+  core::Result<Batch> submit(core::CommandBatch& batch,
+                             const core::TimelinePoint* signal,
+                             core::StageMetrics* rows);
+  // After `batch`'s wait, once `stamp`'s rows are in: the device halves of
+  // its rows that `stamp` has, and for its first timed batch its idle and
+  // queue latency.
+  void note_batch(const Batch& batch, FrameStamp& stamp);
+  // grid_ meshed in a batch of its own, `blocks` expected, submitted and
+  // waited on; timed, and into a `row` of `stamp`'s, when `row` is set. None
+  // when its slot came back unpublished.
+  core::Result<std::optional<recon::mesh::DeviceMesh>> mesh_alone(
+      FrameStamp& stamp, std::uint32_t blocks, const char* row);
+  // `stamp`'s deblock fields and rounds, from the decoder's last finish or
+  // rebuild.
   void stamp_deblock(FrameStamp& stamp) const;
-  // Wait until the frame at pts_ns is due, rebuilding last_ meanwhile when
-  // rebuild_wanted: false on quit.
-  core::Result<bool> wait_due(std::uint64_t pts_ns);
+  // Wait until the frame at pts_ns is due: the time it was found due, or
+  // none on quit. Without `frame`, it rebuilds last_ meanwhile when
+  // rebuild_wanted. With `frame`, recorded: a pause publishes it now, and a
+  // park waits out its batch and ends its step, to finish it at unpark.
+  core::Result<std::optional<Playback::Clock::time_point>> wait_due(
+      std::uint64_t pts_ns, InFlight* frame);
   // Count the frame at pts_ns shown as of due_at, when wait_due found it due,
   // once it decoded: the clock takes a step.
   void count_shown(std::uint64_t pts_ns, Playback::Clock::time_point due_at);
   // Under the lock: whether a paused toggle asks for last_ to be rebuilt.
   bool rebuild_wanted() const;
-  // Rebuild last_ under the deblock as now set, untimed, and publish it
-  // again (FrameStamp::rebuild): false on quit. A rebuild recon
-  // refuses as skippable publishes nothing.
+  // Rebuild last_ under the deblock as now set, untimed, mesh it and publish
+  // it again (FrameStamp::rebuild): false on quit. A rebuild recon refuses as
+  // skippable publishes nothing.
   core::Result<bool> rebuild();
-  // Once the consumer took the last mesh, mesh the grid and publish it with
-  // @p stamp, the extract timed into its "mesh" row: false on quit.
-  core::Result<bool> publish(FrameStamp stamp);
-  // Mesh grid_ and publish it with `stamp`, the extract timed into its "mesh"
-  // row (its device half too when `stamp.timed`) and the device's counts
-  // since the last publish into its counters, within a step, once the
-  // consumer took the last mesh.
-  core::Status mesh_and_publish(FrameStamp stamp);
+  // Once the consumer took the last mesh and while not parked, publish
+  // `mesh` with `stamp`: false on quit.
+  core::Result<bool> publish(const recon::mesh::DeviceMesh& mesh,
+                             FrameStamp stamp);
+  // Publish `mesh` with `stamp` now, the device's counts since the last
+  // publish into its counters.
+  void publish_now(const recon::mesh::DeviceMesh& mesh, FrameStamp stamp);
   // At the end of a pass that showed a frame: true to play the track again,
   // false on quit; it rebuilds last_ meanwhile when rebuild_wanted.
   core::Result<bool> wait_at_end();
@@ -453,14 +558,21 @@ class StreamPlayer {
   std::optional<recon::codec::Decoder> decoder_;
   std::optional<recon::volume::VoxelBlockGrid> grid_;
   std::optional<recon::mesh::MarchingCubes> extractor_;
+  std::optional<core::GpuTimer> timer_;  // the worker's timed batches'
   std::thread worker_;
   std::uint64_t frames_started_ = 0;  // for kSampled
   core::DeviceCounters counted_;      // the device's, at the last publish
+  // The worker's last batch waited on, if timed: its last timestamp, and the
+  // device's submits once it was submitted, so the next shows its idle only
+  // when nothing was submitted between them.
+  std::optional<std::uint64_t> last_end_ticks_;
+  std::uint64_t last_submits_ = 0;
   // A file's frame published last, its stages cleared, which grid_ holds
-  // until the next is due; the worker's alone.
+  // while the clock is paused; the worker's alone.
   std::optional<FrameStamp> last_;
 
   std::atomic<DeviceTiming> timing_{DeviceTiming::kOff};
+  std::atomic<std::uint32_t> tile_depth_{0};
 
   // The controls, the park, the connection and the worker's outcome, under
   // mutex_; changed_ wakes the worker on each change, and a park at each
@@ -471,7 +583,7 @@ class StreamPlayer {
   bool loop_ = true;
   bool deblock_ = true;  // the decoder's, from its next decode
   bool parked_ = false;  // no step starts
-  bool busy_ = false;    // a step is under way
+  int busy_ = 0;         // steps under way
   bool quit_ = false;
   std::uint64_t last_pts_ns_ = 0;  // the last frame shown
   bool last_by_step_ = false;      // it went by a step
