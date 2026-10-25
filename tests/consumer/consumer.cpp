@@ -17,6 +17,6 @@ int main() {
   const vkc::Result<std::unique_ptr<vkp::StreamPlayer>> player =
       vkp::StreamPlayer::open("missing.vrst");
   const bool refused =
-      !player.ok() && player.status().code() == vkc::Status::Code::NotFound;
+      !player.ok() && player.status().domain() == vkc::Status::Code::NotFound;
   return refused ? 0 : 1;
 }
