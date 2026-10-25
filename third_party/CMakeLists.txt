@@ -13,7 +13,7 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first, and the
 # config tier: its Source, which the library's open_source takes on every
 # platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
-# is core PR #52's head (8fdf461, 0.21.0), recon's pin too: HostRing, whose
+# is core PR #52's merge (4e16bbc, 0.21.0), recon's pin too: HostRing, whose
 # slots recon's decoder and maps keep, in place where device-mapped memory is
 # cached and copied elsewhere; CommandBatch::input and output; and
 # DeviceCounters::dispatches and barriers, which the stamps and the measure log
@@ -23,7 +23,6 @@ include(FetchContent)
 # iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT)
 # and answers glm. The floor below is the pin's version, so an older
 # FETCHCONTENT_SOURCE_DIR override is refused.
-# TODO(wave2): re-pin to core's merge commit.
 set(VKC_WITH_VULKAN ON)
 set(VKC_WITH_CONFIG ON)
 if(VP_BUILD_TESTS)
@@ -32,7 +31,7 @@ endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 8fdf4614dc10448a17d3164558093fc0379962c9)
+  GIT_TAG 4e16bbca41920b9a9df4191b10142b9827ccb365)
 FetchContent_MakeAvailable(volumetric_kit_core)
 vkc_require_core(0.21.0 VULKAN CONFIG)
 
@@ -41,7 +40,7 @@ vkc_require_core(0.21.0 VULKAN CONFIG)
 # the mesh exchange and the live stream's client. Its tests, examples and
 # -Werror stay off in a subproject, so its library's core floor is the one
 # checked; its own core pin is the player's. The pin is recon PR #277's head
-# (5cc21a7e): a frame decoded and meshed in the caller's batch
+# (cdcabb9e): a frame decoded and meshed in the caller's batch
 # (codec::record_growing, finish_growing; mesh::MarchingCubes::record_extract,
 # finish, abandon), DeviceMesh::ready, Decoder::claim_input and last_rounds, and
 # the reads straight into caller memory (StreamReader::read,
@@ -54,7 +53,7 @@ vkc_require_core(0.21.0 VULKAN CONFIG)
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG 5cc21a7ee24a8685ffc080377bde1334529622a3)
+  GIT_TAG cdcabb9ebdd0fdc179f32ba8250ce2df9e9985d8)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------

@@ -124,10 +124,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- build: the player pins core PR #52's head (8fdf461, 0.21.0), gfx main at
-  #153's merge (123d013) and recon PR #277's head (5cc21a7e), and requires
-  core 0.21.0; both heads are re-pinned to their merge commits before this
-  merges. The view presents FIFO as gfx's default (gfx #150), naming no mode.
+- build: the player pins core #52's merge (4e16bbc, 0.21.0), gfx main at
+  #153's merge (123d013) and recon PR #277's head (cdcabb9e), and requires
+  core 0.21.0; recon is re-pinned to its merge commit before this merges. The view presents FIFO as gfx's default (gfx #150), naming no mode.
 - The extractor's ring is two slots past the frames in flight
   (`mesh_wiring`); the draw waits on the GPU for the mesh's `ready` value;
   a park waits out a batch in flight and finishes its frame at unpark.
