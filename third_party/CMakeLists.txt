@@ -13,9 +13,9 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first, and the
 # config tier: its Source, which the library's open_source takes on every
 # platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
-# is core PR #52's head (eaf142e, 0.21.0), recon's pin's base too: HostRing,
-# whose slots recon's decoder and maps keep, in place where device-mapped memory
-# is cached and copied elsewhere; CommandBatch::input and output; and
+# is core PR #52's head (eaf142e, 0.21.0), recon's pin too: HostRing, whose
+# slots recon's decoder and maps keep, in place where device-mapped memory is
+# cached and copied elsewhere; CommandBatch::input and output; and
 # DeviceCounters::dispatches and barriers, which the stamps and the measure log
 # carry. Under it, 0.20.0's rows with busy, wait and device halves
 # (core::DeviceTime), tiled device time, PendingBatch::device_rows and
@@ -41,7 +41,7 @@ vkc_require_core(0.21.0 VULKAN CONFIG)
 # the mesh exchange and the live stream's client. Its tests, examples and
 # -Werror stay off in a subproject, so its library's core floor is the one
 # checked; its own core pin is the player's. The pin is recon PR #277's head
-# (1f42ed0b): a frame decoded and meshed in the caller's batch
+# (2fef7bc5): a frame decoded and meshed in the caller's batch
 # (codec::record_growing, finish_growing; mesh::MarchingCubes::record_extract,
 # finish, abandon), DeviceMesh::ready, Decoder::claim_input and last_rounds, and
 # the reads straight into caller memory (StreamReader::read,
@@ -54,7 +54,7 @@ vkc_require_core(0.21.0 VULKAN CONFIG)
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG 1f42ed0be8b9526a50727ef16b10401a1aeeff17)
+  GIT_TAG 2fef7bc512598340c1753027b4d2819e09e48cee)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------
