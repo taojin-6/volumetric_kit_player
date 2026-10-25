@@ -118,7 +118,7 @@ with no window, and prints the status and stats lines once a second (below).
 
 ## iOS
 
-The iOS app, for iPhone and iPad (arm64, iOS 16 or newer), plays a sender's
+The iOS app, for iPhone and iPad (arm64, iOS 27 or newer), plays a sender's
 live stream or a `.vrst` from its Documents folder. It needs Xcode and
 MoltenVK's iOS release, named by `MoltenVK_ROOT` as the core's
 [README](https://github.com/taojin-6/volumetric_kit_core#prerequisites) says.
