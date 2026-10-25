@@ -4,6 +4,26 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-25 — Another project can build on the player's library
+
+- **A project can add the player (`add_subdirectory`) and link
+  `volumetric_kit::player`,** as core, recon and gfx are added:
+  `VP_BUILD_APPS`, `VP_BUILD_TESTS` and `VP_WARNINGS_AS_ERRORS` default ON
+  only when the player is the top-level project. Why: the project that adds
+  it then builds the library alone, with no GLFW and under its own
+  compiler's warnings. The player stays an application that installs and
+  exports nothing (2026-10-18).
+- **`VP_DESKTOP_APP` stays, under `VP_BUILD_APPS`,** which turns it off. Why:
+  the measurement runner passes it to every commit it builds, older ones
+  too.
+- **A consumer project builds, not only configures** (`tests/consumer/`): it
+  adds the player, each dependency the build fetched passed on as a local
+  source, and builds and runs a program that links the library; beside it,
+  the player configured alone has all three options ON. Why: a configure
+  would not show that the library links outside the player's own tree. They
+  check CMake, not a device, so CI runs them (label `consumer`) on the
+  ubuntu-26.04 leg alone.
+
 ## 2026-10-25 — One batch per frame
 
 Wave 2 of the data-flow plan (player PR 7: PL3 and PL4), over core's
@@ -656,6 +676,6 @@ How `StreamPlayer` plays a stream; its header says what each call does.
 
 - The player is an application, not a library: it installs and exports
   nothing. Its logic is a build-tree-only static library, so the tests link
-  what the app runs.
+  what the app runs, as does a project that adds the player (2026-10-25).
 - It builds on core, recon and gfx, each fetched pinned by commit. The core
   is declared first, so all three share one copy (the core's DECISIONS.md).

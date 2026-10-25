@@ -121,6 +121,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   present, the worker alone's, apart, from due to taken.
 - CI reruns the stream and view suites under synchronization validation on
   its Release legs.
+- build: another project can add the player (`add_subdirectory`) and link
+  `volumetric_kit::player`: `VP_BUILD_APPS`, which is new, `VP_BUILD_TESTS`
+  and `VP_WARNINGS_AS_ERRORS` default ON only when the player is the
+  top-level project. The `consumer` tests build such a project, and CI runs
+  them on its ubuntu-26.04 leg.
 
 ### Changed
 

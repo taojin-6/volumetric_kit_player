@@ -160,3 +160,38 @@ if(APPLE)
                TIMEOUT
                300)
 endif()
+
+# The player as another project adds it, and as the top-level project
+# (consumer/check.cmake), each dependency this build fetched, or took from a
+# local source, passed on as a local source, as recon's subproject tests do.
+# They check CMake, not a device, and the first builds the library again, so CI
+# runs them on one leg (label consumer).
+file(
+  GLOB fetched
+  LIST_DIRECTORIES true
+  "${FETCHCONTENT_BASE_DIR}/*-src")
+set(sources "")
+foreach(source IN LISTS fetched)
+  get_filename_component(name "${source}" NAME)
+  string(REGEX REPLACE "-src$" "" name "${name}")
+  string(TOUPPER "${name}" name)
+  list(APPEND sources "-DFETCHCONTENT_SOURCE_DIR_${name}=${source}")
+endforeach()
+get_cmake_property(cache CACHE_VARIABLES)
+foreach(var IN LISTS cache)
+  if(var MATCHES "^FETCHCONTENT_SOURCE_DIR_" AND NOT "${${var}}" STREQUAL "")
+    list(APPEND sources "-D${var}=${${var}}")
+  endif()
+endforeach()
+foreach(check subproject top_level)
+  add_test(
+    NAME vp_consumer_${check}
+    COMMAND
+      "${CMAKE_COMMAND}" -DCHECK=${check} "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+      "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/consumer_${check}"
+      "-DGENERATOR=${CMAKE_GENERATOR}" "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+      "-DVP_DESKTOP_APP=${VP_DESKTOP_APP}" ${sources} -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/consumer/check.cmake")
+  set_tests_properties(vp_consumer_${check} PROPERTIES LABELS consumer TIMEOUT
+                                                       900)
+endforeach()
