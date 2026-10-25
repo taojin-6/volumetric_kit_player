@@ -161,17 +161,22 @@ jobs:
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
         # Set on the command, as macOS strips DYLD_* from a step's env when it
-        # starts the system's bash. CI leaves out the `stress` soak, and the
-        # TSan leg skips the view's rerun on MoltenVK's specialized families
-        # (DECISIONS.md, CI).
+        # starts the system's bash. CI leaves out the `stress` soak, runs the
+        # `consumer` builds on the ubuntu-26.04 leg alone, and the TSan leg
+        # skips the view's rerun on MoltenVK's specialized families
+        # (DECISIONS.md, CI and 2026-10-25).
         run: |
+          labels="stress|consumer"
+          if [ "${{ matrix.os }}" = ubuntu-26.04 ]; then
+            labels="stress"
+          fi
           skip=""
           if [ "${{ matrix.tsan }}" = true ]; then
             skip="-E vp_player_view_on_moltenvk_specialized"
           fi
           # ${skip} is unquoted, to split into its arguments.
           DYLD_FALLBACK_LIBRARY_PATH="${VP_LAYER_LIBRARY_PATH:-}" \
-            ctest --test-dir build --output-on-failure -LE stress ${skip} \
+            ctest --test-dir build --output-on-failure -LE "${labels}" ${skip} \
               --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
       # The worker's and the view's suites again under the layer's
