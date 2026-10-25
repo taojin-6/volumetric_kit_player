@@ -18,8 +18,7 @@
 /// ```
 /// pass,frame,type,bytes,triangles,table,stage,host_ms,wait_ms,gpu_ms,device,submits,host_waits,blocked_ns,staging_buffers,dispatches,barriers,deblock,exact_blocks,rounds,idle_ms,queue_ms,publish_ms,take_ms,present_ms
 /// 2,7,P,17932,199020,worker,decode,0.4101,0.0000,4.9518,measured,,,,,,,,,,,,,,
-/// 2,7,P,17932,199020,render,draw
-/// (mesh+UI),0.9100,0.0000,1.0441,measured,,,,,,,,,,,,,,
+/// 2,7,P,17932,199020,render,present,0.0100,1.0441,,none,,,,,,,,,,,,,,
 /// 2,7,P,17932,199020,,,,,,,1,0,0,0,39,48,LG,1920,1,26.9100,0.4100,0.2000,8.5000,1.1000
 /// ```
 ///

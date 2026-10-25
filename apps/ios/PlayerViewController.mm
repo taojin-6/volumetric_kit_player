@@ -116,6 +116,21 @@ NSString* MeasureFolder() {
   return folder;
 }
 
+// The phone's thermal state, as a measure log's `thermal` key names it.
+std::string ThermalText(NSProcessInfoThermalState state) {
+  switch (state) {
+    case NSProcessInfoThermalStateNominal:
+      return "nominal";
+    case NSProcessInfoThermalStateFair:
+      return "fair";
+    case NSProcessInfoThermalStateSerious:
+      return "serious";
+    case NSProcessInfoThermalStateCritical:
+      return "critical";
+  }
+  return "unknown";
+}
+
 // The stream a measure launch names (vkp::parse_measure_args), in Documents.
 vkc::Result<std::optional<cfg::Source>> MeasureSource(
     const vkp::MeasureArgs& measure) {
@@ -130,12 +145,13 @@ vkc::Result<std::optional<cfg::Source>> MeasureSource(
 
 // The view over `source`, on `layer`, with fingertip-sized controls, the
 // Source button, on an iPhone the compact stats, and the deblock as
-// `deblock`, if set, as a view before had it; the worker's device timing fixed
-// by a measurement, or else the stats panel's. No validation: iOS has no layer
-// to load (DECISIONS.md).
+// `deblock`, if set, as a view before had it; the worker's device timing, its
+// tile depth and the labels as a measurement fixes them, or else the timing
+// the stats panel's. No validation: iOS has no layer to load (DECISIONS.md).
 vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
     CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source,
-    std::optional<vkp::DeviceTiming> timing, std::optional<bool> deblock) {
+    const std::optional<vkp::MeasureArgs>& measure,
+    std::optional<bool> deblock) {
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
              vkp::open_source(source));
   if (deblock) {
@@ -149,7 +165,11 @@ vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
   config.source_button = true;
   config.compact_stats =
       UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
-  config.device_timing = timing;
+  if (measure) {
+    config.device_timing = measure->timing;
+    config.tile_depth = measure->tile_depth;
+    config.debug_labels = measure->debug_labels;
+  }
   return vkp::PlayerView::create(surface, pixels, std::move(player), config);
 }
 
@@ -344,11 +364,8 @@ glm::vec2 At(UITouch* touch, UIView* view) {
     [self askOnScreen];
     return;
   }
-  vkc::Result<std::unique_ptr<vkp::PlayerView>> made =
-      MakeView((CAMetalLayer*)_metal.layer, pixels, **chosen,
-               _measure ? std::optional<vkp::DeviceTiming>(_measure->timing)
-                        : std::nullopt,
-               _deblock);
+  vkc::Result<std::unique_ptr<vkp::PlayerView>> made = MakeView(
+      (CAMetalLayer*)_metal.layer, pixels, **chosen, _measure, _deblock);
   if (!made.ok()) {
     [self fail:made.status()];
     return;
@@ -371,12 +388,14 @@ glm::vec2 At(UITouch* touch, UIView* view) {
 }
 
 // A measure launch's log, in Documents/measure/, named by when it starts and
-// the player's commit (vkp::measure_file_name); NO, with the label up, when it
-// cannot be written.
+// the player's commit (vkp::measure_file_name), its header with the phone's
+// thermal state and Low Power Mode as it starts; NO, with the label up, when
+// it cannot be written.
 - (BOOL)startMeasure {
   NSString* folder = MeasureFolder();
   vkp::MeasureContext context;
   context.device = vkp::device_line(_view->compute_device());
+  context.rings = vkp::rings_line(_view->compute_device());
   context.stream =
       _measure->stream + ", track " + std::to_string(_view->player().track());
   context.run = "ios --passes " + std::to_string(_measure->passes);
@@ -384,7 +403,12 @@ glm::vec2 At(UITouch* touch, UIView* view) {
     context.run += " --frames " + std::to_string(*_measure->frames);
   }
   context.timing = _measure->timing;
+  context.tile_depth = _measure->tile_depth;
+  context.debug_labels = _measure->debug_labels;
   context.started = std::chrono::system_clock::now();
+  NSProcessInfo* process = NSProcessInfo.processInfo;
+  context.thermal = ThermalText(process.thermalState);
+  context.low_power = static_cast<bool>(process.lowPowerModeEnabled);
   vkc::Result<std::unique_ptr<vkp::MeasureLog>> log = vkp::MeasureLog::open(
       Utf8(folder) + "/" + vkp::measure_file_name(context.started), context);
   if (!log.ok()) {
@@ -408,7 +432,8 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   const vkp::FrameStamp& stamp = *_view->shown();
   const bool past = stamp.pass > _measure->passes;
   if (!past) {
-    const vkc::Status added = _log->add(stamp, _view->mesh().triangle_count);
+    const vkc::Status added = _log->add(stamp, _view->mesh().triangle_count,
+                                        _view->render_metrics().sections);
     if (!added.ok()) {
       [self fail:added];
       return;

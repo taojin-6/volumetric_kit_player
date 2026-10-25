@@ -40,6 +40,18 @@ struct FrameMeans {
   std::optional<double> present_ms;      ///< Taken to presented.
 };
 
+/// @brief One frame's figures, as @ref FrameMeans averages them: what
+///        PlaybackStats keeps of each frame and MeasureLog writes in its
+///        frame row.
+///
+/// @code
+/// const FrameMeans one = frame_figures(stamp);  // each as the frame has it
+/// @endcode
+/// @param stamp  The frame's stamp.
+/// @return Its device time when timed and measured, its queue idle and
+///         latency, and each latency leg whose ends it has, in order.
+FrameMeans frame_figures(const FrameStamp& stamp);
+
 /// @brief Figures over the frames taken for drawing: the track's mean
 ///        bitrate, the rate frames are taken at, the worker's stage means,
 ///        and for a live stream, which has no track mean, the bitrate and

@@ -75,10 +75,12 @@ in place of lighting; and Deblock, on at first, has recon's decoder smooth
 each frame across its block faces, and while paused redoes the frame shown.
 The stats at the top left show the bitrate, the frame drawn, what the
 deblock did to it (its filter, T and the blocks it kept at their exact
-decode), the rate and where each frame's time goes: the worker's stages per
-stream frame and the renderer's per display frame, each as host (busy), wait
-and GPU ms. The GPU is timed while they are open; a click on their header
-closes and opens them. The keys are the panel's shortcuts:
+decode), the frames' GPU time, the worker's queue idle and queue latency, the
+latency from a frame's due time to its present, the rate and where each
+frame's time goes: the worker's stages per stream frame and the renderer's
+per display frame, each as host (busy), wait and GPU ms. The GPU is timed
+while they are open; a click on their header closes and opens them. The keys
+are the panel's shortcuts:
 
 | Input | Does |
 | --- | --- |
@@ -183,10 +185,14 @@ are claimed.
 
 A measurement is one CSV log per run, which the player writes itself
 ([measure_log.hpp](src/volumetric_kit/player/measure_log.hpp) gives the
-format): a header naming the commits, the build, the device, the stream, how
-it ran, the timing and the time, then each stream frame's stage rows (host,
-wait and GPU ms) and the worker's device counts (submits, waits, blocked
-time, staging buffers).
+format, version 2): a header naming the commits, the build, the device, how
+recon's rings run on it, the stream, how it ran, the timing, the tile depth,
+the labels and the time (and on a phone its thermal state and Low Power
+Mode), then each stream frame's stage rows (host, wait and GPU ms), the rows
+of the display frame that drew it, and its frame row: the worker's device
+counts (submits, waits, blocked time, staging buffers, dispatches,
+barriers), what the deblock did, the rounds its decode ran, the queue's idle
+and latency, and its latency from due to published, taken and presented.
 
 `vp_probe` writes one on a desktop, with no window:
 
@@ -198,13 +204,16 @@ time, staging buffers).
 It plays through the view on gfx's headless surface, or with `--worker` the
 worker alone on the GPU the core picks, for a GPU with no headless surface
 (NVIDIA's). `--timing` is `off`, `sampled` (one frame in `kSampleEvery`) or
-`all`; `--frames N` stops after N frames; `--connect host[:port]` plays a
+`all`; `--tile-depth 1` tiles the worker's timed batches by "decode" and
+"mesh" alone (0, every scope, by default); `--labels off` asks for no debug
+labels; `--frames N` stops after N frames; `--connect host[:port]` plays a
 sender.
 
 The iOS app writes one when launched with `-- --measure <name in Documents>
-[--passes P] [--frames N] [--timing T]`: it plays that stream, logs into
-`Documents/measure/<utc>-<commit>.csv`, and shows "measure done"; a launch
-that cannot log writes why into a `.failed` file there instead.
+[--passes P] [--frames N] [--timing T] [--tile-depth D] [--labels on|off]`:
+it plays that stream, logs into `Documents/measure/<utc>-<commit>.csv`, and
+shows "measure done"; a launch that cannot log writes why into a `.failed`
+file there instead.
 
 [tools/measure/measure](tools/measure/measure), run from the Mac, does it end
 to end, copies the logs into `~/ws/volumetric_kit/measurements/<date>/` and
@@ -219,15 +228,19 @@ tools/measure/measure --dry-run lab <ref>   # prints the commands, runs none
 ```
 
 Each runs two passes of rafa2.vrst, the first a warm-up, with timing off and
-then all. `lab` builds `vp_probe` in its own clone of the player on the lab
-and runs it under `uvrun --time`. `mac` builds it in the Mac's worktree for
-runs, on the siblings' checkouts that are clean at their pins, and runs it
-once the Mac is idle, its load written beside each log. `iphone` and `ipad`
-build the signed Release app in that worktree, install it, copy rafa2.vrst
-into its Documents if missing, then launch it once per timing; they start an
-app on the device, so they run only with the owner's go-ahead. `summarize`
-gives per stage the mean, p50 and p95 of host, wait and GPU, the counts per
-frame, a run's load, and with two logs their diff.
+then all; `--tile-depth` and `--labels` pass through. `lab` builds
+`vp_probe` in its own clone of the player on the lab and runs it under
+`uvrun --time`. `mac` builds it in the Mac's worktree for runs, on the
+siblings' checkouts that are clean at their pins, and runs it once the Mac is
+idle, its load written beside each log. `iphone` and `ipad` build the signed
+Release app in that worktree on 6 jobs, install it, copy rafa2.vrst into its
+Documents if missing, then launch it once per timing; they start an app on
+the device, so they run only with the owner's go-ahead. Each log is named
+`<utc>-<commit>-<mode>-<timing>.csv`. `summarize` reads formats 1 and 2, and
+gives per stage, the worker's and the renderer's, the mean, p50 and p95 of
+host, wait and GPU, the counts per frame, the frames' figures (device time,
+queue idle and latency, latency and its legs, rounds), a run's load, and with
+two logs their diff.
 
 ## Development
 

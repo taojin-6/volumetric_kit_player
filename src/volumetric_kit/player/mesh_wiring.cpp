@@ -17,8 +17,9 @@ MeshWiring mesh_wiring(std::uint32_t graphics_family,
   mc.queue_families[0] = compute_family;
   mc.queue_families[1] = graphics_family;
   mc.queue_family_count = 2;
-  // Each frame in flight holds a generation while the next is extracted.
-  mc.slot_count = frames_in_flight + 1;
+  // Each frame in flight holds a generation, one published may wait to be
+  // taken, and the next is meshed in its frame's batch before that take.
+  mc.slot_count = frames_in_flight + 2;
   // About a third of the vertices to hold, write and fetch: the draw is
   // indexed, and only recon's several-view texturer needs a triangle's
   // vertices its own.

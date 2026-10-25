@@ -482,10 +482,11 @@ class StreamPlayer {
   // park ends it (`*ended` OK). Only a GPU failure is returned.
   core::Status play_connection(recon::networking::StreamClient& client,
                                core::Status* ended);
-  // Live: wait for `decoding`'s batch and finish it; into `*newest`, with
-  // its blocks, once it succeeded. A skippable refusal leaves them.
-  core::Status finish_decode(InFlight decoding, FrameStamp* newest,
-                             std::uint32_t* blocks);
+  // Live: wait for `decoding`'s batch and finish it, into `*newest`, with
+  // its blocks: true once it succeeded; false, leaving them, for a skippable
+  // refusal.
+  core::Result<bool> finish_decode(InFlight decoding, FrameStamp* newest,
+                                   std::uint32_t* blocks);
   // Build grid_ for the stream of the record of `size` bytes at the start of
   // `slot`, the first frame read.
   core::Status make_grid(const core::HostSlot& slot, std::size_t size);
@@ -529,8 +530,8 @@ class StreamPlayer {
   // `mesh` with `stamp`: false on quit.
   core::Result<bool> publish(const recon::mesh::DeviceMesh& mesh,
                              FrameStamp stamp);
-  // Publish `mesh` with `stamp` now, the device's counts since the last
-  // publish into its counters.
+  // Under the lock: publish `mesh` with `stamp` now, the device's counts
+  // since the last publish into its counters.
   void publish_now(const recon::mesh::DeviceMesh& mesh, FrameStamp stamp);
   // At the end of a pass that showed a frame: true to play the track again,
   // false on quit; it rebuilds last_ meanwhile when rebuild_wanted.

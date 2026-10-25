@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -238,8 +239,8 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
-                                     Playback::Clock::time_point now,
-                                     bool live) {
+                                     Playback::Clock::time_point now, bool live,
+                                     bool compact) {
   const std::optional<double> mbit =
       live ? stats.rolling_mbit_per_s(now) : stats.mean_mbit_per_s();
   std::string frame = "frame - · - kB · - k tris";
@@ -258,6 +259,29 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
                  (info.block_count == 1 ? " block" : " blocks") + " exact";
     }
   }
+  // The device's figures: n/t while no frame of the window was timed; the
+  // GPU and the queue latency n/a where timed frames have none.
+  const FrameMeans means = stats.frame_means();
+  const auto figure = [](const std::optional<double>& ms, int decimals,
+                         const char* unknown) {
+    return ms ? fixed(*ms, decimals) + " ms" : std::string(unknown);
+  };
+  const bool timed = stats.timed_frames() > 0;
+  const std::string gpu =
+      "GPU " + figure(means.gpu_ms, 2, timed ? "n/a" : "n/t");
+  const std::string idle = "idle " + figure(means.device_idle_ms, 1, "n/t");
+  const std::string queue =
+      "queue " + figure(means.queue_ms, 2, means.gpu_ms ? "n/a" : "n/t");
+  // The latency from due to the present call: its legs' means, added.
+  const auto leg = [](const std::optional<double>& ms) {
+    return ms ? fixed(*ms, 1) : std::string("-");
+  };
+  std::optional<double> total;
+  if (means.publish_ms) {
+    total = *means.publish_ms + means.take_ms.value_or(0.0) +
+            means.present_ms.value_or(0.0);
+  }
+  const std::string latency = "latency " + figure(total, 1, "-");
   std::string rate = "rate " + fixed(stats.frames_per_s(now), 1);
   if (const std::optional<double> nominal = stats.nominal_fps()) {
     rate += " / " + rate_text(*nominal);
@@ -266,9 +290,19 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
   if (live) {
     rate += " · " + fixed(stats.records_per_s(now), 0) + " rec/s";
   }
-  return {"bitrate " + (mbit ? fixed(*mbit, 1) : "-") + " Mbit/s" +
-              (live ? " · last 1 s" : ""),
-          std::move(frame), std::move(deblock), std::move(rate)};
+  std::vector<std::string> lines{"bitrate " + (mbit ? fixed(*mbit, 1) : "-") +
+                                     " Mbit/s" + (live ? " · last 1 s" : ""),
+                                 std::move(frame), std::move(deblock)};
+  if (compact) {
+    lines.push_back(gpu + " · " + latency);
+  } else {
+    lines.push_back(gpu + " · " + idle + " · " + queue);
+    lines.push_back(latency + " · publish " + leg(means.publish_ms) +
+                    " · take " + leg(means.take_ms) + " · present " +
+                    leg(means.present_ms));
+  }
+  lines.push_back(std::move(rate));
+  return lines;
 }
 
 std::string display_line(const gfx::FrameMetrics& render) {
@@ -286,7 +320,7 @@ void StatsPanel::draw(const PlaybackStats& stats,
   }
   // After the header, so the frame a tap opens it on is current.
   if (!rebuilt_ || now - *rebuilt_ >= kRefresh) {
-    lines_ = stats_lines(stats, shown, triangles, now, live);
+    lines_ = stats_lines(stats, shown, triangles, now, live, compact_);
     rows_ = stats.stage_means();
     window_ = {stats.window_frames(), stats.timed_frames(), "stream frame"};
     display_ = display_line(render);
@@ -315,22 +349,43 @@ void StatsPanel::draw(const PlaybackStats& stats,
     gfx::ui::end_collapsible_panel();
     return;
   }
-  // Compact: the worker's table holds its stages alone, and a work area
-  // wider than tall has room for the renderer's beside it, not below. The
-  // rate, the last line, sits over the display's rate, so a line that breaks
-  // leaves the worker's column no taller; beside, a line takes the width the
-  // renderer's column left as of the last frame.
-  std::vector<core::StageRow> stages;
-  for (const core::StageRow& row : rows_) {
-    if (std::strncmp(row.name, core::StageMetrics::kBreakdownPrefix,
-                     std::strlen(core::StageMetrics::kBreakdownPrefix)) != 0) {
-      stages.push_back(row);
+  // Compact: the worker's table holds its stages, read, decode and mesh, and
+  // the renderer's its rows but its loop's submit, and a work area wider than
+  // tall has room for the renderer's beside the worker's, not below. The
+  // device's line and the rate, the last two, sit over the display's rate,
+  // so each column holds as many rows as before they came, and a line that
+  // breaks leaves the worker's column no taller; beside, a line takes the
+  // width the renderer's column left as of the last frame (DECISIONS.md).
+  const auto kept = [](const std::vector<core::StageRow>& rows,
+                       std::initializer_list<const char*> dropped) {
+    std::vector<core::StageRow> kept_rows;
+    for (const core::StageRow& row : rows) {
+      const bool drop =
+          std::strncmp(row.name, core::StageMetrics::kBreakdownPrefix,
+                       std::strlen(core::StageMetrics::kBreakdownPrefix)) ==
+              0 ||
+          std::any_of(dropped.begin(), dropped.end(), [&](const char* name) {
+            return std::strcmp(row.name, name) == 0;
+          });
+      if (!drop) {
+        kept_rows.push_back(row);
+      }
+    }
+    return kept_rows;
+  };
+  const std::vector<core::StageRow> stages =
+      kept(rows_, {"submit", "wait: GPU", "finish"});
+  // The draw's row by a short name: a phone's portrait has no room for it.
+  std::vector<core::StageRow> drawn = kept(render_rows_, {"submit"});
+  for (core::StageRow& row : drawn) {
+    if (std::strcmp(row.name, kDrawRow) == 0) {
+      row.name = "draw";
     }
   }
   const bool beside = viewport->WorkSize.x > viewport->WorkSize.y;
   const float worker_width =
       beside ? width - render_width_ - style.ItemSpacing.x : width;
-  const std::size_t worker_lines = lines_.empty() ? 0 : lines_.size() - 1;
+  const std::size_t worker_lines = lines_.size() < 2 ? 0 : lines_.size() - 2;
   begin_column("##worker");
   for (std::size_t i = 0; i < worker_lines; ++i) {
     draw_stats_line(lines_[i], worker_width);
@@ -341,11 +396,11 @@ void StatsPanel::draw(const PlaybackStats& stats,
     ImGui::SameLine();
   }
   begin_column("##render");
-  if (!lines_.empty()) {
-    draw_stats_line(lines_.back(), width);
+  for (std::size_t i = worker_lines; i < lines_.size(); ++i) {
+    draw_stats_line(lines_[i], width);
   }
   ImGui::TextUnformatted(display_.c_str());
-  draw_compact_table("render", render_rows_, render_window_);
+  draw_compact_table("render", drawn, render_window_);
   ImGui::EndChild();
   render_width_ = ImGui::GetItemRectSize().x;
   gfx::ui::end_collapsible_panel();

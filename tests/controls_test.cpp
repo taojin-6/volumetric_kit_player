@@ -24,9 +24,11 @@
 // ceiling on a phone in portrait, breaks before its blocks, and takes one row
 // where it fits; and they are the stage means per stream frame, then the
 // renderer's rows per display frame under its rate, each table under the
-// window it covers. Compact, the worker's table leaves out its breakdowns,
-// the renderer's sits beside it in a work area wider than tall, the rate
-// over it, and a line breaks against the room its column has.
+// window it covers; they name the frames' device time, queue idle and queue
+// latency, n/t or n/a where unknown, and the latency's legs, as one line when
+// compact. Compact, the worker's table leaves out its breakdowns, submit and
+// finish, the renderer's sits beside it in a work area wider than tall, the
+// rate over it, and a line breaks against the room its column has.
 
 #include "volumetric_kit/player/controls.hpp"
 
@@ -114,11 +116,63 @@ stream::TrackStats a_track() {
   return track;
 }
 
+// The device's and the latency's lines before any frame, full and compact.
+const Lines kNoFigures{"GPU n/t · idle n/t · queue n/t",
+                       "latency - · publish - · take - · present -"};
+constexpr const char* kNoFiguresCompact = "GPU n/t · latency -";
+
 TEST(StatsLines, SayDashForTheFrameBeforeTheFirst) {
   const PlaybackStats stats(a_track(), {30, 1});
   EXPECT_EQ(stats_lines(stats, std::nullopt, 0, t0, false),
             (Lines{"bitrate 9.8 Mbit/s", "frame - · - kB · - k tris",
-                   "deblock - · T - mm", "rate 0.0 / 30 fps"}));
+                   "deblock - · T - mm", kNoFigures[0], kNoFigures[1],
+                   "rate 0.0 / 30 fps"}));
+  EXPECT_EQ(
+      stats_lines(stats, std::nullopt, 0, t0, false, /*compact=*/true),
+      (Lines{"bitrate 9.8 Mbit/s", "frame - · - kB · - k tris",
+             "deblock - · T - mm", kNoFiguresCompact, "rate 0.0 / 30 fps"}));
+}
+
+// The device's figures over the frames that have each: the GPU over the
+// timed frames' stage rows, the idle and the queue latency as stamped; and
+// the latency's legs, due to published, published to taken and taken to
+// presented, and their sum. Timed with no queue latency, it is n/a; a timer
+// that cannot time leaves the GPU n/a.
+TEST(StatsLines, SayTheDeviceTimeTheIdleTheQueueAndTheLatency) {
+  PlaybackStats stats(a_track(), {30, 1});
+  for (int i = 0; i < 2; ++i) {
+    FrameStamp stamp = stamp_of(static_cast<std::uint64_t>(i), 41'000, false);
+    stamp.timed = true;
+    stamp.stages.add_gpu("decode", 5.0 + i);
+    stamp.stages.add_gpu("  ..rans decode", 4.0);  // within decode's
+    stamp.stages.add_gpu("mesh", 1.25);
+    stamp.device_idle_ms = 26.0 + 2 * i;
+    stamp.queue_ms = 0.4;
+    stamp.due = t0 + milliseconds(40 * i);
+    stamp.published = stamp.due + milliseconds(1);
+    stamp.taken = stamp.published + milliseconds(8);
+    stamp.presented = *stamp.taken + milliseconds(2);
+    stats.add_frame(stamp, *stamp.taken);
+  }
+  const Lines lines = stats_lines(stats, std::nullopt, 0, t0, false);
+  EXPECT_EQ(lines[3], "GPU 6.75 ms · idle 27.0 ms · queue 0.40 ms");
+  EXPECT_EQ(lines[4], "latency 11.0 ms · publish 1.0 · take 8.0 · present 2.0");
+  EXPECT_EQ(stats_lines(stats, std::nullopt, 0, t0, false, true)[3],
+            "GPU 6.75 ms · latency 11.0 ms");
+  // Timed, measured, with no calibration; and a queue that cannot time.
+  PlaybackStats uncalibrated(a_track(), {30, 1});
+  FrameStamp stamp = stamp_of(0, 41'000, false);
+  stamp.timed = true;
+  stamp.stages.add_gpu("decode", 5.0);
+  uncalibrated.add_frame(stamp, t0);
+  EXPECT_EQ(stats_lines(uncalibrated, std::nullopt, 0, t0, false)[3],
+            "GPU 5.00 ms · idle n/t · queue n/a");
+  PlaybackStats untimeable(a_track(), {30, 1});
+  stamp.stages.clear();
+  stamp.stages.add_device("decode", core::DeviceTime::Unavailable);
+  untimeable.add_frame(stamp, t0);
+  EXPECT_EQ(stats_lines(untimeable, std::nullopt, 0, t0, false)[3],
+            "GPU n/a · idle n/t · queue n/t");
 }
 
 // recon's filter names as they come, T to the micrometre, and the blocks its
@@ -162,7 +216,8 @@ TEST(StatsLines, NameTheFramesTypeBytesAndTrianglesAndTheRate) {
   const TimePoint now = t0 + milliseconds(960);
   EXPECT_EQ(stats_lines(stats, stamp_of(7, 41'234, false), 182'364, now, false),
             (Lines{"bitrate 9.8 Mbit/s", "frame P · 41.2 kB · 182 k tris",
-                   "deblock off · T 0.000 mm", "rate 25.0 / 30 fps"}));
+                   "deblock off · T 0.000 mm", kNoFigures[0], kNoFigures[1],
+                   "rate 25.0 / 30 fps"}));
   EXPECT_EQ(stats_lines(stats, stamp_of(6, 98'765, true), 0, now, false)[1],
             "frame I · 98.8 kB · 0 k tris");
 }
@@ -170,13 +225,15 @@ TEST(StatsLines, NameTheFramesTypeBytesAndTrianglesAndTheRate) {
 TEST(StatsLines, LeaveOutWhatIsUnknownAndShowAFractionalRate) {
   EXPECT_EQ(stats_lines(PlaybackStats({}, {0, 1}), std::nullopt, 0, t0, false),
             (Lines{"bitrate - Mbit/s", "frame - · - kB · - k tris",
-                   "deblock - · T - mm", "rate 0.0 fps"}));
-  EXPECT_EQ(stats_lines(PlaybackStats({}, {30000, 1001}), std::nullopt, 0, t0,
-                        false)[3],
-            "rate 0.0 / 29.97 fps");
+                   "deblock - · T - mm", kNoFigures[0], kNoFigures[1],
+                   "rate 0.0 fps"}));
   EXPECT_EQ(
-      stats_lines(PlaybackStats({}, {25, 1}), std::nullopt, 0, t0, false)[3],
-      "rate 0.0 / 25 fps");
+      stats_lines(PlaybackStats({}, {30000, 1001}), std::nullopt, 0, t0, false)
+          .back(),
+      "rate 0.0 / 29.97 fps");
+  EXPECT_EQ(stats_lines(PlaybackStats({}, {25, 1}), std::nullopt, 0, t0, false)
+                .back(),
+            "rate 0.0 / 25 fps");
 }
 
 // Live, as the view builds them: no track and no rate.
@@ -184,7 +241,8 @@ TEST(StatsLines, LiveTheyShowTheLastSecondsBitrateAndRecords) {
   PlaybackStats stats({}, {});
   EXPECT_EQ(stats_lines(stats, std::nullopt, 0, t0, true),
             (Lines{"bitrate - Mbit/s · last 1 s", "frame - · - kB · - k tris",
-                   "deblock - · T - mm", "rate 0.0 fps · 0 rec/s"}));
+                   "deblock - · T - mm", kNoFigures[0], kNoFigures[1],
+                   "rate 0.0 fps · 0 rec/s"}));
   // 11 frames 100 ms apart, each taken as it is published after 3 records of
   // 12.5 kB: 3 Mbit/s, 30 records a second. A fused room's frames: every
   // block holds an unobserved voxel, so the fallback kept them all exact.
@@ -204,7 +262,7 @@ TEST(StatsLines, LiveTheyShowTheLastSecondsBitrateAndRecords) {
       stats_lines(stats, taken, 1'200, t0 + seconds(1), true),
       (Lines{"bitrate 3.0 Mbit/s · last 1 s", "frame P · 12.5 kB · 1 k tris",
              "deblock LG · T 0.500 mm · 1,920 of 1,920 blocks exact",
-             "rate 10.0 fps · 30 rec/s"}));
+             kNoFigures[0], kNoFigures[1], "rate 10.0 fps · 30 rec/s"}));
 }
 
 TEST(LiveStatusLine, SaysConnectingThenWhyItReconnects) {
@@ -463,7 +521,7 @@ class ControlsTest : public ::testing::Test {
 
   // The worker's frame `index` taken for drawing now, as the view's commit
   // takes it: an odd one device-timed, its decode measured, and with
-  // `breakdowns_` a breakdown under its decode.
+  // `breakdowns_` a breakdown under its decode and its submit and finish.
   void take(std::uint64_t index) {
     FrameStamp stamp = stamp_of(index, 2'000, index % 3 == 0);
     stamp.timed = index % 2 == 1;
@@ -476,6 +534,10 @@ class ControlsTest : public ::testing::Test {
       stamp.stages.add_cpu("  ..rans decode", 1.0);
     }
     stamp.stages.add_cpu("mesh", 1.0);
+    if (breakdowns_) {
+      stamp.stages.add_cpu("submit", 0.2);
+      stamp.stages.add_cpu("finish", 0.3);
+    }
     stats_->add_frame(stamp, now());
     shown_ = std::move(stamp);
     triangles_ = 1'200;
@@ -499,7 +561,7 @@ class ControlsTest : public ::testing::Test {
   StatsPanel panel_;
   std::optional<FrameStamp> shown_;
   std::uint32_t triangles_ = 0;
-  bool breakdowns_ = false;  // take() adds one
+  bool breakdowns_ = false;  // take() adds one, submit and finish
   gfx::FrameMetrics render_;
   bool source_shown_ = false;
   int source_presses_ = 0;
@@ -739,9 +801,9 @@ TEST_F(ControlsTest, ATapOnTheStatsHeaderClosesThemAndAnotherOpensThem) {
   ASSERT_TRUE(panel_.open());
   ASSERT_TRUE(stats_body()->Active);
   const Lines before = panel_.lines();
-  ASSERT_EQ(before.size(), 4u);
+  ASSERT_EQ(before.size(), 6u);
   EXPECT_EQ(before[1], "frame - · - kB · - k tris");
-  EXPECT_EQ(before[3], "rate 0.0 / 25 fps");
+  EXPECT_EQ(before[5], "rate 0.0 / 25 fps");
   tap(middle(stats_header()));
   EXPECT_FALSE(panel_.open());
   EXPECT_FALSE(stats_body()->Active) << "closed, the header alone";
@@ -756,8 +818,8 @@ TEST_F(ControlsTest, ATapOnTheStatsHeaderClosesThemAndAnotherOpensThem) {
   EXPECT_FALSE(stats_body()->Active);
   EXPECT_EQ(panel_.lines(), before) << "rebuilt while closed";
   // Open again, from the frame the tap opens it on, it shows the frames taken
-  // while it was closed: the newest, frame 14, and the 15 over 28 ticks, 30 a
-  // second.
+  // while it was closed: the newest, frame 14, the odd ones' decode timed,
+  // and the 15 over 28 ticks, 30 a second.
   touch_->touch_began(1, middle(stats_header()));
   touch_->touch_ended(1);
   for (int i = 0; i < 4 && !panel_.open(); ++i) {
@@ -765,9 +827,10 @@ TEST_F(ControlsTest, ATapOnTheStatsHeaderClosesThemAndAnotherOpensThem) {
   }
   EXPECT_TRUE(panel_.open());
   EXPECT_TRUE(stats_body()->Active);
-  EXPECT_EQ(panel_.lines(),
-            (Lines{before[0], "frame P · 2.0 kB · 1 k tris",
-                   "deblock off · T 0.000 mm", "rate 30.0 / 25 fps"}));
+  EXPECT_EQ(panel_.lines(), (Lines{before[0], "frame P · 2.0 kB · 1 k tris",
+                                   "deblock off · T 0.000 mm",
+                                   "GPU 0.70 ms · idle n/t · queue n/a",
+                                   kNoFigures[1], "rate 30.0 / 25 fps"}));
 }
 
 // A frame taken within a refresh of the last rebuild leaves the figures as
@@ -779,7 +842,7 @@ TEST_F(ControlsTest, TheFiguresHoldUntilTheRefresh) {
   seconds_ += refresh;
   frame();
   const Lines first = panel_.lines();
-  ASSERT_EQ(first.size(), 4u);
+  ASSERT_EQ(first.size(), 6u);
   EXPECT_EQ(first[1], "frame I · 2.0 kB · 1 k tris");
   take(1);
   frame();
@@ -793,23 +856,26 @@ TEST_F(ControlsTest, TheFiguresHoldUntilTheRefresh) {
 // context's scale, 288 points is the narrowest phone's 375 in portrait at the
 // iOS shell's 1.3, and 625 the shortest notched one's 812 in landscape. Full,
 // as on a desktop, the line breaks before its blocks on the first, one row
-// more, and takes one row on the second.
+// more than the deblock off's short line takes, and takes one row on the
+// second.
 TEST_F(ControlsTest, ALineTooWideForTheWorkAreaBreaksBeforeItsLastPart) {
   take(0);
-  deblock_at_the_ceiling(true);
-  seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
-  // An auto-sized window takes its size on its second frame.
-  const auto body_at = [&](std::uint32_t width) {
+  // The body at `width` with the deblock `on`, past a refresh. An auto-sized
+  // window takes its size on its second frame.
+  const auto height_at = [&](std::uint32_t width, bool on) {
+    deblock_at_the_ceiling(on);
     width_ = width;
+    seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
     frame();
     frame();
-    return stats_body();
+    return stats_body()->ContentSize.y;
   };
-  const float wide_height = body_at(625)->ContentSize.y;
+  EXPECT_FLOAT_EQ(height_at(625, true), height_at(625, false));
+  const float off = height_at(288, false);
+  EXPECT_FLOAT_EQ(height_at(288, true),
+                  off + ImGui::GetTextLineHeightWithSpacing());
   ASSERT_EQ(panel_.lines()[2],
             "deblock LG · T 0.500 mm · 131,072 of 131,072 blocks exact");
-  EXPECT_FLOAT_EQ(body_at(288)->ContentSize.y,
-                  wide_height + ImGui::GetTextLineHeightWithSpacing());
 }
 
 // Compact, as on a phone, the rate sits in the renderer's column, and a line
@@ -906,12 +972,13 @@ TEST_F(ControlsTest,
   EXPECT_EQ(panel_.render_window().frames, 0u);
 }
 
-// Full, the worker's table holds its breakdowns, and the renderer's is below
-// it. Compact, as on a phone: the worker's table leaves them out, a table's
-// window is stated in fewer words, and in a work area wider than tall the
-// renderer's table is beside the worker's.
+// Full, the worker's table holds its breakdowns, submit and finish, the
+// renderer's its loop's submit, and the renderer's is below the worker's.
+// Compact, as on a phone: the tables leave them out, a table's window is
+// stated in fewer words, and in a work area wider than tall the renderer's
+// table is beside the worker's.
 TEST_F(ControlsTest, CompactStatsLeaveOutBreakdownsAndSitBesideWhenWide) {
-  render_.sections = {{"draw", 0.4}, {"frame wait", 15.0}};
+  render_.sections = {{"draw", 0.4}, {"frame wait", 15.0}, {"submit", 0.1}};
   breakdowns_ = true;
   take(0);
   for (const bool compact : {false, true}) {
@@ -923,13 +990,13 @@ TEST_F(ControlsTest, CompactStatsLeaveOutBreakdownsAndSitBesideWhenWide) {
     for (int i = 0; i < 3; ++i) {
       frame();
     }
-    ASSERT_EQ(panel_.rows().size(), 4u) << "the breakdown is in the means";
+    ASSERT_EQ(panel_.rows().size(), 6u) << "all of them are in the means";
     const ImGuiTable* stages = vp_test::stats_table("stages");
     const ImGuiTable* render = vp_test::stats_table("render");
     ASSERT_NE(stages, nullptr);
     ASSERT_NE(render, nullptr);
-    EXPECT_EQ(stages->CurrentRow, compact ? 3 : 4);
-    EXPECT_EQ(render->CurrentRow, 2);
+    EXPECT_EQ(stages->CurrentRow, compact ? 3 : 6);
+    EXPECT_EQ(render->CurrentRow, compact ? 2 : 3);
     if (!compact) {
       EXPECT_GT(render->OuterRect.Min.y, stages->OuterRect.Max.y);
       continue;

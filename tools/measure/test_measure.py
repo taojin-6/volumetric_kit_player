@@ -6,17 +6,20 @@ Dry runs print commands without running them. Runner tests use temporary
 repositories and command stubs; no build, measurement or device is started.
 
 DryRun: lab sends a script bash can parse that builds vp_probe and runs it
-under uvrun once per timing; iphone builds and installs the app in the Mac's
-worktree for runs at the ref's commit and launches it once per timing; mac
-builds vp_probe in that worktree on each sibling's clean checkout at its pin,
-a worktree of it too, fetches the others, and waits for the Mac to be idle
-before the build and each run, whose load goes beside its log; a worktree
-already there is checked out instead; a ref the checkout does not know
-fetches every sibling.
+under uvrun once per timing, at the tile depth and labels asked for; iphone
+builds the app on 6 jobs and installs it in the Mac's worktree for runs at
+the ref's commit and launches it once per timing, with the tile depth and
+labels; mac builds vp_probe in that worktree on each sibling's clean
+checkout at its pin, a worktree of it too, fetches the others, and waits for
+the Mac to be idle before the build and each run, whose load goes beside its
+log; a worktree already there is checked out instead; a ref the checkout
+does not know fetches every sibling.
 
 Runner: failed fetches cannot use cached refs on the Mac or lab, a failed
 phone launch stops before polling, and lab logs with spaces in their paths
-are copied and summarized in order.
+are copied and summarized in order; a phone's first launch, before the app
+has made its measure folder, shows no devicectl error, and each timing's
+log is named for its mode and timing.
 """
 
 import json
@@ -107,14 +110,17 @@ class DryRun(MeasureCase):
                 for line in text.splitlines() if line.startswith("+ ")]
 
     def test_lab_sends_a_script_that_builds_and_runs_under_uvrun(self):
-        text = self.measure("lab", "pr/7", "--passes", "3", "--frames", "9")
+        text = self.measure("lab", "pr/7", "--passes", "3", "--frames", "9",
+                            "--tile-depth", "1", "--labels", "off")
         lines = text.splitlines()
         self.assertEqual(lines[0], "+ ssh lab.example bash -s <<'EOF'")
         script = "\n".join(lines[1:lines.index("EOF")])
         parsed = subprocess.run(["bash", "-n"], input=script, text=True,
                                 capture_output=True)
         self.assertEqual(parsed.returncode, 0, parsed.stderr)
-        for line in ("passes=3; frames=9", "ref=pr/7",
+        self.assertIn('--tile-depth "$depth"', script)
+        self.assertIn('--labels "$labels"', script)
+        for line in ("passes=3; frames=9", "depth=1; labels=off", "ref=pr/7",
                      'build_probe uv "$repo" "$root/build"',
                      'run_probe uvtime "$root/build" "$stream" "$timing" '
                      '"$csv"'):
@@ -138,10 +144,14 @@ class DryRun(MeasureCase):
                                        sha])
         self.assertEqual(commands[1][2:7],
                          ["cmake", "-S", worktree, "--preset", "ios"])
+        self.assertEqual(commands[2][-4:], ["--", "-allowProvisioningUpdates",
+                                            "-jobs", "6"])
         launch = commands[-2]
-        self.assertEqual(launch[-6:],
+        self.assertEqual(launch[-10:],
                          ["--measure", "rafa2.vrst", "--passes", "2",
-                          "--timing", "off"])
+                          "--timing", "off", "--tile-depth", "0", "--labels",
+                          "on"])
+        self.assertRegex(commands[-1], r"-iphone-off\.csv\)$")
 
     def test_mac_builds_on_the_clean_siblings_at_their_pins(self):
         pins = {name: self.repo(f"volumetric_kit_{name}")
@@ -186,7 +196,8 @@ class DryRun(MeasureCase):
             self.assertEqual(probe, [
                 os.path.join(build, "tests", "vp_probe"), "--worker", "--file",
                 self.env["MAC_STREAM"], "--passes", "3", "--frames", "9",
-                "--timing", timing, "--csv", probe[-1]])
+                "--timing", timing, "--tile-depth", "0", "--labels", "on",
+                "--csv", probe[-1]])
             logs.append(probe[-1])
         self.assertEqual(commands[9], "(the logs summarized into "
                          f"{logs[0][:-len('-off.csv')]}.md)")
@@ -298,9 +309,12 @@ class Runner(MeasureCase):
             if args[:4] == ['devicectl', 'device', 'info', 'files']:
                 if value('--subdirectory') == 'Documents':
                     names = ['rafa2.vrst']
+                elif os.path.exists(os.environ['TEST_LAUNCHED']):
+                    names = ['result.csv']
                 else:
-                    names = (['result.csv'] if os.path.exists(
-                        os.environ['TEST_LAUNCHED']) else [])
+                    # As devicectl says of a folder the app has not made.
+                    print('ERROR: mock no such folder', file=sys.stderr)
+                    sys.exit(1)
                 with open(value('--json-output'), 'w') as output:
                     json.dump({'result': names}, output)
             elif args[:4] == ['devicectl', 'device', 'copy', 'from']:
@@ -321,10 +335,28 @@ class Runner(MeasureCase):
 
     def test_successful_phone_launch_polls_and_copies_its_log(self):
         sha = self.phone_stubs(0)
-        done = self.measure("iphone", sha, "--timing", "off")
+        done = self.measure("iphone", sha, "--timing", "off", "--tile-depth",
+                            "1", "--labels", "off")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue(any(args[0] == "sleep" for args in self.commands()))
         self.assertIn("fixture.vrst", done.stdout)
+        # The first launch, before the app made its measure folder, shows
+        # devicectl's error nowhere.
+        self.assertNotIn("mock no such folder", done.stderr)
+        launch = [args for args in self.commands()
+                  if args[1:5] == ['devicectl', 'device', 'process', 'launch']]
+        self.assertEqual(len(launch), 1)
+        self.assertEqual(launch[0][-4:], ["--tile-depth", "1", "--labels",
+                                          "off"])
+        build = [args for args in self.commands()
+                 if args[0] == "cmake" and "--build" in args]
+        self.assertEqual(build[0][-2:], ["-jobs", "6"])
+        # Named for its mode and timing, as the lab's and the Mac's are.
+        logs = [name for _, _, names in os.walk(self.out) for name in names
+                if name.endswith(".csv")]
+        self.assertEqual(len(logs), 1, logs)
+        self.assertRegex(logs[0],
+                         r"^\d{8}T\d{6}Z-" + sha[:7] + r"-iphone-off\.csv$")
 
     def test_lab_copies_whole_log_paths_in_order(self):
         logs = ["/lab/measure runs/out/test-off.csv",

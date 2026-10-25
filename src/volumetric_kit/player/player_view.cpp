@@ -63,6 +63,7 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   app::WindowDeviceConfig device_config;
   device_config.instance.app_name = "volumetric_kit_player";
   device_config.instance.enable_validation = config.validation;
+  device_config.instance.request_debug_utils = config.debug_labels;
   device_config.graphics = app_config.device;
   VKC_ASSIGN(std::unique_ptr<core::SharedDevice> shared,
              app::make_shared_device(surface, recon::device_requirements(),
@@ -106,6 +107,7 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   view->device_timing_ = config.device_timing;
   view->player_->set_device_timing(
       config.device_timing.value_or(DeviceTiming::kAll));
+  view->player_->set_tile_depth(config.tile_depth);
   VKC_TRY(view->player_->start(view->recon_device_, view->recon_allocator_,
                                wiring.mc, view->exchange_));
   return view;
@@ -143,15 +145,15 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   // attached only then, in its place (the loop keeps its address; the
   // destructor detaches it). A skipped tick opens no ImGui frame. A frame
   // begun opens the attached profiler's too.
-  const bool profiled =
+  profiled_ =
       stats_panel_.open() && player_->device_timing() != DeviceTiming::kOff;
-  app_.set_profiler(profiled ? &profiler_ : nullptr);
+  app_.set_profiler(profiled_ ? &profiler_ : nullptr);
   VKC_ASSIGN(std::optional<gfx::windowing::Frame> begun,
              app_.begin_frame(extent));
   if (!begun) {
     return false;
   }
-  const gfx::windowing::Frame& frame = *begun;
+  gfx::windowing::Frame& frame = *begun;  // not const: the mesh's wait goes in
   // 2. The controls, Source if asked for, and the stats, as of the last frame
   // drawn.
   overlay_.new_frame();
@@ -161,9 +163,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   }
   // Detached, the profiler's last figures are old: the renderer's table is
   // empty.
-  static const gfx::FrameMetrics kUnprofiled;
-  stats_panel_.draw(stats_, shown_, shown_triangles_,
-                    profiled ? profiler_.metrics() : kUnprofiled,
+  stats_panel_.draw(stats_, shown_, shown_triangles_, render_metrics(),
                     PlaybackStats::Clock::now(), player_->live());
   // The worker times its frames' device work while the panel shows it,
   // unless a measurement fixed the timing.
@@ -172,35 +172,45 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
                                                    : DeviceTiming::kOff);
   }
   // 3. The newest mesh, an empty one included; the slot's last frame has
-  // completed. Each frame published is taken here once, and counted.
-  exchange_.begin_frame(frame.slot, [this](const recon::mesh::DeviceMesh& mesh,
-                                           FrameStamp& stamp) {
-    stats_.add_frame(stamp, PlaybackStats::Clock::now());
-    shown_triangles_ = mesh.triangle_count;
-    shown_ = std::move(stamp);
-    ++frames_taken_;
-    player_->taken();
-    return true;
-  });
+  // completed. Each frame published is taken here once, stamped, and counted
+  // once presented.
+  bool took = false;
+  exchange_.begin_frame(
+      frame.slot,
+      [this, &took](const recon::mesh::DeviceMesh& mesh, FrameStamp& stamp) {
+        stamp.taken = PlaybackStats::Clock::now();
+        shown_triangles_ = mesh.triangle_count;
+        shown_ = std::move(stamp);
+        ++frames_taken_;
+        took = true;
+        player_->taken();
+        return true;
+      });
   const core::Status drawn = drawable(exchange_);
-  // 4. The mesh, then the panels over it. recon's extract waited on its
-  // fence before it published, and this frame's submit makes its writes
-  // visible to the draw.
+  // 4. The mesh, behind a GPU wait on its ready value, then the panels over
+  // it. The worker published it once that value was reached, so the wait
+  // stalls nothing; it makes the worker's writes visible to the draw on this
+  // queue.
+  const recon::mesh::DeviceMesh& live = exchange_.live();
+  if (live.valid() && !live.empty() && live.ready.semaphore != nullptr) {
+    frame.waits.push_back(
+        {live.ready, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
+                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT});
+  }
   gfx::RenderTargetBeginInfo clear;
   clear.clear_color.float32[0] = 0.05f;
   clear.clear_color.float32[1] = 0.05f;
   clear.clear_color.float32[2] = 0.07f;
   clear.clear_color.float32[3] = 1.0f;
   {
-    // The stats' "draw" row: CPU is the recording, GPU the device's time
-    // where the graphics queue can time. It spans the whole pass, as Apple
-    // GPUs time only at a pass's bounds: inside, it reads about 0. Inert
-    // while the profiler is detached.
-    const gfx::Profiler::Scope timed = profiler_.gpu_scope(frame.cmd, "draw");
+    // The stats' "draw (mesh+UI)" row: CPU is the recording, GPU the
+    // device's time where the graphics queue can time. It spans the whole
+    // pass, as Apple GPUs time only at a pass's bounds: inside, it reads
+    // about 0. Inert while the profiler is detached.
+    const gfx::Profiler::Scope timed = profiler_.gpu_scope(frame.cmd, kDrawRow);
     frame.target->begin(frame.cmd, clear);
-    const recon::mesh::DeviceMesh& mesh = exchange_.live();
-    if (mesh.valid() && !mesh.empty()) {
-      const pipelines::HybridMeshDraw draw{live_mesh(mesh)};
+    if (live.valid() && !live.empty()) {
+      const pipelines::HybridMeshDraw draw{live_mesh(live)};
       const VkExtent2D size = app_.swapchain().extent();
       pipelines::HybridMeshFrame draws;
       draws.extent = size;
@@ -220,6 +230,12 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
   }
   // 5. Every path from begin_frame ends the frame.
   const core::Status ended = app_.end_frame(frame);
+  if (took) {
+    if (ended.ok()) {
+      shown_->presented = PlaybackStats::Clock::now();
+    }
+    stats_.add_frame(*shown_, *shown_->taken);
+  }
   VKC_TRY(drawn);
   if (!ended.ok()) {
     if (gfx::windowing::swapchain_stale(ended)) {
@@ -228,6 +244,11 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
     return ended;
   }
   return true;
+}
+
+const gfx::FrameMetrics& PlayerView::render_metrics() const noexcept {
+  static const gfx::FrameMetrics kUnprofiled;
+  return profiled_ ? profiler_.metrics() : kUnprofiled;
 }
 
 std::uint32_t PlayerView::mesh_flags() const noexcept {

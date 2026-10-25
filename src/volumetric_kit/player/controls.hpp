@@ -22,6 +22,10 @@
 
 namespace volumetric_kit::player {
 
+/// The renderer's row for its one pass, the mesh and the UI together, as
+/// Apple GPUs time only a pass's bounds (PlayerView::frame); compact stats
+/// show it as "draw".
+inline constexpr const char* kDrawRow = "draw (mesh+UI)";
 /// The controls' ImGui window.
 inline constexpr const char* kControlsWindow = "##player_controls";
 /// The stats panel's header window; its body's is derived from it
@@ -182,11 +186,14 @@ std::string display_line(const gfx::FrameMetrics& render);
 /// @ref PlaybackStats it reads keeps counting, so it reopens with current
 /// figures. Not thread-safe: the drawing thread owns it.
 ///
-/// **Compact**, for a phone: the worker's table without its breakdown rows,
-/// "submit" and "finish", each table's window stated on a shorter line ("per
-/// stream frame · 30/30 timed"), one "GPU · latency" line, the rate over the
-/// renderer's table, and, in a work area wider than tall, the renderer's
-/// table beside the worker's, whose lines have the width it leaves them.
+/// **Compact**, for a phone: the worker's table holds its stages read, decode
+/// and mesh alone (no breakdown, "submit", "wait: GPU" or "finish"), the
+/// renderer's leaves out its loop's "submit" and names @ref kDrawRow "draw",
+/// each table's window is stated
+/// on a shorter line ("per stream frame · 30/30 timed"), the one "GPU ·
+/// latency" line and the rate sit over the renderer's table, and, in a work
+/// area wider than tall, the renderer's table is beside the worker's, whose
+/// lines have the width it leaves them.
 ///
 /// @code
 /// StatsPanel panel(/*compact=*/is_phone);
@@ -225,14 +232,15 @@ class StatsPanel {
   /// @return Its lines, as of their last rebuild.
   const std::vector<std::string>& lines() const noexcept { return lines_; }
   /// @return The worker's table's rows, as of their last rebuild: the stage
-  ///         means (PlaybackStats::stage_means), breakdowns, "submit" and
-  ///         "finish" included, which compact leaves undrawn.
+  ///         means (PlaybackStats::stage_means), the rows compact leaves
+  ///         undrawn included.
   const std::vector<core::StageRow>& rows() const noexcept { return rows_; }
   /// @return What they cover: the window's frames and how many were timed,
   ///         per "stream frame".
   const gfx::ui::StageWindow& window() const noexcept { return window_; }
   /// @return The renderer's table's rows, as of their last rebuild: one
-  ///         display frame's.
+  ///         display frame's, its loop's submit included, which compact
+  ///         leaves undrawn.
   const std::vector<core::StageRow>& render_rows() const noexcept {
     return render_rows_;
   }

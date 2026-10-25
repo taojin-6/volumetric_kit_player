@@ -44,6 +44,11 @@ using vp_test::kFrames;
 constexpr float kVoxel = 0.01f;
 constexpr float kTrunc = 0.04f;
 constexpr float kRadius = 0.12f;
+// The grow stream's frame vp_test::kGrownFrame: a sphere whose blocks fall
+// between vp_test::kFirstGridSlots less vp_test::kTableFloor and the slots
+// (tests check), so a writer's grid of kBuckets could not hold it either.
+constexpr float kGrownRadius = 1.32f;
+constexpr std::int32_t kGrownBuckets = 4096;
 // The true-SDF stream's truncation: 16 voxels, past recon's
 // kTrueSdfBandVoxels (15), so every coded voxel is observed.
 constexpr float kTrueSdfTrunc = 0.16f;
@@ -53,9 +58,9 @@ struct HostMesh {
   std::vector<std::uint32_t> indices;
 };
 
-// A UV sphere of kRadius round `centre`, wound outward, its edges about 1.6
-// voxels long.
-HostMesh sphere(const recon::Vec3f& centre) {
+// A UV sphere of `radius` round `centre`, wound outward, its edges about 1.6
+// voxels long at kRadius.
+HostMesh sphere(const recon::Vec3f& centre, float radius = kRadius) {
   constexpr std::uint32_t kStacks = 24;
   constexpr std::uint32_t kSlices = 48;
   constexpr float kPi = 3.14159265f;
@@ -65,9 +70,9 @@ HostMesh sphere(const recon::Vec3f& centre) {
     for (std::uint32_t j = 0; j < kSlices; ++j) {
       const float theta = 2.0f * kPi * static_cast<float>(j) / kSlices;
       mesh.vertices.push_back(
-          centre + kRadius * recon::Vec3f(std::sin(phi) * std::cos(theta),
-                                          std::cos(phi),
-                                          std::sin(phi) * std::sin(theta)));
+          centre + radius * recon::Vec3f(std::sin(phi) * std::cos(theta),
+                                         std::cos(phi),
+                                         std::sin(phi) * std::sin(theta)));
     }
   }
   for (std::uint32_t i = 0; i < kStacks; ++i) {
@@ -86,24 +91,27 @@ HostMesh sphere(const recon::Vec3f& centre) {
 // exactly when its frame is an I-frame, at `voxel` metres a voxel and
 // `trunc` metres of truncation, coded as a true SDF when `true_sdf`
 // (recon's EncoderConfig::true_sdf). Frame `empty`, if given, holds no
-// block, so it meshes nothing: an I-frame of no blocks. It replaces a file
-// at `path`, such as the last ctest run's, which StreamWriter would refuse.
+// block, so it meshes nothing: an I-frame of no blocks. Frame `grown`, if
+// given, is a sphere of kGrownRadius, in a grid of kGrownBuckets. It replaces
+// a file at `path`, such as the last ctest run's, which StreamWriter would
+// refuse.
 core::Status write_stream(core::Device& device, core::Allocator& allocator,
                           const std::string& path,
                           std::optional<std::uint64_t> empty, float voxel,
-                          float trunc = kTrunc, bool true_sdf = false) {
+                          float trunc = kTrunc, bool true_sdf = false,
+                          std::optional<std::uint64_t> grown = std::nullopt) {
   std::error_code ec;
   std::filesystem::remove(path, ec);  // StreamWriter says why if it is left
   namespace stream = recon::stream;
   namespace vol = recon::volume;
-  constexpr std::int32_t kBuckets = 1024;
+  const std::int32_t buckets = grown ? kGrownBuckets : 1024;
   const vol::VoxelGridParams params{voxel,
                                     8,
                                     512,
                                     trunc,
                                     vol::kDefaultBucketSize,
-                                    kBuckets,
-                                    vol::kDefaultBucketSize * kBuckets,
+                                    buckets,
+                                    vol::kDefaultBucketSize * buckets,
                                     vol::kDefaultMaxChain};
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)}};
@@ -128,7 +136,8 @@ core::Status write_stream(core::Device& device, core::Allocator& allocator,
     VKC_TRY(grid.clear());
     if (i != empty) {
       const HostMesh mesh =
-          sphere(recon::Vec3f(8.0f * voxel * static_cast<float>(i), 0, 0));
+          sphere(recon::Vec3f(8.0f * voxel * static_cast<float>(i), 0, 0),
+                 i == grown ? kGrownRadius : kRadius);
       const auto vertex_count =
           static_cast<std::uint32_t>(mesh.vertices.size());
       const auto triangle_count =
@@ -180,6 +189,9 @@ core::Status write(const core::Instance& instance,
   VKC_TRY(write_stream(device, allocator,
                        (dir / vp_test::kTrueSdfStream).string(), std::nullopt,
                        kVoxel, kTrueSdfTrunc, /*true_sdf=*/true));
+  VKC_TRY(write_stream(device, allocator, (dir / vp_test::kGrowStream).string(),
+                       std::nullopt, kVoxel, kTrunc, /*true_sdf=*/false,
+                       vp_test::kGrownFrame));
   return write_stream(device, allocator,
                       (dir / vp_test::kCoarseStream).string(), std::nullopt,
                       2 * kVoxel);
