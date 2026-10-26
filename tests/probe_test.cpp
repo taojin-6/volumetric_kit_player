@@ -7,7 +7,8 @@
 // runs after_mesh once for each frame it publishes, every frame of the pass,
 // and the commit only for frames after_mesh saw; the view does the same with
 // its pipeline, where the loader has a headless surface (MoltenVK; it fails
-// on Apple, and skips on NVIDIA's ICD). On the host: --latency and
+// on Apple, and skips on NVIDIA's ICD). Each run's log (--csv) names the
+// program's hooks in its `run`. On the host: --latency and
 // --save-meshes exit 2 when a program set make_hooks, which is never made,
 // and without it pass to the stream's refusal. The device tests skip with no
 // device, and fail without one under VKC_REQUIRE_VULKAN_DEVICE. run_probe
@@ -21,6 +22,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <fstream>
 #include <mutex>
 #include <set>
 #include <string>
@@ -111,6 +113,18 @@ int run(std::vector<std::string> args, const vkp::AppConfig& config) {
   return vkp::run_probe(static_cast<int>(args.size()), argv.data(), config);
 }
 
+// The `run` a measure log at `path` states (measure_log.hpp), or empty.
+std::string logged_run(const std::string& path) {
+  std::ifstream in(path);
+  const std::string key = "# run: ";
+  for (std::string line; std::getline(in, line);) {
+    if (line.rfind(key, 0) == 0) {
+      return line.substr(key.size());
+    }
+  }
+  return {};
+}
+
 // The hooks' calls after a run of the stream's one pass: made once; after_mesh
 // once a frame, for every frame of the pass and no frame of a pass after the
 // next, whose first frame ends the run; and the commit offered only frames
@@ -164,9 +178,11 @@ TEST_F(RunProbeTest, TheWorkerMakesAProgramsHooksOnceAndRunsThemEachFrame) {
   CountingHooks hooks;
   vkp::AppConfig config;
   config.view.make_hooks = hooks.make_hooks();
-  EXPECT_EQ(run({"--worker", "--file", path_}, config), 0);
+  const std::string csv = scratch_.file("worker.csv");
+  EXPECT_EQ(run({"--worker", "--file", path_, "--csv", csv}, config), 0);
   expect_counted(hooks);
   EXPECT_FALSE(hooks.with_pipeline()) << "the worker alone has no pipeline";
+  EXPECT_EQ(logged_run(csv), "vp_probe --worker with the program's make_hooks");
 }
 
 TEST_F(RunProbeTest, TheViewMakesAProgramsHooksOnceAndRunsThemEachFrame) {
@@ -182,9 +198,11 @@ TEST_F(RunProbeTest, TheViewMakesAProgramsHooksOnceAndRunsThemEachFrame) {
   CountingHooks hooks;
   vkp::AppConfig config;
   config.view.make_hooks = hooks.make_hooks();
-  EXPECT_EQ(run({"--file", path_}, config), 0);
+  const std::string csv = scratch_.file("view.csv");
+  EXPECT_EQ(run({"--file", path_, "--csv", csv}, config), 0);
   expect_counted(hooks);
   EXPECT_TRUE(hooks.with_pipeline()) << "the view's pipeline";
+  EXPECT_EQ(logged_run(csv), "vp_probe with the program's make_hooks");
 }
 
 // Refused before the stream opens or the hooks are made; with no program's

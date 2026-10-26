@@ -41,9 +41,9 @@ namespace volumetric_kit::player {
 ///
 /// The view, or the worker alone, makes `config.view.make_hooks`' hooks as
 /// the view does (HookContext: with no view, the worker's device takes the
-/// meshes and the pipeline is null). The command line's settings replace
-/// `config.view`'s: validation, device timing, tile depth, labels and vertex
-/// sharing.
+/// meshes, the pipeline is null, and before_draw never runs, as nothing is
+/// drawn). The command line's settings replace `config.view`'s: validation,
+/// device timing, tile depth, labels and vertex sharing.
 ///
 /// @code
 /// int main(int argc, char** argv) {
