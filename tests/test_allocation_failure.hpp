@@ -13,17 +13,11 @@ namespace vp_test {
 // mismatched deallocation.
 struct AllocationFailure {
   bool measure = false;
-  // Measure only this allocation size when nonzero.
-  std::size_t measure_bytes = 0;
   std::size_t bytes = 0;
-  const void* measured_site = nullptr;
   std::size_t largest = 0;  // the largest allocation while measuring
   const void* largest_site = nullptr;
   bool armed = false;
   bool injected = false;
-  // Optionally replay a failure at a captured allocation site, so an
-  // unrelated allocation of the same size cannot consume it.
-  const void* site = nullptr;
   const void* injected_site = nullptr;
 };
 
