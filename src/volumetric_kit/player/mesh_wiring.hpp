@@ -48,7 +48,7 @@ struct MeshWiring {
 ///                          (recon::mesh::MarchingCubesConfig::share_vertices):
 ///                          true, about a third of the vertices to hold,
 ///                          write and fetch; false, three of its own a
-///                          triangle.
+///                          triangle, a cheaper extraction.
 /// @return The two configs.
 MeshWiring mesh_wiring(std::uint32_t graphics_family,
                        std::uint32_t compute_family,

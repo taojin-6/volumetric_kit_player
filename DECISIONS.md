@@ -10,9 +10,9 @@ is implemented.
   recon's `RecordInfo::set`), and live the newest record's too
   (`LiveStatus::set`); `kNoSet` when the record names none, and a rebuild
   keeps its frame's. The status line shows "set N" after the frame, only for
-  a frame that has one. Why: the set says which capture a frame came from,
-  as its sender numbered it, so a frame shown or logged can be matched with
-  it.
+  a frame that has one. Why: the set names the capture a frame came from,
+  as its sender numbered it, so a frame on screen or in a log can be traced
+  to that capture.
 - **A status or stats line too wide for the work area breaks between its
   parts,** each row as many as fit and the rows after the first indented.
   Where all but the last part fit, that is 2026-10-24's break before the
@@ -34,7 +34,8 @@ is implemented.
   lab's RTX 4090 and 1.84 against 2.55 on the M4, its decode row the same
   either way. On stays the default: the draw is indexed, so it takes either,
   and on keeps the ring's vertex arenas and each draw's fetches to under a
-  third. The switch lets a measurement weigh that on each device.
+  third. Off pays where the extraction, not the draw, bounds a frame; the
+  switch lets a measurement on each device say which.
 
 ## 2026-10-26 — An interrupted view must be recreated
 

@@ -71,7 +71,8 @@ struct PlayerViewConfig {
   bool debug_labels = true;
   /// Whether the extractor shares vertices between triangles
   /// (recon::mesh::MarchingCubesConfig::share_vertices, through mesh_wiring):
-  /// true, as by default; false, no vertex shared, three a triangle.
+  /// true, as by default; false, no vertex shared, three a triangle: a
+  /// cheaper extraction for about three times the vertices (DECISIONS.md).
   bool share_vertices = true;
 };
 

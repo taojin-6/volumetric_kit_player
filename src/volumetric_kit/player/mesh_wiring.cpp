@@ -20,8 +20,9 @@ MeshWiring mesh_wiring(std::uint32_t graphics_family,
   // Each frame in flight holds a generation, one published may wait to be
   // taken, and the next is meshed in its frame's batch before that take.
   mc.slot_count = frames_in_flight + 2;
-  // Shared, about a third of the vertices to hold, write and fetch: the draw
-  // is indexed, so it takes either.
+  // Shared, about a third of the vertices to hold, write and fetch; unshared,
+  // a cheaper extraction (DECISIONS.md). The draw is indexed, so it takes
+  // either.
   mc.share_vertices = share_vertices;
   wiring.exchange.frames_in_flight = frames_in_flight;
   wiring.exchange.cross_family = graphics_family != compute_family;
