@@ -59,6 +59,7 @@ vp_add_test(controls volumetric_kit::player)
 # loader has none (NVIDIA's ICD).
 vp_add_test(player_view STREAMS volumetric_kit::player
             volumetric_kit::core_test_support)
+target_sources(vp_player_view_test PRIVATE test_allocation_failure.cpp)
 # A scenario's source played (open_source), the iOS dialog's fields parsed
 # (parse_live_source) and its folder's first stream (folder_source): host only.
 vp_add_test(scenario volumetric_kit::player)

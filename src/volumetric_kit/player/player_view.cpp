@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "imgui.h"
+#include "volumetric_kit/core/base/exception_status.hpp"
 #include "volumetric_kit/gfx/app/shared_device_config.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
@@ -49,7 +50,7 @@ gfx::windowing::SwapchainConfig view_swapchain(VkExtent2D extent, bool live) {
 
 core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
     const gfx::windowing::SurfaceSource& surface, VkExtent2D extent,
-    std::unique_ptr<StreamPlayer> player, const PlayerViewConfig& config) {
+    std::unique_ptr<StreamPlayer> player, const PlayerViewConfig& config) try {
   if (player == nullptr) {
     return core::Status::invalid_argument("PlayerView::create needs a player");
   }
@@ -111,6 +112,9 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   VKC_TRY(view->player_->start(view->recon_device_, view->recon_allocator_,
                                wiring.mc, view->exchange_));
   return view;
+} catch (...) {
+  return core::exception_status("PlayerView::create",
+                                core::Status::Code::InvalidArgument);
 }
 
 PlayerView::PlayerView(std::unique_ptr<core::SharedDevice> shared,
@@ -138,7 +142,11 @@ PlayerView::~PlayerView() {
   app_.set_profiler(nullptr);
 }
 
-core::Result<bool> PlayerView::frame(VkExtent2D extent) {
+core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
+  if (frame_failed_) {
+    return core::Status::invalid_argument(
+        "PlayerView::frame: recreate the view after an exception");
+  }
   VKC_TRY(player_->status());
   // 1. The draw is timed as the worker is, while the stats show it as of the
   // last frame: gfx's profiler marks every frame it is attached to, so it is
@@ -245,6 +253,13 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) {
     return ended;
   }
   return true;
+} catch (...) {
+  // An exception can interrupt a begun ImGui frame or GPU recording. Neither
+  // is safe to resume. Keep all owners alive until normal teardown drains
+  // submitted work; later ticks must not acquire another swapchain image.
+  frame_failed_ = true;
+  return core::exception_status("PlayerView::frame",
+                                core::Status::Code::InvalidArgument);
 }
 
 const gfx::FrameMetrics& PlayerView::render_metrics() const noexcept {
