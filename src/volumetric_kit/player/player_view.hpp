@@ -126,6 +126,7 @@ class PlayerView {
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
   ///         @p player or an empty @p extent; or the first failure (device,
   ///         swapchain, pipeline, overlay, profiler, StreamPlayer::start).
+  ///         Host allocation failures return `OutOfMemory`.
   static core::Result<std::unique_ptr<PlayerView>> create(
       const gfx::windowing::SurfaceSource& surface, VkExtent2D extent,
       std::unique_ptr<StreamPlayer> player,
@@ -153,6 +154,10 @@ class PlayerView {
   ///         the surface settling after a rebuild), so a desktop pump waits.
   ///         An error for device loss, a refused mesh, or the worker's own
   ///         failure, its kernel build included (StreamPlayer::status).
+  ///         An allocation exception returns `OutOfMemory`; other exceptions
+  ///         return `InvalidArgument`. After an exception, destroy and recreate
+  ///         the view: subsequent ticks refuse without acquiring or submitting
+  ///         a frame. Destruction still drains any submitted device work.
   core::Result<bool> frame(VkExtent2D extent);
 
   /// @return The player; its controls are safe from any thread.
@@ -246,7 +251,8 @@ class PlayerView {
   bool source_button_ = false;   // frame() draws Source
   bool source_request_ = false;  // pressed since take_source_request
   std::optional<DeviceTiming> device_timing_;  // fixed; else the panel's
-  bool profiled_ = false;  // the draw timed this tick (render_metrics)
+  bool profiled_ = false;      // the draw timed this tick (render_metrics)
+  bool frame_failed_ = false;  // an interrupted frame requires a new view
   std::unique_ptr<StreamPlayer> player_;
   PlaybackStats stats_;  // from player_'s track
   std::optional<FrameStamp> shown_;
