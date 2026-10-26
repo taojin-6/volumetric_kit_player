@@ -6,14 +6,15 @@ Dry runs print commands without running them. Runner tests use temporary
 repositories and command stubs; no build, measurement or device is started.
 
 DryRun: lab sends a script bash can parse that builds vp_probe and runs it
-under uvrun once per timing, at the tile depth and labels asked for; iphone
-builds the app on 6 jobs and installs it in the Mac's worktree for runs at
-the ref's commit and launches it once per timing, with the tile depth and
-labels; mac builds vp_probe in that worktree on each sibling's clean
-checkout at its pin, a worktree of it too, fetches the others, and waits for
-the Mac to be idle before the build and each run, whose load goes beside its
-log; a worktree already there is checked out instead; a ref the checkout
-does not know fetches every sibling.
+under uvrun once per timing, at the tile depth, labels and vertex sharing
+asked for; iphone builds the app on 6 jobs and installs it in the Mac's
+worktree for runs at the ref's commit and launches it once per timing, with
+the tile depth and labels, and --share-vertices off only when asked; mac
+builds vp_probe in that worktree on each sibling's clean checkout at its pin,
+a worktree of it too, fetches the others, and waits for the Mac to be idle
+before the build and each run, whose load goes beside its log, passing
+--share-vertices off only when asked; a worktree already there is checked
+out instead; a ref the checkout does not know fetches every sibling.
 
 Runner: failed fetches cannot use cached refs on the Mac or lab, a failed
 phone launch stops before polling, and lab logs with spaces in their paths
@@ -22,7 +23,8 @@ has made its measure folder, never asks devicectl for it, so shows no
 error, while any other devicectl error shows; and each timing's log is
 named for its mode and timing. Mac and lab runs omit the new probe options
 at their defaults so older baselines still run, and reject nondefaults an
-older probe cannot apply.
+older probe cannot apply. Phone runs with unshared vertices require the log
+to confirm the setting; default sharing still accepts older logs.
 """
 
 import json
@@ -114,15 +116,18 @@ class DryRun(MeasureCase):
 
     def test_lab_sends_a_script_that_builds_and_runs_under_uvrun(self):
         text = self.measure("lab", "pr/7", "--passes", "3", "--frames", "9",
-                            "--tile-depth", "1", "--labels", "off")
+                            "--tile-depth", "1", "--labels", "off",
+                            "--share-vertices", "off")
         lines = text.splitlines()
         self.assertEqual(lines[0], "+ ssh lab.example bash -s <<'EOF'")
         script = "\n".join(lines[1:lines.index("EOF")])
         parsed = subprocess.run(["bash", "-n"], input=script, text=True,
                                 capture_output=True)
         self.assertEqual(parsed.returncode, 0, parsed.stderr)
-        self.assertIn('for option in --tile-depth --labels', script)
-        for line in ("passes=3; frames=9", "depth=1; labels=off", "ref=pr/7",
+        self.assertIn('for option in --tile-depth --labels --share-vertices',
+                      script)
+        for line in ("passes=3; frames=9", "depth=1; labels=off",
+                     "sharing=off", "ref=pr/7",
                      'build_probe uv "$repo" "$root/build"',
                      'run_probe uvtime "$root/build" "$stream" "$timing" '
                      '"$csv"'):
@@ -154,6 +159,14 @@ class DryRun(MeasureCase):
                           "--timing", "off", "--tile-depth", "0", "--labels",
                           "on"])
         self.assertRegex(commands[-1], r"-iphone-off\.csv\)$")
+        # Vertices unshared only when asked, as the default is the app's.
+        unshared = self.commands(self.measure(
+            "iphone", sha, "--timing", "off", "--share-vertices", "off"))
+        self.assertEqual(unshared[-2][-4:], ["--labels", "on",
+                                             "--share-vertices", "off"])
+        shared = self.commands(self.measure(
+            "iphone", sha, "--timing", "off", "--share-vertices", "on"))
+        self.assertNotIn("--share-vertices", shared[-2])
 
     def test_mac_builds_on_the_clean_siblings_at_their_pins(self):
         pins = {name: self.repo(f"volumetric_kit_{name}")
@@ -203,6 +216,23 @@ class DryRun(MeasureCase):
         self.assertEqual(commands[9], "(the logs summarized into "
                          f"{logs[0][:-len('-off.csv')]}.md)")
         self.assertEqual(len(commands), 10)
+
+    def test_mac_passes_unshared_vertices_only_when_asked(self):
+        sha = self.player_at({"core": "0" * 40})
+        for args, passed in (
+                ([], []), (["--share-vertices", "on"], []),
+                (["--share-vertices", "off"], ["--share-vertices", "off"])):
+            with self.subTest(args=args):
+                probes = [command for command in self.commands(self.measure(
+                    "mac", sha, "--timing", "off", *args))
+                          if isinstance(command, list)
+                          and command[0].endswith("/vp_probe")]
+                self.assertEqual(len(probes), 1, probes)
+                at = probes[0].index("--csv")
+                self.assertEqual(probes[0][at - len(passed):at], passed)
+                self.assertEqual(probes[0][at - len(passed) - 2:
+                                           at - len(passed)],
+                                 ["--timing", "off"])
 
     def test_mac_checks_out_a_worktree_already_there(self):
         sha = self.player_at({"core": "0" * 40})
@@ -376,6 +406,88 @@ class Runner(MeasureCase):
         self.assertIn("mock device locked", done.stderr)
         self.assertNotIn("mock no such folder", done.stderr)
 
+    def test_phones_reject_unshared_runs_without_log_confirmation(self):
+        sha = self.phone_stubs(0)
+        fixtures = os.path.join(os.path.dirname(MEASURE), "testdata")
+        shared = os.path.join(self.root, "shared.csv")
+        with open(os.path.join(fixtures, "unshared.csv"),
+                  encoding="utf-8") as source:
+            with open(shared, "w", encoding="utf-8") as target:
+                target.write(source.read().replace("# share_vertices: off",
+                                                   "# share_vertices: on"))
+        for mode in ("iphone", "ipad"):
+            for log in (os.path.join(fixtures, "before.csv"),
+                        os.path.join(fixtures, "after.csv"), shared):
+                with self.subTest(mode=mode, log=log):
+                    case = f"{mode}-{os.path.basename(log)}"
+                    self.env.update(
+                        TEST_CSV=log,
+                        TEST_LAUNCHED=os.path.join(self.root, case + ".launch"),
+                        MEASURE_OUT=os.path.join(self.out, case))
+                    before = len(self.commands())
+                    done = self.measure(mode, sha, "--timing", "off",
+                                        "--share-vertices", "off")
+                    self.assertNotEqual(done.returncode, 0, done.stdout)
+                    self.assertIn("does not confirm --share-vertices off",
+                                  done.stderr)
+                    self.assertNotIn("fixture.vrst", done.stdout)
+                    self.assertFalse(any(name.endswith(".md")
+                                         for _, _, names in os.walk(
+                                             self.env["MEASURE_OUT"])
+                                         for name in names))
+                    # Keep the rejected raw log for diagnosis but produce no
+                    # successful summary.
+                    calls = self.commands()[before:]
+                    launches = [args for args in calls if args[1:5] ==
+                                ['devicectl', 'device', 'process', 'launch']]
+                    self.assertEqual(len(launches), 1, launches)
+                    self.assertEqual(launches[0][-2:],
+                                     ["--share-vertices", "off"])
+                    self.assertEqual(sum(args[1:5] ==
+                                         ['devicectl', 'device', 'copy', 'from']
+                                         for args in calls), 1)
+
+    def test_phones_accept_confirmed_unshared_runs(self):
+        sha = self.phone_stubs(0)
+        self.env["TEST_CSV"] = os.path.join(os.path.dirname(MEASURE),
+                                            "testdata", "unshared.csv")
+        for mode in ("iphone", "ipad"):
+            with self.subTest(mode=mode):
+                self.env["TEST_LAUNCHED"] = os.path.join(self.root, mode)
+                before = len(self.commands())
+                done = self.measure(mode, sha, "--timing", "off",
+                                    "--share-vertices", "off")
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertIn("share_vertices off", done.stdout)
+                launches = [args for args in self.commands()[before:]
+                            if args[1:5] ==
+                            ['devicectl', 'device', 'process', 'launch']]
+                self.assertEqual(len(launches), 1, launches)
+                self.assertEqual(launches[0][-2:], ["--share-vertices", "off"])
+
+    def test_phones_omit_default_sharing_for_older_logs(self):
+        sha = self.phone_stubs(0)
+        for mode in ("iphone", "ipad"):
+            for fixture in ("before.csv", "after.csv"):
+                for defaults in ([], ["--share-vertices", "on"]):
+                    with self.subTest(mode=mode, fixture=fixture,
+                                      defaults=defaults):
+                        self.env.update(
+                            TEST_CSV=os.path.join(os.path.dirname(MEASURE),
+                                                  "testdata", fixture),
+                            TEST_LAUNCHED=os.path.join(
+                                self.root, f"{mode}-{fixture}-{len(defaults)}"))
+                        before = len(self.commands())
+                        done = self.measure(mode, sha, "--timing", "off",
+                                            *defaults)
+                        self.assertEqual(done.returncode, 0, done.stderr)
+                        self.assertIn("fixture.vrst", done.stdout)
+                        launches = [args for args in self.commands()[before:]
+                                    if args[1:5] == ['devicectl', 'device',
+                                                    'process', 'launch']]
+                        self.assertEqual(len(launches), 1, launches)
+                        self.assertNotIn("--share-vertices", launches[0])
+
     def test_lab_copies_whole_log_paths_in_order(self):
         logs = ["/lab/measure runs/out/test-off.csv",
                 "/lab/measure runs/out/test-all.csv"]
@@ -451,10 +563,11 @@ class Runner(MeasureCase):
 
     def test_default_mac_and_lab_runs_support_old_and_new_probes(self):
         sha = self.probe_stubs()
-        for flags in ([], ["--tile-depth", "--labels"]):
+        for flags in ([], ["--tile-depth", "--labels", "--share-vertices"]):
             self.env["TEST_PROBE_FLAGS"] = json.dumps(flags)
             for mode in ("mac", "lab"):
-                for defaults in ([], ["--tile-depth", "0", "--labels", "on"]):
+                for defaults in ([], ["--tile-depth", "0", "--labels", "on",
+                                      "--share-vertices", "on"]):
                     with self.subTest(flags=flags, mode=mode, defaults=defaults):
                         before = len(self.commands())
                         done = self.measure(mode, sha, "--timing", "off",
@@ -467,6 +580,7 @@ class Runner(MeasureCase):
                         self.assertEqual(len(probes), 1, probes)
                         self.assertNotIn("--tile-depth", probes[0])
                         self.assertNotIn("--labels", probes[0])
+                        self.assertNotIn("--share-vertices", probes[0])
                         self.assertIn("--worker", probes[0])
                         at = probes[0].index("--passes")
                         self.assertEqual(probes[0][at:at + 4],
@@ -476,7 +590,8 @@ class Runner(MeasureCase):
         sha = self.probe_stubs()
         self.env["TEST_PROBE_FLAGS"] = "[]"
         for mode in ("mac", "lab"):
-            for option, value in (("--tile-depth", "1"), ("--labels", "off")):
+            for option, value in (("--tile-depth", "1"), ("--labels", "off"),
+                                  ("--share-vertices", "off")):
                 with self.subTest(mode=mode, option=option):
                     before = len(self.commands())
                     done = self.measure(mode, sha, "--timing", "off",
@@ -489,20 +604,23 @@ class Runner(MeasureCase):
 
     def test_mac_and_lab_pass_supported_nondefaults_to_the_probe(self):
         sha = self.probe_stubs()
-        self.env["TEST_PROBE_FLAGS"] = '["--tile-depth", "--labels"]'
+        self.env["TEST_PROBE_FLAGS"] = json.dumps(
+            ["--tile-depth", "--labels", "--share-vertices"])
         for mode in ("mac", "lab"):
             with self.subTest(mode=mode):
                 before = len(self.commands())
                 done = self.measure(mode, sha, "--timing", "off",
-                                    "--tile-depth", "1", "--labels", "off")
+                                    "--tile-depth", "1", "--labels", "off",
+                                    "--share-vertices", "off")
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertIn("fixture.vrst", done.stdout)
                 probes = [args for args in self.commands()[before:]
                           if args[0] == "vp_probe" and len(args) > 1]
                 self.assertEqual(len(probes), 1, probes)
                 at = probes[0].index("--tile-depth")
-                self.assertEqual(probes[0][at:at + 4],
-                                 ["--tile-depth", "1", "--labels", "off"])
+                self.assertEqual(probes[0][at:at + 6],
+                                 ["--tile-depth", "1", "--labels", "off",
+                                  "--share-vertices", "off"])
 
 
 if __name__ == "__main__":

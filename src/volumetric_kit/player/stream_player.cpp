@@ -545,6 +545,7 @@ core::Result<bool> StreamPlayer::read_next(stream::Position* pos, Pass& pass,
         got.stamp.pts_ns = record.info.pts_ns;
         got.stamp.bytes = record.size;
         got.stamp.key = record.info.key;
+        got.stamp.set = record.info.set;
         got.stamp.record_bytes = record.size;
         got.stamp.pass = pass.number;
       }
@@ -734,6 +735,7 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
         std::lock_guard<std::mutex> lock(mutex_);
         live_status_.state = LiveState::kLive;
         live_status_.seq = record.info.seq;
+        live_status_.set = record.info.set;
         live_status_.last_record = arrived;
       }
       // The decode before it finishes first: the next parses against the
@@ -753,6 +755,7 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
       stamp.pts_ns = record.info.pts_ns;
       stamp.bytes = record.size;
       stamp.key = record.info.key;
+      stamp.set = record.info.set;
       stamp.due = arrived;
       stamp.timed = time_next_frame();
       // The body straight into one of the decoder's input slots: the other

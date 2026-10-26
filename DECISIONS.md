@@ -1,5 +1,48 @@
 # Decisions
 
+The choices made for `volumetric_kit_player`, newest first, and why.
+[AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
+is implemented.
+
+## 2026-10-26 — The frame's set on show and in the log; vertex sharing a switch
+
+- **Each frame carries its record's capture set** (`FrameStamp::set`, from
+  recon's `RecordInfo::set`), and live the newest record's too
+  (`LiveStatus::set`); `kNoSet` when the record names none, and a rebuild
+  keeps its frame's. The status line shows "set N" after the frame, only for
+  a frame that has one. Why: the set names the capture a frame came from,
+  as its sender numbered it, so a frame on screen or in a log can be traced
+  to that capture.
+- **A status or stats line too wide for the work area breaks between its
+  parts,** each row as many as fit and the rows after the first indented.
+  Where all but the last part fit, that is 2026-10-24's break before the
+  last. Why: with its set, a file's status line passes a phone's portrait
+  width.
+- **Measure format 3:** the header's `share_vertices` and the frame row's
+  `vertices` (its mesh's) and `set` (empty for none). The summarizer reads
+  formats 1 to 3, shows the setting, and the vertices per frame. Why: an A/B
+  of the switch below needs the setting and the vertices in the log, and the
+  set ties a logged frame to its capture.
+- **Vertex sharing is a switch, on by default**
+  (`PlayerViewConfig::share_vertices`, through `mesh_wiring`; vp_probe's
+  `--share-vertices`, the iOS measure launch and the runner): off, recon's
+  extractor gives each triangle three vertices of its own. Measured on
+  rafa2.vrst (vp_probe, timing all, two passes after a warm-up): off, a
+  frame holds 3.48 times the vertices (589,101 against 169,276 on average),
+  and on the M4 the view's draw takes 0.75 ms of device time against 0.40;
+  the extraction itself is cheaper, the mesh row 0.13 ms against 0.21 on the
+  lab's RTX 4090 and 1.84 against 2.55 on the M4, its decode row the same
+  either way. On stays the default: the draw is indexed, so it takes either,
+  and on keeps the ring's vertex arenas and each draw's fetches to under a
+  third. Off pays where the extraction, not the draw, bounds a frame; the
+  switch lets a measurement on each device say which.
+- **Phone runs require the log to confirm unshared vertices** when
+  `--share-vertices off` is requested. Why: older apps silently ignore
+  unknown launch options and still share vertices; a successful launch or
+  a format-2 log cannot establish that sharing was disabled. A missing or
+  different setting fails before summarizing, retaining the raw log for
+  diagnosis; default sharing still permits older refs.
+
 ## 2026-10-26 — An interrupted view must be recreated
 
 `PlayerView::create` and `frame` contain host exceptions inside their Result
@@ -9,10 +52,6 @@ recording incomplete, so the view refuses subsequent ticks before another
 acquire. The caller destroys and recreates the view to resume. Destruction
 stops the worker and drains submitted work before releasing its resources.
 This makes the failure explicit without submitting incomplete commands.
-
-The choices made for `volumetric_kit_player`, newest first, and why.
-[AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
-is implemented.
 
 ## 2026-10-25 — Another project can build on the player's library
 

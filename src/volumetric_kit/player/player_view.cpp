@@ -93,8 +93,9 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
       gfx::ui::ImGuiOverlay overlay,
       gfx::ui::ImGuiOverlay::create(
           windowed.device(), windowed.instance_handle(), overlay_config));
-  const MeshWiring wiring = mesh_wiring(
-      shared->graphics_family(), shared->compute_family(), kFramesInFlight);
+  const MeshWiring wiring =
+      mesh_wiring(shared->graphics_family(), shared->compute_family(),
+                  kFramesInFlight, config.share_vertices);
   std::unique_ptr<PlayerView> view(
       new PlayerView(std::move(shared), std::move(windowed),
                      std::move(profiler), std::move(recon_device),

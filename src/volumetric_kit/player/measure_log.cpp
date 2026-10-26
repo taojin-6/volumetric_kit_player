@@ -32,14 +32,14 @@ namespace volumetric_kit::player {
 namespace {
 
 // The format's version, which a reader checks (tools/measure/summarize.py).
-constexpr int kFormat = 2;
+constexpr int kFormat = 3;
 constexpr const char* kColumns =
     "pass,frame,type,bytes,triangles,table,stage,host_ms,wait_ms,gpu_ms,"
     "device,submits,host_waits,blocked_ns,staging_buffers,dispatches,"
     "barriers,deblock,exact_blocks,rounds,idle_ms,queue_ms,publish_ms,"
-    "take_ms,present_ms";
-// After a stage row's device: the frame row's 14 columns, empty.
-constexpr const char* kNoFigures = ",,,,,,,,,,,,,,";
+    "take_ms,present_ms,vertices,set";
+// After a stage row's device: the frame row's 16 columns, empty.
+constexpr const char* kNoFigures = ",,,,,,,,,,,,,,,,";
 
 std::string hex(std::uint32_t value) {
   char text[16];
@@ -203,6 +203,8 @@ core::Result<std::unique_ptr<MeasureLog>> MeasureLog::open(
             << "# timing: " << to_string(context.timing) << '\n'
             << "# tile_depth: " << context.tile_depth << '\n'
             << "# labels: " << (context.debug_labels ? "on" : "off") << '\n'
+            << "# share_vertices: " << (context.share_vertices ? "on" : "off")
+            << '\n'
             << "# utc: " << utc_text(context.started) << '\n';
   if (!context.thermal.empty()) {
     log->out_ << "# thermal: " << one_line(context.thermal) << '\n';
@@ -217,7 +219,8 @@ core::Result<std::unique_ptr<MeasureLog>> MeasureLog::open(
   return log;
 }
 
-core::Status MeasureLog::add(const FrameStamp& stamp, std::uint32_t triangles,
+core::Status MeasureLog::add(const FrameStamp& stamp,
+                             const recon::mesh::DeviceMesh& mesh,
                              const std::vector<core::StageRow>& render) {
   if (finished_) {
     return core::Status::io_error("MeasureLog: " + path_ + " is finished");
@@ -228,7 +231,7 @@ core::Status MeasureLog::add(const FrameStamp& stamp, std::uint32_t triangles,
   const std::string frame =
       std::to_string(stamp.pass) + "," + std::to_string(stamp.index) + "," +
       (stamp.key ? "I" : "P") + "," + std::to_string(stamp.bytes) + "," +
-      std::to_string(triangles) + ",";
+      std::to_string(mesh.triangle_count) + ",";
   const auto rows = [&](const char* table,
                         const std::vector<core::StageRow>& of) {
     for (const core::StageRow& row : of) {
@@ -250,7 +253,10 @@ core::Status MeasureLog::add(const FrameStamp& stamp, std::uint32_t triangles,
        << stamp.deblock.exact_blocks << ',' << stamp.rounds << ','
        << ms(figures.device_idle_ms) << ',' << ms(figures.queue_ms) << ','
        << ms(figures.publish_ms) << ',' << ms(figures.take_ms) << ','
-       << ms(figures.present_ms) << '\n';
+       << ms(figures.present_ms) << ',' << mesh.vertex_count << ','
+       << (stamp.set == recon::stream::kNoSet ? std::string()
+                                              : std::to_string(stamp.set))
+       << '\n';
   if (!out_) {
     return core::Status::io_error("MeasureLog: cannot write " + path_ +
                                   ".part");

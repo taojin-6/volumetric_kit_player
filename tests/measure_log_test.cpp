@@ -1,25 +1,26 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// The measure log on the host, format 2: its header names the build, the
+// The measure log on the host, format 3: its header names the build, the
 // device, the rings, the stream, how it ran, the timing, the tile depth, the
-// labels and the time, and on a phone its thermal state and Low Power Mode,
-// then the columns; each frame is its worker rows, host as busy time, GPU
-// only where measured and each device state by name, a breakdown's name kept
-// and a name with a comma quoted, then the render rows of the display frame
-// that took it, then its frame row: its device counts, dispatches and
-// barriers too, what the deblock did, its rounds, its queue idle and latency
-// and its latency legs, each empty where unknown; a rebuild writes nothing
-// and is no frame; nothing is at the path until finish renames the part
-// file, and after it nothing more is written; a folder that is not there is
-// refused. The time reads as UTC, and a log's file name, or a failed
-// launch's, is it and the player's commit. The iOS app's measure arguments
-// parse with the system's left alone, the tile depth and the labels too, and
-// what is wrong is named; the timings', depths' and switches' names
-// round-trip. On a device: its line names it, its driver, the core's memory
-// facts, its timestamps and its clocks' calibration, each as the device says,
-// and its rings run in place exactly where its device-mapped memory is
-// cached.
+// labels, the vertex sharing and the time, and on a phone its thermal state
+// and Low Power Mode, then the columns; each frame is its worker rows, host
+// as busy time, GPU only where measured and each device state by name, a
+// breakdown's name kept and a name with a comma quoted, then the render rows
+// of the display frame that took it, then its frame row: its device counts,
+// dispatches and barriers too, what the deblock did, its rounds, its queue
+// idle and latency, its latency legs, its mesh's vertices and its set, each
+// empty where unknown, the set of a record that names none too; a rebuild
+// writes nothing and is no frame; nothing is at the path until finish
+// renames the part file, and after it nothing more is written; a folder that
+// is not there is refused. The time reads as UTC, and a log's file name, or a
+// failed launch's, is it and the player's commit. The iOS app's measure
+// arguments parse with the system's left alone, the tile depth, the labels
+// and the vertex sharing too, and what is wrong is named; the timings',
+// depths' and switches' names round-trip. On a device: its line names it, its
+// driver, the core's memory facts, its timestamps and its clocks' calibration,
+// each as the device says, and its rings run in place exactly where its
+// device-mapped memory is cached.
 
 #include "volumetric_kit/player/measure_log.hpp"
 
@@ -44,6 +45,7 @@
 #include "volumetric_kit/player/command_line.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
+#include "volumetric_kit/recon/mesh/device_mesh.hpp"
 
 namespace {
 
@@ -69,12 +71,22 @@ MeasureContext context() {
   context.timing = DeviceTiming::kSampled;
   context.tile_depth = 1;
   context.debug_labels = false;
+  context.share_vertices = false;
   context.started = kStarted;
   return context;
 }
 
 // The header's lines before its columns, in order.
-constexpr std::size_t kHeaderLines = 15;
+constexpr std::size_t kHeaderLines = 16;
+
+// A mesh of `triangles` triangles over `vertices` vertices, for its counts.
+volumetric_kit::recon::mesh::DeviceMesh mesh_of(std::uint32_t triangles,
+                                                std::uint32_t vertices) {
+  volumetric_kit::recon::mesh::DeviceMesh mesh;
+  mesh.triangle_count = triangles;
+  mesh.vertex_count = vertices;
+  return mesh;
+}
 
 Lines read_lines(const std::string& path) {
   std::ifstream file(path);
@@ -85,14 +97,16 @@ Lines read_lines(const std::string& path) {
   return lines;
 }
 
-// A P-frame of pass 2, index 7, whose decode waited and was measured, with a
-// breakdown that ran untimed and a mesh the queue could not time.
+// A P-frame of pass 2, index 7, in set 77, whose decode waited and was
+// measured, with a breakdown that ran untimed and a mesh the queue could not
+// time.
 FrameStamp stamp() {
   FrameStamp stamp;
   stamp.index = 7;
   stamp.pass = 2;
   stamp.bytes = 600;
   stamp.key = false;
+  stamp.set = 77;
   stamp.timed = true;
   stamp.stages.add_cpu("read", 0.25);
   stamp.stages.add_cpu("decode", 3.0);
@@ -142,22 +156,23 @@ TEST(MeasureLog, TheHeaderNamesWhatWasMeasuredThenTheColumns) {
   ASSERT_TRUE(log.ok()) << log.status().message();
   ASSERT_TRUE((*log)->finish().ok());
   const vkp::BuildInfo& build = vkp::build_info();
-  EXPECT_EQ(
-      read_lines(path),
-      (Lines{"# format: volumetric_kit_player measure 2",
-             std::string("# player: ") + build.player,
-             std::string("# core: ") + build.core,
-             std::string("# recon: ") + build.recon,
-             std::string("# gfx: ") + build.gfx,
-             std::string("# build: ") + build.build_type,
-             "# device: Test GPU; vendor 0x1234", "# rings: copied",
-             "# stream: fixture.vrst, track 0",
-             "# run: vp_probe --worker --passes 2", "# timing: sampled",
-             "# tile_depth: 1", "# labels: off", "# utc: 2026-10-23T05:12:00Z",
-             "pass,frame,type,bytes,triangles,table,stage,host_ms,"
-             "wait_ms,gpu_ms,device,submits,host_waits,blocked_ns,"
-             "staging_buffers,dispatches,barriers,deblock,exact_blocks,"
-             "rounds,idle_ms,queue_ms,publish_ms,take_ms,present_ms"}));
+  EXPECT_EQ(read_lines(path),
+            (Lines{"# format: volumetric_kit_player measure 3",
+                   std::string("# player: ") + build.player,
+                   std::string("# core: ") + build.core,
+                   std::string("# recon: ") + build.recon,
+                   std::string("# gfx: ") + build.gfx,
+                   std::string("# build: ") + build.build_type,
+                   "# device: Test GPU; vendor 0x1234", "# rings: copied",
+                   "# stream: fixture.vrst, track 0",
+                   "# run: vp_probe --worker --passes 2", "# timing: sampled",
+                   "# tile_depth: 1", "# labels: off", "# share_vertices: off",
+                   "# utc: 2026-10-23T05:12:00Z",
+                   "pass,frame,type,bytes,triangles,table,stage,host_ms,"
+                   "wait_ms,gpu_ms,device,submits,host_waits,blocked_ns,"
+                   "staging_buffers,dispatches,barriers,deblock,exact_blocks,"
+                   "rounds,idle_ms,queue_ms,publish_ms,take_ms,present_ms,"
+                   "vertices,set"}));
   EXPECT_EQ((*log)->frames(), 0u);
 }
 
@@ -174,10 +189,23 @@ TEST(MeasureLog, APhonesHeaderStatesItsThermalStateAndLowPowerMode) {
   ASSERT_TRUE((*log)->finish().ok());
   const Lines lines = read_lines(path);
   ASSERT_EQ(lines.size(), kHeaderLines + 2);
-  EXPECT_EQ(lines[13], "# utc: 2026-10-23T05:12:00Z");
-  EXPECT_EQ(lines[14], "# thermal: fair");
-  EXPECT_EQ(lines[15], "# low_power: off");
-  EXPECT_EQ(lines[16].rfind("pass,frame,", 0), 0u);
+  EXPECT_EQ(lines[14], "# utc: 2026-10-23T05:12:00Z");
+  EXPECT_EQ(lines[15], "# thermal: fair");
+  EXPECT_EQ(lines[16], "# low_power: off");
+  EXPECT_EQ(lines[17].rfind("pass,frame,", 0), 0u);
+}
+
+// Vertices shared, as by default, the header says so.
+TEST(MeasureLog, TheHeaderSaysWhetherVerticesWereShared) {
+  vp_test::Scratch scratch;
+  const std::string path = scratch.file("run.csv");
+  MeasureContext shared = context();
+  shared.share_vertices = MeasureContext{}.share_vertices;
+  core::Result<std::unique_ptr<MeasureLog>> log =
+      MeasureLog::open(path, shared);
+  ASSERT_TRUE(log.ok()) << log.status().message();
+  ASSERT_TRUE((*log)->finish().ok());
+  EXPECT_EQ(read_lines(path)[13], "# share_vertices: on");
 }
 
 TEST(MeasureLog, AFrameIsItsWorkerRowsItsRenderRowsThenItsFigures) {
@@ -186,16 +214,16 @@ TEST(MeasureLog, AFrameIsItsWorkerRowsItsRenderRowsThenItsFigures) {
   core::Result<std::unique_ptr<MeasureLog>> log =
       MeasureLog::open(path, context());
   ASSERT_TRUE(log.ok()) << log.status().message();
-  ASSERT_TRUE((*log)->add(stamp(), 510, render()).ok());
-  FrameStamp key;
+  ASSERT_TRUE((*log)->add(stamp(), mesh_of(510, 1'530), render()).ok());
+  FrameStamp key;  // in no set
   key.key = true;
   key.stages.add_cpu("a, b", 1.0);
-  ASSERT_TRUE((*log)->add(key, 0).ok());
+  ASSERT_TRUE((*log)->add(key, mesh_of(0, 0)).ok());
   EXPECT_EQ((*log)->frames(), 2u);
   ASSERT_TRUE((*log)->finish().ok());
   const Lines lines = read_lines(path);
   ASSERT_EQ(lines.size(), kHeaderLines + 7u + 2u);
-  constexpr const char* kNone = ",,,,,,,,,,,,,,";  // the frame row's columns
+  constexpr const char* kNone = ",,,,,,,,,,,,,,,,";  // the frame row's columns
   EXPECT_EQ(
       Lines(lines.begin() + kHeaderLines, lines.end()),
       (Lines{
@@ -214,9 +242,9 @@ TEST(MeasureLog, AFrameIsItsWorkerRowsItsRenderRowsThenItsFigures) {
           std::string("2,7,P,600,510,render,present,0.2500,1.0000,,none") +
               kNone,
           "2,7,P,600,510,,,,,,,1,0,0,0,39,48,LG,1904,2,26.9100,0.4100,0.2000,"
-          "8.5000,1.1000",
+          "8.5000,1.1000,1530,77",
           std::string("1,0,I,0,0,worker,\"a, b\",1.0000,0.0000,,none") + kNone,
-          "1,0,I,0,0,,,,,,,0,0,0,0,0,0,off,0,0,,,,,"}));
+          "1,0,I,0,0,,,,,,,0,0,0,0,0,0,off,0,0,,,,,,0,"}));
 }
 
 // A paused deblock toggle's rebuild is the frame before again.
@@ -226,10 +254,10 @@ TEST(MeasureLog, ARebuildIsNoFrame) {
   core::Result<std::unique_ptr<MeasureLog>> log =
       MeasureLog::open(path, context());
   ASSERT_TRUE(log.ok()) << log.status().message();
-  ASSERT_TRUE((*log)->add(stamp(), 510).ok());
+  ASSERT_TRUE((*log)->add(stamp(), mesh_of(510, 1'530)).ok());
   FrameStamp rebuild = stamp();
   rebuild.rebuild = true;
-  ASSERT_TRUE((*log)->add(rebuild, 510).ok());
+  ASSERT_TRUE((*log)->add(rebuild, mesh_of(510, 1'530)).ok());
   EXPECT_EQ((*log)->frames(), 1u);
   ASSERT_TRUE((*log)->finish().ok());
   EXPECT_EQ(read_lines(path).size(), kHeaderLines + 5u);
@@ -242,14 +270,15 @@ TEST(MeasureLog, NothingIsAtThePathUntilFinishAndNothingAfter) {
       MeasureLog::open(path, context());
   ASSERT_TRUE(log.ok()) << log.status().message();
   EXPECT_EQ((*log)->path(), path);
-  ASSERT_TRUE((*log)->add(stamp(), 1).ok());
+  ASSERT_TRUE((*log)->add(stamp(), mesh_of(1, 3)).ok());
   EXPECT_FALSE(std::filesystem::exists(path));
   EXPECT_TRUE(std::filesystem::exists(path + ".part"));
   ASSERT_TRUE((*log)->finish().ok());
   EXPECT_TRUE(std::filesystem::exists(path));
   EXPECT_FALSE(std::filesystem::exists(path + ".part"));
   const std::uintmax_t size = std::filesystem::file_size(path);
-  EXPECT_EQ((*log)->add(stamp(), 1).domain(), core::Status::Code::IoError);
+  EXPECT_EQ((*log)->add(stamp(), mesh_of(1, 3)).domain(),
+            core::Status::Code::IoError);
   EXPECT_EQ((*log)->finish().domain(), core::Status::Code::IoError);
   EXPECT_EQ(std::filesystem::file_size(path), size);
 }
@@ -296,10 +325,11 @@ TEST(MeasureArgs, NoneWithoutMeasureAndTheSystemsAreLeftAlone) {
   EXPECT_EQ(plain.value()->timing, DeviceTiming::kAll);
   EXPECT_EQ(plain.value()->tile_depth, 0u) << "every scope";
   EXPECT_TRUE(plain.value()->debug_labels);
+  EXPECT_TRUE(plain.value()->share_vertices);
   const core::Result<std::optional<MeasureArgs>> full = vkp::parse_measure_args(
       {"--timing", "sampled", "-AppleLanguages", "(en)", "--frames", "300",
        "--labels", "off", "--measure", "rafa2.vrst", "--passes", "2",
-       "--tile-depth", "1"});
+       "--share-vertices", "off", "--tile-depth", "1"});
   ASSERT_TRUE(full.ok() && full.value().has_value()) << full.status().message();
   EXPECT_EQ(full.value()->stream, "rafa2.vrst");
   EXPECT_EQ(full.value()->passes, 2u);
@@ -307,6 +337,21 @@ TEST(MeasureArgs, NoneWithoutMeasureAndTheSystemsAreLeftAlone) {
   EXPECT_EQ(full.value()->timing, DeviceTiming::kSampled);
   EXPECT_EQ(full.value()->tile_depth, 1u);
   EXPECT_FALSE(full.value()->debug_labels);
+  EXPECT_FALSE(full.value()->share_vertices);
+  // Each switch apart: --share-vertices leaves the labels alone.
+  const core::Result<std::optional<MeasureArgs>> unshared =
+      vkp::parse_measure_args(
+          {"--measure", "rafa2.vrst", "--share-vertices", "off"});
+  ASSERT_TRUE(unshared.ok() && unshared.value().has_value())
+      << unshared.status().message();
+  EXPECT_FALSE(unshared.value()->share_vertices);
+  EXPECT_TRUE(unshared.value()->debug_labels);
+  const core::Result<std::optional<MeasureArgs>> shared =
+      vkp::parse_measure_args(
+          {"--measure", "rafa2.vrst", "--share-vertices", "on"});
+  ASSERT_TRUE(shared.ok() && shared.value().has_value())
+      << shared.status().message();
+  EXPECT_TRUE(shared.value()->share_vertices);
 }
 
 TEST(MeasureArgs, WhatIsWrongIsNamed) {
@@ -321,10 +366,17 @@ TEST(MeasureArgs, WhatIsWrongIsNamed) {
            {{"--measure", "a.vrst", "--tile-depth", "2"}, "--tile-depth '2'"},
            {{"--measure", "a.vrst", "--labels", "yes"}, "--labels 'yes'"},
            {{"--measure", "a.vrst", "--labels"}, "--labels needs a value"},
+           {{"--measure", "a.vrst", "--share-vertices", "yes"},
+            "--share-vertices 'yes': on or off"},
+           {{"--measure", "a.vrst", "--share-vertices", "1"},
+            "--share-vertices '1'"},
+           {{"--measure", "a.vrst", "--share-vertices"},
+            "--share-vertices needs a value"},
            {{"--frames", "10"}, "need --measure"},
            {{"--passes", "2"}, "need --measure"},
            {{"--tile-depth", "1"}, "need --measure"},
-           {{"--labels", "off"}, "need --measure"}}) {
+           {{"--labels", "off"}, "need --measure"},
+           {{"--share-vertices", "off"}, "need --measure"}}) {
     const core::Result<std::optional<MeasureArgs>> parsed =
         vkp::parse_measure_args(args);
     ASSERT_FALSE(parsed.ok()) << named;

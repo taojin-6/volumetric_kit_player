@@ -3,30 +3,34 @@
 # Copyright (c) 2026 Tao Jin
 """Tests of summarize.py, which ctest runs (tests/CMakeLists.txt).
 
-Summarize: on the fixtures in testdata/, a format-1 log (before.csv, M0's)
-and a format-2 one (after.csv), it keeps a log's passes after the first,
-takes nearest-rank p50 and p95, takes the GPU over measured rows alone and
-says why the rest were not, counts the device per frame, shows the load in a
-<log>.load beside a log after its device; from format 2 it shows the
-settings, the renderer's table, the dispatches and barriers, the frames'
-figures, the latency of a frame with no present apart, and the rounds; in
-either it takes a timed frame's device time over
-its stages but their breakdowns; it diffs two logs, a format-1 against a
-format-2 one, a figure one lacks shown as "-", keeps a breakdown that a later
-frame or the second log alone has under its stage, and refuses what is not a
-log of a format it reads.
+Summarize: on the fixtures in testdata/, a format-1 log (before.csv, M0's),
+a format-2 one (after.csv) and a format-3 one (unshared.csv), it keeps a
+log's passes after the first, takes nearest-rank p50 and p95, takes the GPU
+over measured rows alone and says why the rest were not, counts the device
+per frame, shows the load in a <log>.load beside a log after its device;
+from format 2 it shows the settings, the renderer's table, the dispatches and
+barriers, the frames' figures, the latency of a frame with no present apart,
+and the rounds; from format 3 whether vertices were shared, and the vertices
+per frame; in each it takes a timed frame's device time over its stages but
+their breakdowns; it diffs two logs, a format-1 against a format-2 one and a
+format-2 against a format-3 one, a figure one lacks shown as "-", keeps a
+breakdown that a later frame or the second log alone has under its stage,
+and refuses what is not a log of a format it reads.
 
 ProbeLog: each log vp_probe writes of the tests' stream (VP_PROBE_CSV, the
 paths joined by os.pathsep), two passes of its six frames with every frame
-timed, reads as one of format 2: its header says how it ran; each frame has
-its read, decode, mesh, submit, wait and finish rows, the decode's
-breakdowns where measured, and its frame row: in the kept pass, the second,
-one batch, one submit and no staging buffer, with dispatches, barriers and
-its rounds, its queue idle and latency in range as ms, and for the worker
-alone a latency to taken, as it presents nothing; it skips without
-VP_PROBE_CSV, which ctest's check fails.
+timed, vertices shared or not and both among the logs, reads as one of
+format 3: its header says how it ran; each frame has its read, decode, mesh,
+submit, wait and finish rows,
+the decode's breakdowns where measured, and its frame row: its record's set,
+none for the record that names none; three vertices a triangle unshared and
+fewer shared; in the kept pass, the second, one batch, one submit and no
+staging buffer, with dispatches, barriers and its rounds, its queue idle and
+latency in range as ms, and for the worker alone a latency to taken, as it
+presents nothing; it skips without VP_PROBE_CSV, which ctest's check fails.
 """
 
+import csv
 import os
 import sys
 import tempfile
@@ -38,6 +42,7 @@ import summarize  # noqa: E402
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "testdata")
 BEFORE = os.path.join(DATA, "before.csv")
 AFTER = os.path.join(DATA, "after.csv")
+UNSHARED = os.path.join(DATA, "unshared.csv")
 
 
 class Summarize(unittest.TestCase):
@@ -158,6 +163,35 @@ class Summarize(unittest.TestCase):
         self.assertIn("| latency ms (due -> present) | - -> 11.500 |", rows)
         self.assertIn("| draw (mesh+UI) | - -> 0.500 | - -> 0.000 "
                       "| - -> 1.100 |", rows)
+        # Neither has vertices: no row for them.
+        self.assertFalse(any(row.startswith("| vertices") for row in rows))
+
+    def test_a_format_3_log_shows_its_vertex_sharing_and_vertices(self):
+        log = summarize.read_log(UNSHARED)
+        self.assertEqual(log.format, 3)
+        self.assertEqual(log.counts["vertices"], [1500, 1530, 1560])
+        self.assertEqual(log.counts["dispatches"], [39, 39, 39])
+        rows = summarize.summary(log).splitlines()
+        self.assertIn("- rings copied, tile_depth 0, labels on, "
+                      "share_vertices off", rows)
+        self.assertIn("| vertices | 1530.00 | 1530.00 | 1560.00 |", rows)
+        self.assertIn("| latency ms (due -> taken; no present) | 10.000 "
+                      "| 10.000 | 11.000 |", rows)
+        # Formats 1 and 2 have no vertices to show.
+        for path in (BEFORE, AFTER):
+            self.assertNotIn("| vertices |",
+                             summarize.summary(summarize.read_log(path)))
+
+    def test_a_format_2_log_diffs_against_a_format_3_one(self):
+        rows = summarize.summarize([AFTER, UNSHARED]).split(
+            "## Before -> after (means)")[1].splitlines()
+        self.assertIn("| vertices | - -> 1530.000 |", rows)
+        self.assertIn("| dispatches | 39.000 -> 39.000 (+0%) |", rows)
+        self.assertIn(f"- after: {UNSHARED} (player 6666666" + "f" * 33
+                      + ", vp_probe --worker, timing all, "
+                      "share_vertices off)", rows)
+        self.assertIn(f"- before: {AFTER} (player 5555555" + "e" * 33
+                      + ", vp_probe --worker, timing all)", rows)
 
     @staticmethod
     def stage_names(rows):
@@ -194,11 +228,21 @@ class Summarize(unittest.TestCase):
         header_only = good[:good.index("\n1,0,I") + 1]
         with open(AFTER, encoding="utf-8") as file:
             good_2 = file.read()
+        with open(UNSHARED, encoding="utf-8") as file:
+            good_3 = file.read()
         for bad, why in (
-            (good.replace("measure 1", "measure 3"), "format"),
+            (good.replace("measure 1", "measure 4"), "format"),
             (good.replace("measure 1", "measure 2"), "lacks rings"),
             (good_2.replace("# labels: on\n", ""), "lacks labels"),
             (good_2.replace("measure 2", "measure 1"), "columns"),
+            (good_2.replace("measure 2", "measure 3"), "lacks share_vertices"),
+            (good_2.replace("measure 2", "measure 3").replace(
+                "# labels: on\n", "# labels: on\n# share_vertices: on\n"),
+             "columns"),
+            (good_3.replace("8.0000,,1530,501", "8.0000,,1530,five"),
+             "set 'five' is not a number"),
+            (good_3.replace("8.0000,,1530,501", "8.0000,,,501"),
+             "vertices '' is not a number"),
             (good_2.replace(",render,", ",draw,"), "table"),
             (good.replace("# timing: all\n", ""), "lacks timing"),
             (good.replace("# run: vp_probe --worker --passes 2\n", ""),
@@ -221,6 +265,9 @@ class Summarize(unittest.TestCase):
 
 class ProbeLog(unittest.TestCase):
     FRAMES = 6  # the tests' stream's (tests/test_stream.hpp)
+    # Its frames' sets as the log writes them: set_of's, empty for
+    # kNoSetFrame's record, which names none.
+    SETS = ["500", "501", "502", "503", "", "505"]
 
     def setUp(self):
         paths = os.environ.get("VP_PROBE_CSV")
@@ -232,7 +279,7 @@ class ProbeLog(unittest.TestCase):
     def test_the_header_names_what_was_measured(self):
         for log in self.logs:
             with self.subTest(log=log.path):
-                self.assertEqual(log.format, 2)
+                self.assertEqual(log.format, 3)
                 header = log.header
                 self.assertEqual(header["stream"], "sphere.vrst, track 0")
                 self.assertRegex(header["run"],
@@ -241,6 +288,7 @@ class ProbeLog(unittest.TestCase):
                 self.assertIn(header["rings"], ("in place", "copied"))
                 self.assertEqual(header["tile_depth"], "0")
                 self.assertEqual(header["labels"], "on")
+                self.assertIn(header["share_vertices"], ("on", "off"))
                 self.assertNotEqual(header["build"], "none")
                 self.assertRegex(
                     header["device"],
@@ -252,6 +300,33 @@ class ProbeLog(unittest.TestCase):
         for log in self.logs:
             with self.subTest(log=log.path):
                 self.check_frames(log)
+
+    def test_the_logs_run_vertices_shared_and_not(self):
+        self.assertEqual({log.header["share_vertices"] for log in self.logs},
+                         {"on", "off"})
+
+    def test_each_frame_has_its_set_and_its_vertices_as_shared(self):
+        for log in self.logs:
+            with self.subTest(log=log.path):
+                with open(log.path, newline="", encoding="utf-8") as file:
+                    lines = [line for line in file
+                             if not line.startswith("#")]
+                frames = [row for row in csv.DictReader(lines)
+                          if row["stage"] == ""]
+                self.assertEqual(len(frames), 2 * self.FRAMES)
+                shared = log.header["share_vertices"] == "on"
+                for row in frames:
+                    frame = int(row["frame"])
+                    self.assertEqual(row["set"], self.SETS[frame],
+                                     f"frame {frame}")
+                    triangles = int(row["triangles"])
+                    vertices = int(row["vertices"])
+                    self.assertGreater(triangles, 0, f"frame {frame}")
+                    if shared:
+                        self.assertLess(vertices, 3 * triangles)
+                    else:
+                        self.assertEqual(vertices, 3 * triangles,
+                                         f"frame {frame}")
 
     def check_frames(self, log):
         self.assertEqual(log.passes, [1, 2])

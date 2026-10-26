@@ -6,7 +6,8 @@
 /// @file test_stream.hpp
 /// The tests' streams, which vp_write_stream writes once a ctest run
 /// (CMakeLists.txt): kFrames frames of a sphere moving a block a frame, at 25
-/// fps with a pause before the fourth, an I-frame every third, each block
+/// fps with a pause before the fourth, an I-frame every third, each record in
+/// the set set_of names, frame kNoSetFrame's in none, each block
 /// of each frame with an unobserved voxel, so masked, which recon's deblock
 /// keeps at its exact decode; the same with frame kEmptyFrame meshing
 /// nothing; coded as a true SDF observed far enough out that no voxel is
@@ -28,6 +29,7 @@
 #include <system_error>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/recon/stream/session.hpp"
 #include "volumetric_kit/recon/stream/stream_writer.hpp"
 
 namespace vp_test {
@@ -63,6 +65,15 @@ constexpr std::uint32_t kTableFloor = kFirstGridSlots / 8;
 // Frame i's pts.
 inline std::uint64_t pts_of(std::uint64_t i) {
   return i * kPeriodNs + (i >= kGapAt ? kGapNs : 0);
+}
+
+// The frame whose record names no set.
+constexpr std::uint64_t kNoSetFrame = 4;
+
+// The set frame i's record names (recon's RecordInfo::set): 500 on from the
+// first, apart from its index and seq; recon's kNoSet for kNoSetFrame.
+inline std::uint64_t set_of(std::uint64_t i) {
+  return i == kNoSetFrame ? recon::stream::kNoSet : 500 + i;
 }
 
 // A directory of the test's own, removed with what it holds.

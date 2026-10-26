@@ -88,13 +88,13 @@ HostMesh sphere(const recon::Vec3f& centre, float radius = kRadius) {
 
 // A stream: kFrames frames of the sphere moving a block (8 voxels) a frame
 // along x, at pts_of, an I-frame every kIntraPeriod, each record a key
-// exactly when its frame is an I-frame, at `voxel` metres a voxel and
-// `trunc` metres of truncation, coded as a true SDF when `true_sdf`
-// (recon's EncoderConfig::true_sdf). Frame `empty`, if given, holds no
-// block, so it meshes nothing: an I-frame of no blocks. Frame `grown`, if
-// given, is a sphere of kGrownRadius, in a grid of kGrownBuckets. It replaces
-// a file at `path`, such as the last ctest run's, which StreamWriter would
-// refuse.
+// exactly when its frame is an I-frame and in set_of's set, at `voxel`
+// metres a voxel and `trunc` metres of truncation, coded as a true SDF when
+// `true_sdf` (recon's EncoderConfig::true_sdf). Frame `empty`, if given,
+// holds no block, so it meshes nothing: an I-frame of no blocks. Frame
+// `grown`, if given, is a sphere of kGrownRadius, in a grid of
+// kGrownBuckets. It replaces a file at `path`, such as the last ctest run's,
+// which StreamWriter would refuse.
 core::Status write_stream(core::Device& device, core::Allocator& allocator,
                           const std::string& path,
                           std::optional<std::uint64_t> empty, float voxel,
@@ -161,6 +161,7 @@ core::Status write_stream(core::Device& device, core::Allocator& allocator,
     record.key = info.type == recon::codec::FrameType::kIntra;
     record.pts_ns = vp_test::pts_of(i);
     record.seq = i;
+    record.set = vp_test::set_of(i);
     VKC_TRY(writer->append(record, frame.data(), frame.size()));
   }
   return writer->finish();

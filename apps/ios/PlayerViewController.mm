@@ -146,9 +146,9 @@ vkc::Result<std::optional<cfg::Source>> MeasureSource(
 // The view over `source`, on `layer`, with fingertip-sized controls, the
 // Source button, on an iPhone the compact stats, and the deblock as
 // `deblock`, if set, as a view before had it; the worker's device timing, its
-// tile depth and the labels as a `measure` launch fixes them, or else timed
-// while the stats panel is open. No validation: iOS has no layer to load
-// (DECISIONS.md).
+// tile depth, the labels and the vertex sharing as a `measure` launch fixes
+// them, or else timed while the stats panel is open. No validation: iOS has
+// no layer to load (DECISIONS.md).
 vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
     CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source,
     const std::optional<vkp::MeasureArgs>& measure,
@@ -170,6 +170,7 @@ vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
     config.device_timing = measure->timing;
     config.tile_depth = measure->tile_depth;
     config.debug_labels = measure->debug_labels;
+    config.share_vertices = measure->share_vertices;
   }
   return vkp::PlayerView::create(surface, pixels, std::move(player), config);
 }
@@ -406,6 +407,7 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   context.timing = _measure->timing;
   context.tile_depth = _measure->tile_depth;
   context.debug_labels = _measure->debug_labels;
+  context.share_vertices = _measure->share_vertices;
   context.started = std::chrono::system_clock::now();
   NSProcessInfo* process = NSProcessInfo.processInfo;
   context.thermal = ThermalText(process.thermalState);
@@ -433,8 +435,8 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   const vkp::FrameStamp& stamp = *_view->shown();
   const bool past = stamp.pass > _measure->passes;
   if (!past) {
-    const vkc::Status added = _log->add(stamp, _view->mesh().triangle_count,
-                                        _view->render_metrics().sections);
+    const vkc::Status added =
+        _log->add(stamp, _view->mesh(), _view->render_metrics().sections);
     if (!added.ok()) {
       [self fail:added];
       return;

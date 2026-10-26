@@ -3,7 +3,7 @@
 
 // vp_probe (--file PATH | --connect HOST[:PORT]) [--frames N] [--passes P]
 //          [--timing off|sampled|all] [--tile-depth 0|1] [--labels on|off]
-//          [--csv PATH] [--worker]:
+//          [--share-vertices on|off] [--csv PATH] [--worker]:
 // plays a .vrst file or a sender's live stream through PlayerView on gfx's
 // headless surface, with no window, at 60 ticks a second, and prints the
 // status line, the stats lines and the stage tables once a second. With
@@ -49,6 +49,7 @@
 #include "volumetric_kit/player/player_view.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
+#include "volumetric_kit/recon/mesh/device_mesh.hpp"
 
 namespace {
 
@@ -57,12 +58,13 @@ namespace gfx = volumetric_kit::gfx;
 namespace test = volumetric_kit::core::test;
 namespace vkp = volumetric_kit::player;
 using Clock = std::chrono::steady_clock;
+using DeviceMesh = volumetric_kit::recon::mesh::DeviceMesh;
 
 constexpr const char* kUsage =
     "usage: vp_probe (--file PATH | --connect HOST[:PORT]) [--frames N]\n"
     "                [--passes P] [--timing off|sampled|all]\n"
-    "                [--tile-depth 0|1] [--labels on|off] [--csv PATH]\n"
-    "                [--worker]\n"
+    "                [--tile-depth 0|1] [--labels on|off]\n"
+    "                [--share-vertices on|off] [--csv PATH] [--worker]\n"
     "  --file PATH            play a .vrst file\n"
     "  --connect HOST[:PORT]  play a sender's live stream\n"
     "  --frames N             stop once N stream frames are taken\n"
@@ -70,6 +72,7 @@ constexpr const char* kUsage =
     "  --timing T             the worker's device timing (default all)\n"
     "  --tile-depth D         its timed batches' tile depth (default 0)\n"
     "  --labels on|off        debug labels on the instance (default on)\n"
+    "  --share-vertices on|off  triangles share vertices (default on)\n"
     "  --csv PATH             log each frame taken into PATH\n"
     "  --worker               the worker alone, with no view\n";
 constexpr VkExtent2D kExtent{640, 480};
@@ -86,6 +89,7 @@ struct Args {
   vkp::DeviceTiming timing = vkp::DeviceTiming::kAll;
   std::uint32_t tile_depth = 0;
   bool labels = true;
+  bool share_vertices = true;
   std::string csv;
   bool worker = false;
 };
@@ -144,12 +148,12 @@ std::optional<Args> parse(int argc, char** argv) {
         return std::nullopt;
       }
       args.tile_depth = *depth;
-    } else if (arg == "--labels") {
-      const std::optional<bool> labels = vkp::parse_switch(value);
-      if (!labels) {
+    } else if (arg == "--labels" || arg == "--share-vertices") {
+      const std::optional<bool> on = vkp::parse_switch(value);
+      if (!on) {
         return std::nullopt;
       }
-      args.labels = *labels;
+      (arg == "--labels" ? args.labels : args.share_vertices) = *on;
     } else if (arg == "--csv" && args.csv.empty() && !value.empty()) {
       args.csv = value;
     } else {
@@ -164,8 +168,8 @@ std::optional<Args> parse(int argc, char** argv) {
 }
 
 // How the run drives its frames, for its log's `run`: its options, less the
-// stream, the timing, the tile depth, the labels and the log, which the log
-// states apart.
+// stream, the timing, the tile depth, the labels, the vertex sharing and the
+// log, which the log states apart.
 std::string run_text(const Args& args) {
   std::string text = "vp_probe";
   if (args.worker) {
@@ -235,6 +239,7 @@ class Run {
     context.timing = args_.timing;
     context.tile_depth = args_.tile_depth;
     context.debug_labels = args_.labels;
+    context.share_vertices = args_.share_vertices;
     context.started = started;
     VKC_ASSIGN(log_, vkp::MeasureLog::open(args_.csv, context));
     return {};
@@ -243,13 +248,13 @@ class Run {
   // A frame taken, with the render rows as of the tick that took it
   // (PlayerView::render_metrics): false once the run is done. A file's next
   // pass's first frame past the last pass ends it, uncounted.
-  core::Result<bool> take(const vkp::FrameStamp& stamp, std::uint32_t triangles,
+  core::Result<bool> take(const vkp::FrameStamp& stamp, const DeviceMesh& mesh,
                           const std::vector<core::StageRow>& render = {}) {
     if (!live_ && stamp.pass > args_.passes.value_or(1)) {
       return false;
     }
     if (log_ != nullptr) {
-      VKC_TRY(log_->add(stamp, triangles, render));
+      VKC_TRY(log_->add(stamp, mesh, render));
     }
     ++taken_;
     return !args_.frames || taken_ < *args_.frames;
@@ -314,6 +319,7 @@ core::Status run_view(const Args& args,
   config.device_timing = args.timing;
   config.tile_depth = args.tile_depth;
   config.debug_labels = args.labels;
+  config.share_vertices = args.share_vertices;
   const std::chrono::system_clock::time_point started =
       std::chrono::system_clock::now();
   VKC_ASSIGN(
@@ -335,7 +341,7 @@ core::Status run_view(const Args& args,
           return true;
         }
         seen = view->frames_taken();
-        return run.take(*view->shown(), view->mesh().triangle_count,
+        return run.take(*view->shown(), view->mesh(),
                         view->render_metrics().sections);
       },
       [&] {
@@ -387,8 +393,9 @@ core::Status run_worker(const Args& args,
              core::Device::create(instance, physical, requirements));
   VKC_ASSIGN(core::Allocator allocator,
              core::Allocator::create(instance.handle(), device));
-  const vkp::MeshWiring wiring = vkp::mesh_wiring(
-      device.queue_family(), device.queue_family(), kFramesInFlight);
+  const vkp::MeshWiring wiring =
+      vkp::mesh_wiring(device.queue_family(), device.queue_family(),
+                       kFramesInFlight, args.share_vertices);
   vkp::FrameExchange exchange(wiring.exchange);
   vkp::PlaybackStats stats(player->track_stats(), player->rate());
   std::optional<vkp::FrameStamp> shown;
@@ -406,23 +413,22 @@ core::Status run_worker(const Args& args,
         // Each mesh taken as a renderer of kFramesInFlight frames takes it,
         // with nothing drawn or presented, so every slot's frame has
         // completed.
-        std::optional<std::uint32_t> triangles;
-        exchange.begin_frame(
-            slot, [&](const volumetric_kit::recon::mesh::DeviceMesh& mesh,
-                      vkp::FrameStamp& stamp) {
-              stamp.taken = vkp::PlaybackStats::Clock::now();
-              stats.add_frame(stamp, *stamp.taken);
-              triangles = mesh.triangle_count;
-              shown = std::move(stamp);
-              player->taken();
-              return true;
-            });
+        bool took = false;
+        exchange.begin_frame(slot,
+                             [&](const DeviceMesh&, vkp::FrameStamp& stamp) {
+                               stamp.taken = vkp::PlaybackStats::Clock::now();
+                               stats.add_frame(stamp, *stamp.taken);
+                               shown = std::move(stamp);
+                               player->taken();
+                               took = true;
+                               return true;
+                             });
         slot = (slot + 1) % kFramesInFlight;
         VKC_TRY(vkp::drawable(exchange));
-        if (!triangles) {
+        if (!took) {
           return true;
         }
-        return run.take(*shown, *triangles);
+        return run.take(*shown, exchange.live());
       },
       [&] {
         std::string line = status_text(*player, shown) + " | per stream frame:";
