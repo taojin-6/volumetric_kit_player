@@ -153,10 +153,11 @@ void draw_deblock(StreamPlayer& player) {
   }
 }
 
-// A file's controls: Play/Pause, Step, Loop, Normals and Deblock, then the
+// A file's controls: Play/Pause, Step, Loop, Normals and Deblock; returns its
 // status line.
-void draw_file_controls(StreamPlayer& player,
-                        const std::optional<FrameStamp>& shown, bool& normals) {
+std::string draw_file_controls(StreamPlayer& player,
+                               const std::optional<FrameStamp>& shown,
+                               bool& normals) {
   const ImVec2 button = button_size();
   // One ID for both labels, so a press that flips the label completes.
   if (ImGui::Button(player.playing() ? "Pause###play" : "Play###play",
@@ -179,9 +180,7 @@ void draw_file_controls(StreamPlayer& player,
   ImGui::SameLine();
   draw_normals(normals);
   draw_deblock(player);
-  draw_parted_line(
-      status_line(shown, player.frame_count(), player.playing(), loop),
-      text_room());
+  return status_line(shown, player.frame_count(), player.playing(), loop);
 }
 
 }  // namespace
@@ -194,15 +193,16 @@ void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
              viewport->WorkPos.y + viewport->WorkSize.y),
       ImGuiCond_Always, ImVec2(0.5f, 1.0f));
   if (ImGui::Begin(kControlsWindow, nullptr, kFlags)) {
+    // A file's or a live player's status line, drawn by the one call below.
+    std::string status;
     if (player.live()) {
       draw_normals(normals);
       draw_deblock(player);
-      draw_parted_line(
-          live_status_line(player.live_status(), Playback::Clock::now()),
-          text_room());
+      status = live_status_line(player.live_status(), Playback::Clock::now());
     } else {
-      draw_file_controls(player, shown, normals);
+      status = draw_file_controls(player, shown, normals);
     }
+    draw_parted_line(status, text_room());
   }
   ImGui::End();
 }
