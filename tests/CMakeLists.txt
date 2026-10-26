@@ -102,8 +102,9 @@ target_link_libraries(vp_probe PRIVATE volumetric_kit::player_probe)
 vp_target_warnings(vp_probe)
 # run_probe in a program's own main, with hooks of the program's
 # (AppConfig::view.make_hooks), on the tests' stream: the worker alone
-# everywhere, and the view where the loader has a headless surface; and its
-# hooks' options refused with them, on the host.
+# everywhere, and the view where the loader has a headless surface, the hooks
+# counting their calls or keeping a mesh more of the ring; on the host, its
+# hooks' options refused with them, and the view's settings it plays with.
 vp_add_test(probe STREAMS volumetric_kit::player_probe
             volumetric_kit::core_test_policy)
 set(VP_PROBE_DIR "${CMAKE_CURRENT_BINARY_DIR}/probe")

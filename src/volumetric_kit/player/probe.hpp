@@ -8,7 +8,10 @@
 ///        `volumetric_kit::player_probe`, which links the core's test policy:
 ///        `tests/vp_probe.cpp` is one call of @ref run_probe. Not for iOS.
 
+#include <optional>
+
 #include "volumetric_kit/player/app_config.hpp"
+#include "volumetric_kit/player/player_view.hpp"
 
 namespace volumetric_kit::player {
 
@@ -43,7 +46,8 @@ namespace volumetric_kit::player {
 /// the view does (HookContext: with no view, the worker's device takes the
 /// meshes, the pipeline is null, and before_draw never runs, as nothing is
 /// drawn). The command line's settings replace `config.view`'s: validation,
-/// device timing, tile depth, labels and vertex sharing.
+/// device timing, tile depth, labels and vertex sharing
+/// (@ref probe_view_config).
 ///
 /// @code
 /// int main(int argc, char** argv) {
@@ -60,5 +64,23 @@ namespace volumetric_kit::player {
 ///         that did not load; 2 for its usage, or for `--latency` or
 ///         `--save-meshes` with `config.view.make_hooks` set.
 int run_probe(int argc, char** argv, const AppConfig& config = {});
+
+/// @brief The view's settings @ref run_probe plays with, on the host alone.
+///
+/// @code
+/// const std::optional<PlayerViewConfig> view =
+///     probe_view_config(config, argc, argv);
+/// @endcode
+/// @param config  The program's settings.
+/// @param argc    The command line's count, as main has it.
+/// @param argv    Its arguments, as main has them.
+/// @return `config.view`, make_hooks included, with the command line's
+///         validation (on in Debug, else as the core's test policy asks),
+///         device timing, tile depth, labels and vertex sharing, given or
+///         not; none for a command line refused with the usage.
+///         `--latency` and `--save-meshes` install their hooks over an
+///         empty make_hooks as run_probe starts.
+std::optional<PlayerViewConfig> probe_view_config(const AppConfig& config,
+                                                  int argc, char** argv);
 
 }  // namespace volumetric_kit::player

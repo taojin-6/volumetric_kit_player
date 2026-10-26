@@ -177,6 +177,18 @@ std::optional<Args> parse(int argc, char** argv) {
   return args;
 }
 
+// The view's settings (probe_view_config): the program's, then the command
+// line's.
+vkp::PlayerViewConfig view_config(const Args& args, const vkp::AppConfig& app) {
+  vkp::PlayerViewConfig config = app.view;
+  config.validation = validation() != test::Validation::Off;
+  config.device_timing = args.timing;
+  config.tile_depth = args.tile_depth;
+  config.debug_labels = args.labels;
+  config.share_vertices = args.share_vertices;
+  return config;
+}
+
 // How the run drives its frames, for its log's `run`: its options, less the
 // stream, the timing, the tile depth, the labels, the vertex sharing and the
 // log, which the log states apart. The hooks' options add a batch a frame, as
@@ -727,14 +739,8 @@ core::Status run(const Args& args, const vkp::AppConfig& app, Probes& probes) {
   if (args.latency) {
     probes.latency.emplace();
   }
-  // The program's settings, then the command line's; the hooks' options
-  // install theirs as a program's own would.
-  vkp::PlayerViewConfig config = app.view;
-  config.validation = validation() != test::Validation::Off;
-  config.device_timing = args.timing;
-  config.tile_depth = args.tile_depth;
-  config.debug_labels = args.labels;
-  config.share_vertices = args.share_vertices;
+  // The hooks' options install theirs as a program's own would.
+  vkp::PlayerViewConfig config = view_config(args, app);
   if (probes.any()) {
     config.make_hooks = make_probe_hooks(probes);
   }
@@ -799,4 +805,14 @@ int volumetric_kit::player::run_probe(int argc, char** argv,
     }
   }
   return log.exit_code(code);
+}
+
+std::optional<volumetric_kit::player::PlayerViewConfig>
+volumetric_kit::player::probe_view_config(const AppConfig& config, int argc,
+                                          char** argv) {
+  const std::optional<Args> args = parse(argc, argv);
+  if (!args) {
+    return std::nullopt;
+  }
+  return view_config(*args, config);
 }

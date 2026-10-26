@@ -19,6 +19,8 @@ amends 2026-10-25's library entry.
   the scenario's `window.validation` (on in Debug, as before), vp_probe its
   options' validation, timing, tile depth, labels and vertex sharing. Why:
   what a run asks for wins over what the program built in.
+  `desktop_view_config` and `probe_view_config` give the result on the host,
+  so a test checks it.
 - **vp_probe's `--latency` and `--save-meshes` install their hooks as
   `make_hooks`,** as a program's own would, and exit 2 when the program set
   it; the log's `run` names a program's hooks, a batch more a frame as
