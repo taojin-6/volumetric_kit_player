@@ -160,8 +160,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - build: the iOS app needs iOS 26 or newer: `cmake --preset ios` targets
   iOS 26.0, the family's iOS floor.
 - build: the player pins core #57's merge (fa4638c, 0.22.0), gfx main at
-  #156's merge (2d40d1e) and recon #293's head (ef83b8f, MeshExchange's
-  `CommitDecision`), and requires core 0.22.0. The view presents FIFO as
+  #156's merge (2d40d1e) and recon main at #293's merge (978f6d4,
+  MeshExchange's `CommitDecision`), and requires core 0.22.0. The view presents FIFO as
   gfx's default (gfx #150), naming no mode.
 - The extractor's ring is two slots past the frames in flight
   (`mesh_wiring`); the draw waits on the GPU for the mesh's `ready` value;
