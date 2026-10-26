@@ -34,11 +34,11 @@
 #       The logs as markdown (summarize.py): two give a before/after diff.
 #
 # Options: --passes P, --frames N, --timing T,... (off, sampled, all), and
-# for A/B runs --tile-depth 0|1, --labels on|off and
-# --share-vertices on|off. Defaults: 2 passes, the first a warm-up that the
-# summary leaves out; every frame of them; timing off, then all; tile depth 0;
-# labels on; vertices shared. A setting at its default is not passed, so older
-# probes and apps still run; on mac and lab a nondefault needs option support.
+# for A/B runs --tile-depth 0|1, --labels on|off and --share-vertices on|off.
+# Defaults: 2 passes, the first a warm-up that the summary leaves out; every
+# frame of them; timing off, then all; tile depth 0; labels on; vertices
+# shared. On mac and lab a setting at its default is not passed, so older
+# probes still run, and a nondefault needs option support.
 # Each run's log is named
 # <utc>-<commit>-<mode>-<timing>.csv. <ref> is a branch, a tag, a commit, or
 # pr/<n>. --dry-run prints the commands and runs none. Settings come from the

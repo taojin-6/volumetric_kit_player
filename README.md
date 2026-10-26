@@ -111,9 +111,9 @@ machine; for the lab's, over the VPN, copy it and set `source.host` to
 The picture joins at the sender's newest I-frame. The panel at the bottom is
 then Normals and Deblock over a status line: connecting, live with the
 newest record's seq and set and how long nothing has come, or reconnecting
-with why, about every second until Esc. The keys that play, pause, step and loop do
-nothing. The stats show the bitrate and the records a second over the last
-second.
+with why, about every second until Esc. The keys that play, pause, step and
+loop do nothing. The stats show the bitrate and the records a second over
+the last second.
 
 `"$root/build/tests/vp_probe" --connect host[:port]` plays a live stream
 with no window, and prints the status and stats lines once a second (below).
@@ -235,22 +235,21 @@ tools/measure/measure --dry-run lab <ref>   # prints the commands, runs none
 
 Each runs two passes of rafa2.vrst, the first a warm-up, with timing off and
 then all; `--tile-depth`, `--labels` and `--share-vertices` select the
-probe's settings. A setting at its default (0, on and on) is not passed, so
-older probes and apps also run; for `mac` and `lab`, a nondefault requires
-the target probe to support the option. `lab` builds
-`vp_probe` in its own clone of the player on the lab and runs it under
-`uvrun --time`. `mac` builds it in the Mac's worktree for runs, on the
-siblings' checkouts that are clean at their pins, and runs it once the Mac is
-idle, its load written beside each log. `iphone` and `ipad` build the signed
-Release app in that worktree on 6 jobs, install it, copy rafa2.vrst into its
-Documents if missing, then launch it once per timing; they start an app on
-the device, so they run only with the owner's go-ahead. Each log is named
-`<utc>-<commit>-<mode>-<timing>.csv`. `summarize` reads formats 1 to 3, and
-gives the settings, per stage, the worker's and the renderer's, the mean, p50
-and p95 of host, wait and GPU, the counts and vertices per frame, the
-frames' figures (device time,
-queue idle and latency, the latency to the present, or to taken for frames
-with none, its legs, rounds), a run's load, and with two logs their diff.
+probe's settings. For `mac` and `lab`, a setting at its default (0, on and
+on) is not passed, so older probes also run, and a nondefault requires the
+target probe to support the option. `lab` builds `vp_probe` in its own clone
+of the player on the lab and runs it under `uvrun --time`. `mac` builds it in
+the Mac's worktree for runs, on the siblings' checkouts that are clean at
+their pins, and runs it once the Mac is idle, its load written beside each
+log. `iphone` and `ipad` build the signed Release app in that worktree on 6
+jobs, install it, copy rafa2.vrst into its Documents if missing, then launch
+it once per timing; they start an app on the device, so they run only with
+the owner's go-ahead. Each log is named `<utc>-<commit>-<mode>-<timing>.csv`.
+`summarize` reads formats 1 to 3, and gives the settings, per stage, the
+worker's and the renderer's, the mean, p50 and p95 of host, wait and GPU, the
+counts and vertices per frame, the frames' figures (device time, queue idle
+and latency, the latency to the present, or to taken for frames with none,
+its legs, rounds), a run's load, and with two logs their diff.
 
 ## Development
 

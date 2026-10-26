@@ -14,11 +14,10 @@ the renderer's (format 2), the mean, p50 and p95 of its host (busy), wait and
 GPU milliseconds, and how many of its frames had the GPU measured; then the
 worker's device counts per frame (format 2 adds its dispatches and barriers)
 and, from format 3, its mesh's vertices; then the frames' figures: the device
-time of a
-timed frame (its stages' GPU, breakdowns aside) and, from format 2, its queue
-idle and queue latency, its latency from due to the present call, or for a
-frame with no present (the worker alone) from due to taken, apart, and its
-legs, and the rounds its decode ran on the device. Given two logs, a
+time of a timed frame (its stages' GPU, breakdowns aside) and, from format 2,
+its queue idle and queue latency, its latency from due to the present call,
+or for a frame with no present (the worker alone) from due to taken, apart,
+and its legs, and the rounds its decode ran on the device. Given two logs, a
 before/after diff of the first and the second follows; a figure one log lacks
 shows as "-". A log of several passes leaves out its first, which warms up.
 p50 and p95 are nearest-rank. A stage first seen in a later frame, or only in
