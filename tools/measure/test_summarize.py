@@ -19,8 +19,9 @@ and refuses what is not a log of a format it reads.
 
 ProbeLog: each log vp_probe writes of the tests' stream (VP_PROBE_CSV, the
 paths joined by os.pathsep), two passes of its six frames with every frame
-timed, vertices shared or not, reads as one of format 3: its header says how
-it ran; each frame has its read, decode, mesh, submit, wait and finish rows,
+timed, vertices shared or not and both among the logs, reads as one of
+format 3: its header says how it ran; each frame has its read, decode, mesh,
+submit, wait and finish rows,
 the decode's breakdowns where measured, and its frame row: its record's set,
 none for the record that names none; three vertices a triangle unshared and
 fewer shared; in the kept pass, the second, one batch, one submit and no
@@ -299,6 +300,10 @@ class ProbeLog(unittest.TestCase):
         for log in self.logs:
             with self.subTest(log=log.path):
                 self.check_frames(log)
+
+    def test_the_logs_run_vertices_shared_and_not(self):
+        self.assertEqual({log.header["share_vertices"] for log in self.logs},
+                         {"on", "off"})
 
     def test_each_frame_has_its_set_and_its_vertices_as_shared(self):
         for log in self.logs:
