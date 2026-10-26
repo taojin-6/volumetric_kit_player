@@ -619,20 +619,20 @@ core::Result<bool> StreamPlayer::finish_frame(InFlight frame, Pass& pass) {
 core::Status StreamPlayer::play_live() {
   LiveConnection connection(address_);
   while (wait_unparked()) {
-    networking::StreamClient* const client = connection.poll();
-    if (client == nullptr) {  // waiting to retry, or the attempt failed
-      show_connecting(connection.last_error());
-      if (wait_to_retry(connection.retry_at())) {
-        connection.drop();  // a park ended the wait: the unpark connects
-      }
-      continue;
+    if (networking::StreamClient* const client = connection.poll()) {
+      // A new grid each connection, the decoder kept (DECISIONS.md).
+      grid_.reset();
+      core::Status ended;
+      VKC_TRY(play_connection(*client, &ended));
+      connection.drop(ended);  // closed at once
     }
-    // A new grid each connection, the decoder kept (DECISIONS.md).
-    grid_.reset();
-    core::Status ended;
-    VKC_TRY(play_connection(*client, &ended));
-    connection.drop(ended);                    // closed at once
-    show_connecting(connection.last_error());  // none after a park or quit
+    // Why it ended or failed, none after a park or quit, and the wait to
+    // retry, none after a clean end. A park, made before the wait or during
+    // it, ends it, so the unpark connects at once.
+    show_connecting(connection.last_error());
+    if (wait_to_retry(connection.retry_at())) {
+      connection.drop();
+    }
   }
   return {};
 }
