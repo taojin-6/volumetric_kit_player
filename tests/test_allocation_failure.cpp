@@ -6,20 +6,12 @@
 #include <cstdlib>
 #include <new>
 
-#if defined(_MSC_VER)
-#include <intrin.h>
-#endif
-
 namespace vp_test {
 thread_local AllocationFailure allocation_failure;
 }  // namespace vp_test
 
 void* operator new(std::size_t bytes) {
-#if defined(_MSC_VER)
-  const void* site = _ReturnAddress();
-#else
   const void* site = __builtin_return_address(0);
-#endif
   auto& failure = vp_test::allocation_failure;
   if (failure.measure &&
       (failure.measure_bytes == 0 || failure.measure_bytes == bytes)) {
