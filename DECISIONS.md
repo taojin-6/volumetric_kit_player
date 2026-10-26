@@ -36,6 +36,12 @@ is implemented.
   and on keeps the ring's vertex arenas and each draw's fetches to under a
   third. Off pays where the extraction, not the draw, bounds a frame; the
   switch lets a measurement on each device say which.
+- **Phone runs require the log to confirm unshared vertices** when
+  `--share-vertices off` is requested. Why: older apps silently ignore
+  unknown launch options and still share vertices; a successful launch or
+  a format-2 log cannot establish that sharing was disabled. A missing or
+  different setting fails before summarizing, retaining the raw log for
+  diagnosis; default sharing still permits older refs.
 
 ## 2026-10-26 — An interrupted view must be recreated
 
