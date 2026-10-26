@@ -66,9 +66,10 @@ inline constexpr std::chrono::milliseconds kLiveRetry{1000};
 ///        again after it ends: at the next @ref poll after a clean end, and
 ///        the retry wait later after an error.
 ///
-/// A new client never blocks (recon's `StreamClient::connect`): its first
-/// `next` looks the name up and connects, so a refused connect is that
-/// call's error, which the caller passes to @ref drop.
+/// A new client never blocks (recon's `StreamClient::connect`): it looks the
+/// name up on a thread of its own, and its `next` connects, so a name that
+/// does not resolve or a refused connect is an error of `next`, which the
+/// caller passes to @ref drop.
 ///
 /// @code
 /// LiveConnection connection(address);
