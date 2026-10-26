@@ -23,7 +23,8 @@ has made its measure folder, never asks devicectl for it, so shows no
 error, while any other devicectl error shows; and each timing's log is
 named for its mode and timing. Mac and lab runs omit the new probe options
 at their defaults so older baselines still run, and reject nondefaults an
-older probe cannot apply.
+older probe cannot apply. Phone runs with unshared vertices require the log
+to confirm the setting; default sharing still accepts older logs.
 """
 
 import json
@@ -404,6 +405,88 @@ class Runner(MeasureCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("mock device locked", done.stderr)
         self.assertNotIn("mock no such folder", done.stderr)
+
+    def test_phones_reject_unshared_runs_without_log_confirmation(self):
+        sha = self.phone_stubs(0)
+        fixtures = os.path.join(os.path.dirname(MEASURE), "testdata")
+        shared = os.path.join(self.root, "shared.csv")
+        with open(os.path.join(fixtures, "unshared.csv"),
+                  encoding="utf-8") as source:
+            with open(shared, "w", encoding="utf-8") as target:
+                target.write(source.read().replace("# share_vertices: off",
+                                                   "# share_vertices: on"))
+        for mode in ("iphone", "ipad"):
+            for log in (os.path.join(fixtures, "before.csv"),
+                        os.path.join(fixtures, "after.csv"), shared):
+                with self.subTest(mode=mode, log=log):
+                    case = f"{mode}-{os.path.basename(log)}"
+                    self.env.update(
+                        TEST_CSV=log,
+                        TEST_LAUNCHED=os.path.join(self.root, case + ".launch"),
+                        MEASURE_OUT=os.path.join(self.out, case))
+                    before = len(self.commands())
+                    done = self.measure(mode, sha, "--timing", "off",
+                                        "--share-vertices", "off")
+                    self.assertNotEqual(done.returncode, 0, done.stdout)
+                    self.assertIn("does not confirm --share-vertices off",
+                                  done.stderr)
+                    self.assertNotIn("fixture.vrst", done.stdout)
+                    self.assertFalse(any(name.endswith(".md")
+                                         for _, _, names in os.walk(
+                                             self.env["MEASURE_OUT"])
+                                         for name in names))
+                    # Keep the rejected raw log for diagnosis but produce no
+                    # successful summary.
+                    calls = self.commands()[before:]
+                    launches = [args for args in calls if args[1:5] ==
+                                ['devicectl', 'device', 'process', 'launch']]
+                    self.assertEqual(len(launches), 1, launches)
+                    self.assertEqual(launches[0][-2:],
+                                     ["--share-vertices", "off"])
+                    self.assertEqual(sum(args[1:5] ==
+                                         ['devicectl', 'device', 'copy', 'from']
+                                         for args in calls), 1)
+
+    def test_phones_accept_confirmed_unshared_runs(self):
+        sha = self.phone_stubs(0)
+        self.env["TEST_CSV"] = os.path.join(os.path.dirname(MEASURE),
+                                            "testdata", "unshared.csv")
+        for mode in ("iphone", "ipad"):
+            with self.subTest(mode=mode):
+                self.env["TEST_LAUNCHED"] = os.path.join(self.root, mode)
+                before = len(self.commands())
+                done = self.measure(mode, sha, "--timing", "off",
+                                    "--share-vertices", "off")
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertIn("share_vertices off", done.stdout)
+                launches = [args for args in self.commands()[before:]
+                            if args[1:5] ==
+                            ['devicectl', 'device', 'process', 'launch']]
+                self.assertEqual(len(launches), 1, launches)
+                self.assertEqual(launches[0][-2:], ["--share-vertices", "off"])
+
+    def test_phones_omit_default_sharing_for_older_logs(self):
+        sha = self.phone_stubs(0)
+        for mode in ("iphone", "ipad"):
+            for fixture in ("before.csv", "after.csv"):
+                for defaults in ([], ["--share-vertices", "on"]):
+                    with self.subTest(mode=mode, fixture=fixture,
+                                      defaults=defaults):
+                        self.env.update(
+                            TEST_CSV=os.path.join(os.path.dirname(MEASURE),
+                                                  "testdata", fixture),
+                            TEST_LAUNCHED=os.path.join(
+                                self.root, f"{mode}-{fixture}-{len(defaults)}"))
+                        before = len(self.commands())
+                        done = self.measure(mode, sha, "--timing", "off",
+                                            *defaults)
+                        self.assertEqual(done.returncode, 0, done.stderr)
+                        self.assertIn("fixture.vrst", done.stdout)
+                        launches = [args for args in self.commands()[before:]
+                                    if args[1:5] == ['devicectl', 'device',
+                                                    'process', 'launch']]
+                        self.assertEqual(len(launches), 1, launches)
+                        self.assertNotIn("--share-vertices", launches[0])
 
     def test_lab_copies_whole_log_paths_in_order(self):
         logs = ["/lab/measure runs/out/test-off.csv",

@@ -263,6 +263,9 @@ log. `iphone` and `ipad` build the signed Release app in that worktree on 6
 jobs, install it, copy rafa2.vrst into its Documents if missing, then launch
 it once per timing; they start an app on the device, so they run only with
 the owner's go-ahead. Each log is named `<utc>-<commit>-<mode>-<timing>.csv`.
+For `--share-vertices off`, phone runs require each returned log to confirm
+`share_vertices: off`; a missing or different setting fails the run before
+summarizing it. Default sharing still accepts older logs.
 `summarize` reads formats 1 to 3, and gives the settings, per stage, the
 worker's and the renderer's, the mean, p50 and p95 of host, wait and GPU, the
 counts and vertices per frame, the frames' figures (device time, queue idle
