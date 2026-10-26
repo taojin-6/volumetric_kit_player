@@ -169,10 +169,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - build: the iOS app needs iOS 26 or newer: `cmake --preset ios` targets
   iOS 26.0, the family's iOS floor.
-- build: the player pins core #57's merge (fa4638c, 0.22.0), gfx main at
-  #156's merge (2d40d1e) and recon main at #293's merge (978f6d4,
-  MeshExchange's `CommitDecision`), and requires core 0.22.0. The view presents FIFO as
-  gfx's default (gfx #150), naming no mode.
+- build: the player pins core #61's merge (84dc584, 0.24.0), gfx main at
+  #158's merge (0106609) and recon main at #294's merge (6b390ac), and
+  requires core 0.24.0, the floor recon's library asks for. A commit hook's
+  skip is recon's `CommitDecision::kDrop` (recon #293). The view presents
+  FIFO as gfx's default (gfx #150), naming no mode. A set a program's
+  `before_draw` binds is made with `HookContext::commit_allocator` too, as
+  gfx's `HybridMeshTextureSet::create` takes an allocator (gfx #158).
 - The extractor's ring is two slots past the frames in flight
   (`mesh_wiring`); the draw waits on the GPU for the mesh's `ready` value;
   a park waits out a batch in flight and finishes its frame at unpark.

@@ -1386,8 +1386,8 @@ TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
                gfx::upload_texture(context.commit_device,
                                    context.commit_allocator, desc));
     VKC_ASSIGN(bound->set, gfx::pipelines::HybridMeshTextureSet::create(
-                               context.commit_device, *context.pipeline,
-                               bound->image.view()));
+                               context.commit_device, context.commit_allocator,
+                               *context.pipeline, bound->image.view()));
     FrameHooks hooks;
     core::Device* const device = &context.device;
     core::Allocator* const allocator = &context.allocator;

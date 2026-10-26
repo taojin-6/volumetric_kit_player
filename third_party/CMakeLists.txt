@@ -13,7 +13,7 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first, and the
 # config tier: its Source, which the library's open_source takes on every
 # platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
-# is core PR #57's merge (fa4638c, 0.22.0), recon's pin and the floor its
+# is core PR #61's merge (84dc584, 0.24.0), recon's pin and the floor its
 # library asks for. What the player uses is as at #52's merge (0.21.0):
 # HostRing, whose slots recon's decoder and maps keep, in place where
 # device-mapped memory is cached and copied elsewhere; CommandBatch::input and
@@ -34,16 +34,16 @@ endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG fa4638c2bcd4aee4a0a02819dc106ecd640441d9)
+  GIT_TAG 84dc584d905b7b974463d3cd83e3b4dde95c3c49)
 FetchContent_MakeAvailable(volumetric_kit_core)
-vkc_require_core(0.22.0 VULKAN CONFIG)
+vkc_require_core(0.24.0 VULKAN CONFIG)
 
 # --- volumetric_kit_recon ----------------------------------------------------
 # The stream reader, the codec's decode grid and its deblock, Marching Cubes,
 # the mesh exchange and the live stream's client. Its tests, examples and
 # -Werror stay off in a subproject, so its library's core floor is the one
-# checked; its own core pin is the player's. The pin is recon main at #293's
-# merge (978f6d4). The tiers the player links are as at #277's merge (a23f7f5):
+# checked; its own core pin is the player's. The pin is recon main at #294's
+# merge (6b390ac). The tiers the player links are as at #277's merge (a23f7f5):
 # a frame decoded and meshed in the caller's batch (codec::record_growing,
 # finish_growing; mesh::MarchingCubes::record_extract, finish, abandon),
 # DeviceMesh::ready, Decoder::claim_input and last_rounds, and the reads
@@ -55,11 +55,12 @@ vkc_require_core(0.22.0 VULKAN CONFIG)
 # kDefaultMaxChain.
 #
 # #293 adds MeshExchange's CommitDecision, whose kDrop a commit hook's skip
-# takes (frame_hooks.hpp).
+# takes (frame_hooks.hpp). #294 changes none of the tiers the player links; its
+# library asks for core 0.24.0.
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG 978f6d4fef4dd2355c590e51100c0b9a1ffa9708)
+  GIT_TAG 6b390acc0d077e5ac9f92f64023d5ef83e52969d)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------
@@ -67,19 +68,21 @@ FetchContent_MakeAvailable(volumetric_kit_recon)
 # controls and stats panels (ImGui) and the profiler that times the draw. Its
 # tests, examples and -Werror stay off in a subproject. Its GLFW tier is built
 # for player_desktop alone, so not on iOS: the library links no window system
-# (the top-level CMakeLists.txt checks). The pin is gfx main at #156's merge
-# (2d40d1e). What the player uses is as at #153's merge (123d013):
+# (the top-level CMakeLists.txt checks). The pin is gfx main at #158's merge
+# (0106609). What the player uses is as at #153's merge (123d013):
 # ui::draw_stage_table's host, wait and GPU columns under a ui::StageWindow, and
 # the frame loop's own wait, submit and present rows; beside them, #150's FIFO
 # present by default, which the view takes, #148's
 # ImGuiOverlayConfig::min_frame_height and ui::begin_collapsible_panel, #146's
 # windowing::SurfaceSource and glfw::Library, #145's ImGuiTouch, #144's sRGB
-# ImGui fix and #143's orbit drag gestures.
+# ImGui fix and #143's orbit drag gestures. Since #158,
+# pipelines::HybridMeshTextureSet::create, which makes a set a program's
+# before_draw binds, takes an allocator (HookContext::commit_allocator).
 set(VG_WITH_GLFW ${VP_DESKTOP_APP})
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  GIT_TAG 2d40d1e850539d4337c133ad1e3dfcf526481e67)
+  GIT_TAG 0106609fdbc395e3f733648382e4e86101c770b2)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
 if(VP_BUILD_TESTS)
