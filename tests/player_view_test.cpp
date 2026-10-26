@@ -43,6 +43,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <new>
 #include <optional>
 #include <string>
 #include <thread>
@@ -54,6 +55,7 @@
 #include "controls_layout.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"  // FindWindowByName, to find the panel
+#include "test_allocation_failure.hpp"
 #include "test_stream.hpp"
 #include "volumetric_kit/core/testing/vulkan_fixture.hpp"
 #include "volumetric_kit/core/vulkan/shared_device.hpp"
@@ -108,6 +110,33 @@ constexpr float kFingertip = 44.0f;
 constexpr auto kArrival = 10s;
 constexpr auto kQuiet = 300ms;
 constexpr auto kPrompt = 1s;
+
+TEST(PlayerViewAllocation, InvalidCreateDiagnosticIsContained) {
+  auto& failure = vp_test::allocation_failure;
+  failure = {};
+  failure.measure = true;
+  const auto measured = PlayerView::create({}, kExtent, nullptr);
+  failure.measure = false;
+  ASSERT_FALSE(measured.ok());
+  ASSERT_GT(failure.bytes, 0u);
+  failure.armed = true;
+  core::Result<std::unique_ptr<PlayerView>> result =
+      std::unique_ptr<PlayerView>{};
+  bool escaped = false;
+  try {
+    result = PlayerView::create({}, kExtent, nullptr);
+  } catch (const std::bad_alloc&) {
+    escaped = true;
+  }
+  failure.armed = false;
+  const bool injected = failure.injected;
+  failure = {};
+  ASSERT_TRUE(injected);
+  ASSERT_FALSE(escaped);
+  EXPECT_EQ(result.status().domain(), core::Status::Code::OutOfMemory);
+  EXPECT_EQ(PlayerView::create({}, kExtent, nullptr).status().domain(),
+            core::Status::Code::InvalidArgument);
+}
 
 class PlayerViewTest : public core::test::VulkanTest {
  protected:
@@ -1025,5 +1054,46 @@ TEST_F(PlayerViewTest, MoltenVkPlansTwoFamilies) {
       << core::to_string(shared.value()->plan());
 }
 #endif
+
+// Target the small per-frame wait-vector allocation by size and its measured
+// caller. Injection is local to this UI thread, never a worker or the driver.
+TEST_F(PlayerViewTest, AllocationFailureStopsFurtherFrameAcquisition) {
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([this] { return !view_->frame_waits().empty(); }));
+  view_->player().pause();
+  auto& failure = vp_test::allocation_failure;
+  failure = {};
+  failure.measure_bytes = sizeof(gfx::windowing::FrameWait);
+  failure.measure = true;
+  const auto measured = tick();
+  failure.measure = false;
+  ASSERT_TRUE(measured.ok());
+  ASSERT_NE(failure.measured_site, nullptr);
+  failure.site = failure.measured_site;
+  failure.armed = true;
+  core::Result<bool> result = false;
+  bool escaped = false;
+  try {
+    result = tick();
+  } catch (const std::bad_alloc&) {
+    escaped = true;
+  }
+  failure.armed = false;
+  const bool injected = failure.injected;
+  failure = {};
+  ASSERT_TRUE(injected);
+  ASSERT_FALSE(escaped);
+  EXPECT_EQ(result.status().domain(), core::Status::Code::OutOfMemory);
+  // There may be a partially recorded frame. It must never be acquired again
+  // or submitted; destroying this view is the recovery path.
+  const auto again = view_->frame(kExtent);
+  EXPECT_FALSE(again.ok());
+  EXPECT_EQ(again.status().domain(), core::Status::Code::InvalidArgument);
+  touch_.reset();
+  view_.reset();
+  // The caller can recover by opening a new view, on an independent device.
+  ASSERT_TRUE(make_view(false));
+  EXPECT_TRUE(tick().ok());
+}
 
 }  // namespace

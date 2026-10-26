@@ -36,6 +36,16 @@ is implemented.
   and on keeps the ring's vertex arenas and each draw's fetches to under a
   third. The switch lets a measurement weigh that on each device.
 
+## 2026-10-26 — An interrupted view must be recreated
+
+`PlayerView::create` and `frame` contain host exceptions inside their Result
+boundaries. Allocation failures return `OutOfMemory`; other exceptions return
+`InvalidArgument`. An exception during a frame can leave ImGui or command
+recording incomplete, so the view refuses subsequent ticks before another
+acquire. The caller destroys and recreates the view to resume. Destruction
+stops the worker and drains submitted work before releasing its resources.
+This makes the failure explicit without submitting incomplete commands.
+
 ## 2026-10-25 — Another project can build on the player's library
 
 - **A project can add the player (`add_subdirectory`) and link
