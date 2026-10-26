@@ -66,14 +66,23 @@ target_sources(vp_player_view_test PRIVATE test_allocation_failure.cpp)
 # (parse_live_source) and its folder's first stream (folder_source): host only.
 vp_add_test(scenario volumetric_kit::player)
 # The desktop app's entry point, the app run with VP_NO_WINDOW set (AGENTS.md),
-# and the scenarios in config/examples/; host only, with the app.
-if(VP_DESKTOP_APP)
-  vp_add_test(cli volumetric_kit::player volumetric_kit::core_config)
+# the view's settings it plays with, and the scenarios in config/examples/; host
+# only, with the app.
+if(TARGET volumetric_kit_player)
+  vp_add_test(cli volumetric_kit::player_desktop)
   target_compile_definitions(
     vp_cli_test
     PRIVATE VP_PLAYER_APP="$<TARGET_FILE:volumetric_kit_player>"
             VP_CONFIG_EXAMPLES="${PROJECT_SOURCE_DIR}/config/examples")
   add_dependencies(vp_cli_test volumetric_kit_player)
+endif()
+# run_desktop in a program's own main, with hooks of the program's that count
+# their calls: CI's Xvfb step runs it as it runs the app, never ctest, as it
+# opens a window (AGENTS.md).
+if(TARGET volumetric_kit::player_desktop)
+  add_executable(vp_desktop_hooks vp_desktop_hooks.cpp)
+  target_link_libraries(vp_desktop_hooks PRIVATE volumetric_kit::player_desktop)
+  vp_target_warnings(vp_desktop_hooks)
 endif()
 # The command of vp_test_streams, above.
 add_executable(vp_write_stream vp_write_stream.cpp)
@@ -90,16 +99,22 @@ vp_add_test(measure_log volumetric_kit::player
 # A file or a sender's live stream played through the view with no window, or by
 # the worker alone (--worker), its status and stats printed once a second, and
 # each frame logged with --csv: the measurement runner's (tools/measure/,
-# DECISIONS.md), a tool. ctest runs it on the tests' stream, two passes of every
-# frame timed, with vertices shared and not: the worker alone everywhere, and
-# the view where the loader has a headless surface, as MoltenVK does; then it
-# checks the logs, as the summarizer reads them. It validates as the core's test
-# policy asks, as the tests do.
+# DECISIONS.md), a tool, one call of player_probe's run_probe (probe.hpp). ctest
+# runs it on the tests' stream, two passes of every frame timed, with vertices
+# shared and not: the worker alone everywhere, and the view where the loader has
+# a headless surface, as MoltenVK does; then it checks the logs, as the
+# summarizer reads them. It validates as the core's test policy asks, as the
+# tests do.
 add_executable(vp_probe vp_probe.cpp)
-target_link_libraries(
-  vp_probe PRIVATE volumetric_kit::player volumetric_kit::recon_io
-                   volumetric_kit::core_test_policy)
+target_link_libraries(vp_probe PRIVATE volumetric_kit::player_probe)
 vp_target_warnings(vp_probe)
+# run_probe in a program's own main, with hooks of the program's
+# (AppConfig::view.make_hooks), on the tests' stream: the worker alone
+# everywhere, and the view where the loader has a headless surface, the hooks
+# counting their calls or keeping a mesh more of the ring; on the host, its
+# hooks' options refused with them, and the view's settings it plays with.
+vp_add_test(probe STREAMS volumetric_kit::player_probe
+            volumetric_kit::core_test_policy)
 set(VP_PROBE_DIR "${CMAKE_CURRENT_BINARY_DIR}/probe")
 file(MAKE_DIRECTORY "${VP_PROBE_DIR}")
 set(probe_modes worker)
@@ -237,7 +252,7 @@ foreach(check subproject top_level)
       "${CMAKE_COMMAND}" -DCHECK=${check} "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
       "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/consumer_${check}"
       "-DGENERATOR=${CMAKE_GENERATOR}" "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
-      "-DVP_DESKTOP_APP=${VP_DESKTOP_APP}" ${sources} -P
+      "-DDESKTOP=${VP_DESKTOP_APP}" ${sources} -P
       "${CMAKE_CURRENT_SOURCE_DIR}/consumer/check.cmake")
   set_tests_properties(vp_consumer_${check} PROPERTIES LABELS consumer TIMEOUT
                                                        900)

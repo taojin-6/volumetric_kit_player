@@ -26,7 +26,9 @@ include(FetchContent)
 # FETCHCONTENT_SOURCE_DIR override is refused.
 set(VKC_WITH_VULKAN ON)
 set(VKC_WITH_CONFIG ON)
-if(VP_BUILD_TESTS)
+# The test policy, which vp_probe's library validates by on every desktop, and
+# the fixtures for the tests: each built only for a target that links it.
+if(VP_BUILD_TESTS OR NOT VP_IOS)
   set(VKC_BUILD_TEST_SUPPORT ON)
 endif()
 FetchContent_Declare(
@@ -64,7 +66,7 @@ FetchContent_MakeAvailable(volumetric_kit_recon)
 # The swapchain on a shared device, the mesh pipeline, the orbit camera, the
 # controls and stats panels (ImGui) and the profiler that times the draw. Its
 # tests, examples and -Werror stay off in a subproject. Its GLFW tier is built
-# with the desktop app alone, so not on iOS: the library links no window system
+# for player_desktop alone, so not on iOS: the library links no window system
 # (the top-level CMakeLists.txt checks). The pin is gfx main at #156's merge
 # (2d40d1e). What the player uses is as at #153's merge (123d013):
 # ui::draw_stage_table's host, wait and GPU columns under a ui::StageWindow, and

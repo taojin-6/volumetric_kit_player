@@ -154,6 +154,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `vp_probe --latency`, which times each frame from its mesh to its commit
   and its draws, and `--save-meshes DIR`, which writes each mesh as
   `DIR/<frame>.ply`, both through the hooks.
+- The desktop app and vp_probe as library calls, for a program of its own:
+  `run_desktop` (`desktop.hpp`, target `volumetric_kit::player_desktop`)
+  and `run_probe` (`probe.hpp`, target `volumetric_kit::player_probe`),
+  each taking an `AppConfig` (`app_config.hpp`) whose `view`, `make_hooks`
+  included, the scenario or the command line sets over
+  (`desktop_view_config` and `probe_view_config` give the result). vp_probe's
+  `--latency` and `--save-meshes` exit 2 when a program set `make_hooks`,
+  and its log's `run` names a program's hooks. CI's window step also plays
+  the stream through `run_desktop` with a program's hooks
+  (`tests/vp_desktop_hooks.cpp`).
 
 ### Changed
 
@@ -224,6 +234,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   What a live player shows, and when it retries, are unchanged.
 - The view takes its meshes through `FrameTaker`, which commits a mesh only
   once its ready value is reached and holds it until then.
+- build: `VP_DESKTOP_APP` defaults to `VP_BUILD_APPS` and builds
+  `player_desktop` with gfx's GLFW tier, so a project that adds the player
+  may turn it on alone, with no app. The desktop app's and vp_probe's mains
+  are one call each; `player_probe`, on every desktop, builds only when
+  linked, and the player asks the core for its test policy there.
 
 ### Fixed
 

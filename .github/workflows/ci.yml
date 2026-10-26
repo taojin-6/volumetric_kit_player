@@ -239,7 +239,9 @@ jobs:
       # stream, which the Test step wrote, under Xvfb for 60 presents of a
       # stream frame, as a scenario says. The loader forces the validation
       # layer on, which a Release build does not ask for, and logs the
-      # insert; with no messenger, the layer prints its own messages.
+      # insert; with no messenger, the layer prints its own messages. Then
+      # vp_desktop_hooks plays it the same way through run_desktop, with
+      # hooks of its own that must be made once and run.
       - name: Smoke run of the window (Linux, Xvfb)
         if: runner.os == 'Linux'
         run: |
@@ -268,6 +270,18 @@ jobs:
           fi
           if grep -q 'VUID-' build/smoke.log; then
             echo "::error::Vulkan validation errors from the window"
+            exit 1
+          fi
+          VK_LOADER_LAYERS_ENABLE='*validation' \
+            timeout 300 xvfb-run -a build/tests/vp_desktop_hooks \
+              --config build/smoke.json 2>&1 | tee build/smoke_hooks.log
+          if ! grep -qE '^vp_desktop_hooks: made 1, after_mesh [1-9][0-9]*, before_draw [1-9][0-9]*$' \
+              build/smoke_hooks.log; then
+            echo "::error::a program's hooks did not run in the window"
+            exit 1
+          fi
+          if grep -q 'VUID-' build/smoke_hooks.log; then
+            echo "::error::Vulkan validation errors from the window with hooks"
             exit 1
           fi
 
