@@ -126,6 +126,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `VP_WARNINGS_AS_ERRORS` default ON only when the player is the
   top-level project. The `consumer` tests build such a project, and CI runs
   them on its ubuntu-26.04 leg.
+- The frame's capture set: `FrameStamp::set` and `LiveStatus::set`, its
+  record's (recon's `RecordInfo::set`), `kNoSet` when it names none; the
+  status line shows "set N", from a file and live.
+- `PlayerViewConfig::share_vertices` and `mesh_wiring`'s `share_vertices`,
+  on by default: off, each triangle has three vertices of its own. vp_probe
+  (`--share-vertices on|off`), the iOS measure launch
+  (`MeasureArgs::share_vertices`) and the runner take it.
+- Measure format 3: the header's `share_vertices`
+  (`MeasureContext::share_vertices`) and the frame row's `vertices` and
+  `set`; the summarizer reads formats 1 to 3 and shows the setting and the
+  vertices per frame.
 
 ### Changed
 
@@ -187,6 +198,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `vp_live_park_soak`, which CI leaves out.
 - CI's NVIDIA legs keep the driver's shader cache, in the runner's tool
   cache, rather than compile every pipeline in every test process.
+- A status or stats line too wide for the work area breaks between its
+  parts, each row as many as fit, rather than once, before its last.
 
 ### Fixed
 
@@ -218,3 +231,5 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A consumer of `StreamPlayer` gives the extractor a `slot_count` two more
   than its frames in flight (`mesh_wiring` does), and a measurement's log
   passes `PlayerView::render_metrics().sections` to `MeasureLog::add`.
+- `MeasureLog::add` takes the frame's mesh, for its triangles and vertices,
+  in place of its triangle count: `add(stamp, view->mesh(), render)`.

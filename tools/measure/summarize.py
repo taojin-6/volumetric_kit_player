@@ -5,14 +5,16 @@
 
 usage: summarize.py LOG.csv [LOG.csv ...]
 
-A log is the player's (src/volumetric_kit/player/measure_log.hpp, format 1
-or 2), as vp_probe and the iOS app's measure launch write it. Per log, under
-what it measured, and after its device the machine's load before the run if
-a <log>.load beside it says (the runner's mac mode writes one): per stage of
-the worker's, then of the renderer's (format 2), the mean, p50 and p95 of its
-host (busy), wait and GPU milliseconds, and how many of its frames had the
-GPU measured; then the worker's device counts per frame (format 2 adds its
-dispatches and barriers); then the frames' figures: the device time of a
+A log is the player's (src/volumetric_kit/player/measure_log.hpp, format 1,
+2 or 3), as vp_probe and the iOS app's measure launch write it. Per log,
+under what it measured (format 3 adds whether vertices were shared), and
+after its device the machine's load before the run if a <log>.load beside it
+says (the runner's mac mode writes one): per stage of the worker's, then of
+the renderer's (format 2), the mean, p50 and p95 of its host (busy), wait and
+GPU milliseconds, and how many of its frames had the GPU measured; then the
+worker's device counts per frame (format 2 adds its dispatches and barriers)
+and, from format 3, its mesh's vertices; then the frames' figures: the device
+time of a
 timed frame (its stages' GPU, breakdowns aside) and, from format 2, its queue
 idle and queue latency, its latency from due to the present call, or for a
 frame with no present (the worker alone) from due to taken, apart, and its
@@ -34,6 +36,8 @@ from dataclasses import dataclass, field
 
 FORMAT_1 = "volumetric_kit_player measure 1"
 FORMAT_2 = "volumetric_kit_player measure 2"
+FORMAT_3 = "volumetric_kit_player measure 3"
+FORMATS = {FORMAT_1: 1, FORMAT_2: 2, FORMAT_3: 3}
 HEADER_KEYS = (
     "format",
     "player",
@@ -47,9 +51,12 @@ HEADER_KEYS = (
     "timing",
     "utc",
 )
-# Format 2's further keys; a phone's log adds thermal and low_power.
+# Format 2's further keys, and format 3's; a phone's log adds thermal and
+# low_power.
 HEADER_KEYS_2 = HEADER_KEYS + ("rings", "tile_depth", "labels")
-OPTIONAL_KEYS = ("rings", "tile_depth", "labels", "thermal", "low_power")
+HEADER_KEYS_3 = HEADER_KEYS_2 + ("share_vertices",)
+OPTIONAL_KEYS = ("rings", "tile_depth", "labels", "share_vertices", "thermal",
+                 "low_power")
 COLUMNS = [
     "pass",
     "frame",
@@ -93,9 +100,16 @@ COLUMNS_2 = [
     "take_ms",
     "present_ms",
 ]
+# Format 3's frame row adds its mesh's vertices and its record's set.
+COLUMNS_3 = COLUMNS_2 + ["vertices", "set"]
 DEVICES = ("none", "measured", "not_timed", "unavailable")
 COUNTS = ("submits", "host_waits", "blocked_ns", "staging_buffers")
 COUNTS_2 = COUNTS + ("dispatches", "barriers")
+COUNTS_3 = COUNTS_2 + ("vertices",)
+# Each format's columns, header keys and counts per frame.
+LAYOUTS = {1: (COLUMNS, HEADER_KEYS, COUNTS),
+           2: (COLUMNS_2, HEADER_KEYS_2, COUNTS_2),
+           3: (COLUMNS_3, HEADER_KEYS_3, COUNTS_3)}
 LEGS = ("publish_ms", "take_ms", "present_ms")
 # The frames' figures, in the order the tables show them: a frame's device
 # time, read from its stages in either format, then format 2's own: the
@@ -139,7 +153,7 @@ class Log:
     kept: list  # the passes the figures are over
     frames: int = 0
     tables: dict = field(default_factory=lambda: {t: Table() for t in TABLES})
-    counts: dict = field(default_factory=lambda: {key: [] for key in COUNTS_2})
+    counts: dict = field(default_factory=lambda: {key: [] for key in COUNTS_3})
     figures: dict = field(default_factory=lambda: {k: [] for k in FIGURES})
     rounds: dict = field(default_factory=dict)  # rounds -> frames
     load: str = ""  # the machine's load before the run (read_load)
@@ -199,12 +213,11 @@ def read_header(path, lines):
             raise LogError(f"{path}: header line {at + 1} is not '# key: value'")
         header[key.strip()] = value.strip()
         at += 1
-    formats = {FORMAT_1: 1, FORMAT_2: 2}
-    if "format" in header and header["format"] not in formats:
+    if "format" in header and header["format"] not in FORMATS:
         raise LogError(f"{path}: format {header['format']!r}, not "
-                       f"{FORMAT_1!r} or {FORMAT_2!r}")
-    version = formats.get(header.get("format"), 1)
-    keys = HEADER_KEYS_2 if version == 2 else HEADER_KEYS
+                       f"{FORMAT_1!r}, {FORMAT_2!r} or {FORMAT_3!r}")
+    version = FORMATS.get(header.get("format"), 1)
+    _, keys, _ = LAYOUTS[version]
     missing = [key for key in keys if key not in header]
     if missing:
         raise LogError(f"{path}: the header lacks {', '.join(missing)}")
@@ -239,14 +252,18 @@ def read_stage(log, row, path, at):
 
 
 def read_frame(log, row, path, frame_gpu):
-    """A frame's row: its counts and, from format 2, its figures."""
+    """A frame's row: its counts and, from format 2, its figures; from
+    format 3 its vertices among its counts, and its set, a number or empty."""
     log.frames += 1
-    for key in COUNTS_2 if log.format == 2 else COUNTS:
+    _, _, counts = LAYOUTS[log.format]
+    for key in counts:
         log.counts[key].append(number(row, key, path, int))
     if frame_gpu is not None:
         log.figures["gpu_ms"].append(frame_gpu)
-    if log.format != 2:
+    if log.format == 1:
         return
+    if log.format >= 3 and row["set"] != "":
+        number(row, "set", path, int)
     for key in ("idle_ms", "queue_ms") + LEGS:
         if row[key] != "":
             log.figures[key].append(number(row, key, path))
@@ -265,7 +282,7 @@ def read_log(path):
     with open(path, newline="", encoding="utf-8") as file:
         lines = file.read().splitlines()
     header, version, at = read_header(path, lines)
-    columns = COLUMNS_2 if version == 2 else COLUMNS
+    columns, _, _ = LAYOUTS[version]
     reader = csv.DictReader(lines[at:])
     if reader.fieldnames != columns:
         raise LogError(f"{path}: columns {reader.fieldnames}, not {columns}")
@@ -370,7 +387,7 @@ def summary(log):
         "| per frame | mean | p50 | p95 |",
         "|---|---:|---:|---:|",
     ]
-    for key in COUNTS_2 if log.format == 2 else COUNTS:
+    for key in LAYOUTS[log.format][2]:
         label, values = count(log, key)
         out.append(f"| {label} | " + " | ".join(figures(values, 2)) + " |")
     for key in FIGURES:
@@ -420,15 +437,23 @@ def table_diff(before, after, unit):
     return out
 
 
+def run_text(log):
+    """A log's player, run and timing, and from format 3 its vertex sharing,
+    for a diff's line naming it."""
+    h = log.header
+    text = f"player {h['player']}, {h['run']}, timing {h['timing']}"
+    if "share_vertices" in h:
+        text += f", share_vertices {h['share_vertices']}"
+    return text
+
+
 def diff(before, after):
     """The markdown comparing two logs' means, stage by stage."""
     out = [
         "## Before -> after (means)",
         "",
-        f"- before: {before.path} (player {before.header['player']}, "
-        f"{before.header['run']}, timing {before.header['timing']})",
-        f"- after: {after.path} (player {after.header['player']}, "
-        f"{after.header['run']}, timing {after.header['timing']})",
+        f"- before: {before.path} ({run_text(before)})",
+        f"- after: {after.path} ({run_text(after)})",
         "",
         *table_diff(before.tables["worker"], after.tables["worker"],
                     "stream frame"),
@@ -437,9 +462,11 @@ def diff(before, after):
         out += ["", *table_diff(before.tables["render"],
                                 after.tables["render"], "display frame")]
     out += ["", "| per frame | before -> after |", "|---|---|"]
-    for key in COUNTS_2:
+    for key in COUNTS_3:
         label, b = count(before, key)
-        out.append(f"| {label} | {change(b, count(after, key)[1])} |")
+        a = count(after, key)[1]
+        if key in COUNTS_2 or b or a:
+            out.append(f"| {label} | {change(b, a)} |")
     for key in FIGURES:
         if before.figures[key] or after.figures[key]:
             out.append(f"| {figure_label(key)} | "

@@ -33,11 +33,12 @@
 #   measure summarize <log.csv>...
 #       The logs as markdown (summarize.py): two give a before/after diff.
 #
-# Options: --passes P, --frames N, --timing T,... (off, sampled, all),
-# --tile-depth 0|1 and --labels on|off, the last two for M4's A/B. Defaults:
-# 2 passes, the first a warm-up that the summary leaves out; every frame of
-# them; timing off, then all; tile depth 0; labels on. On mac and lab these
-# defaults also work with older probes; nondefaults need option support.
+# Options: --passes P, --frames N, --timing T,... (off, sampled, all), and
+# for A/B runs --tile-depth 0|1, --labels on|off and
+# --share-vertices on|off. Defaults: 2 passes, the first a warm-up that the
+# summary leaves out; every frame of them; timing off, then all; tile depth 0;
+# labels on; vertices shared. A setting at its default is not passed, so older
+# probes and apps still run; on mac and lab a nondefault needs option support.
 # Each run's log is named
 # <utc>-<commit>-<mode>-<timing>.csv. <ref> is a branch, a tag, a commit, or
 # pr/<n>. --dry-run prints the commands and runs none. Settings come from the
@@ -123,13 +124,13 @@ build_probe() {
 
 # One run, by the command $1, of the vp_probe built in $2: the worker alone
 # on the stream $3, $passes passes (of $frames frames, if set), at timing $4,
-# tile depth $depth and labels $labels, logged to $5. Omit their defaults
-# for older probes; reject a nondefault the target cannot apply. The lab
-# runs it too.
+# tile depth $depth, labels $labels and vertex sharing $sharing, logged to
+# $5. Omit their defaults for older probes; reject a nondefault the target
+# cannot apply. The lab runs it too.
 run_probe() {
   local by="$1" build="$2" stream="$3" timing="$4" csv="$5"
   local help="" status=0 option value
-  if { [ "$depth" != 0 ] || [ "$labels" != on ]; } &&
+  if { [ "$depth" != 0 ] || [ "$labels" != on ] || [ "$sharing" != on ]; } &&
     [ "${dry:-0}" != 1 ]; then
     # No arguments prints usage (status 2) without opening a device.
     help="$("$build/tests/vp_probe" 2>&1)" || status=$?
@@ -140,10 +141,11 @@ run_probe() {
   fi
   set -- --worker --file "$stream" --passes "$passes" \
     ${frames:+--frames "$frames"} --timing "$timing"
-  for option in --tile-depth --labels; do
+  for option in --tile-depth --labels --share-vertices; do
     case "$option" in
       --tile-depth) [ "$depth" != 0 ] || continue; value="$depth" ;;
       --labels) [ "$labels" != on ] || continue; value="$labels" ;;
+      --share-vertices) [ "$sharing" != on ] || continue; value="$sharing" ;;
     esac
     if [ "${dry:-0}" != 1 ] && [[ "$help" != *"$option"* ]]; then
       echo "measure: target vp_probe does not support $option $value" >&2
@@ -159,14 +161,16 @@ summarize() {
   python3 -I "$here/summarize.py" "$@"
 }
 
-# The options every mode takes, into passes, frames, timings, depth and
-# labels.
+# The options every mode takes, into passes, frames, timings, depth, labels
+# and sharing, and unshared, which is sharing's value when not the default
+# and else empty.
 options() {
   passes=2
   frames=""
   timings="off,all"
   depth=0
   labels=on
+  sharing=on
   while [ "$#" -gt 0 ]; do
     [ "$#" -ge 2 ] || usage
     case "$1" in
@@ -175,17 +179,22 @@ options() {
       --timing) timings="$2" ;;
       --tile-depth) depth="$2" ;;
       --labels) labels="$2" ;;
+      --share-vertices) sharing="$2" ;;
       *) usage ;;
     esac
     shift 2
   done
+  unshared=""
+  if [ "$sharing" != on ]; then
+    unshared="$sharing"
+  fi
 }
 
 # The lab: one script over ssh, so the lab does the work and the Mac waits.
 lab() {
   local ref="$1"
   shift
-  local passes frames timings depth labels
+  local passes frames timings depth labels sharing unshared
   options "$@"
   local stamp out
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -200,6 +209,7 @@ uvrun=$(printf %q "$LAB_UVRUN"); agent=$(printf %q "$MEASURE_AGENT")
 stream=$(printf %q "$LAB_STREAM"); ref=$(printf %q "$ref")
 passes=$(printf %q "$passes"); frames=$(printf %q "$frames")
 depth=$(printf %q "$depth"); labels=$(printf %q "$labels")
+sharing=$(printf %q "$sharing")
 $(declare -f commit_of build_probe run_probe)
 uv() { "\$uvrun" "\$agent" -- "\$@"; }
 uvtime() { "\$uvrun" --time "\$agent" -- "\$@"; }
@@ -329,7 +339,7 @@ mac_idle() {
 mac() {
   local ref="$1"
   shift
-  local passes frames timings depth labels
+  local passes frames timings depth labels sharing unshared
   options "$@"
   local sha worktree stamp out build name timing csv
   local siblings=() logs=()
@@ -459,7 +469,8 @@ launch() {
   xcrun devicectl device process launch --device "$device" \
     --terminate-existing "$VP_BUNDLE_ID" -- --measure "$name" \
     --passes "$passes" ${frames:+--frames "$frames"} --timing "$timing" \
-    --tile-depth "$depth" --labels "$labels" >/dev/null || return "$?"
+    --tile-depth "$depth" --labels "$labels" \
+    ${unshared:+--share-vertices "$unshared"} >/dev/null || return "$?"
   local deadline=$((SECONDS + 1200)) seen=0 file=""
   while [ -z "$file" ]; do
     [ "$SECONDS" -lt "$deadline" ] || fail "no log after 20 min"
@@ -493,7 +504,7 @@ launch() {
 phone() {
   local mode="$1" kind="$2" ref="$3"
   shift 3
-  local passes frames timings depth labels
+  local passes frames timings depth labels sharing unshared
   options "$@"
   [ -n "${VP_DEVELOPMENT_TEAM:-}" ] || fail "set VP_DEVELOPMENT_TEAM (README.md, iOS)"
   local sha worktree app stamp device name out
@@ -519,7 +530,8 @@ phone() {
       run xcrun devicectl device process launch --device "$device" \
         --terminate-existing "$VP_BUNDLE_ID" -- --measure "$name" \
         --passes "$passes" ${frames:+--frames "$frames"} --timing "$timing" \
-        --tile-depth "$depth" --labels "$labels"
+        --tile-depth "$depth" --labels "$labels" \
+        ${unshared:+--share-vertices "$unshared"}
       echo "+ (every 5 s, up to 20 min: list Documents/measure until a new" \
         ".csv or .failed, or the app is gone; copy it into" \
         "$out/$stamp-${sha:0:7}-$mode-$timing.csv)"

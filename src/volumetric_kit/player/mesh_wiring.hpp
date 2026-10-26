@@ -21,7 +21,8 @@ namespace volumetric_kit::player {
 struct MeshWiring {
   /// The extractor's: the draw's usage, both families, a ring two slots
   /// deeper than the renderer's frames in flight (one published and not yet
-  /// taken, one meshed in the next frame's batch), and shared vertices.
+  /// taken, one meshed in the next frame's batch), and vertices shared or
+  /// not, as asked.
   recon::mesh::MarchingCubesConfig mc;
   /// The exchange's: the renderer's frames in flight, and whether it reads
   /// from another family than the extractor writes on.
@@ -43,10 +44,16 @@ struct MeshWiring {
 /// @param graphics_family   The renderer's queue family.
 /// @param compute_family    The extractor's queue family.
 /// @param frames_in_flight  The renderer's frames in flight; at least 1.
+/// @param share_vertices    Whether triangles share their vertices
+///                          (recon::mesh::MarchingCubesConfig::share_vertices):
+///                          true, about a third of the vertices to hold,
+///                          write and fetch; false, three of its own a
+///                          triangle.
 /// @return The two configs.
 MeshWiring mesh_wiring(std::uint32_t graphics_family,
                        std::uint32_t compute_family,
-                       std::uint32_t frames_in_flight);
+                       std::uint32_t frames_in_flight,
+                       bool share_vertices = true);
 
 /// @brief Whether the renderer can go on drawing @p exchange's meshes.
 ///

@@ -70,7 +70,8 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib \
   --config <scenario.json>
 ```
 
-The panel at the bottom plays, pauses, steps and loops, and shows the frame;
+The panel at the bottom plays, pauses, steps and loops, and shows the frame
+and, where its record names one, its capture set ("set N");
 Normals, shown pressed while on, colours the mesh by its world-space normals
 in place of lighting; and Deblock, on at first, has recon's decoder smooth
 each frame across its block faces, and while paused redoes the frame shown.
@@ -109,8 +110,8 @@ machine; for the lab's, over the VPN, copy it and set `source.host` to
 
 The picture joins at the sender's newest I-frame. The panel at the bottom is
 then Normals and Deblock over a status line: connecting, live with the
-newest record's seq and how long nothing has come, or reconnecting with why,
-about every second until Esc. The keys that play, pause, step and loop do
+newest record's seq and set and how long nothing has come, or reconnecting
+with why, about every second until Esc. The keys that play, pause, step and loop do
 nothing. The stats show the bitrate and the records a second over the last
 second.
 
@@ -186,15 +187,16 @@ are claimed.
 
 A measurement is one CSV log per run, which the player writes itself
 ([measure_log.hpp](src/volumetric_kit/player/measure_log.hpp) gives the
-format, version 2): a header naming the commits, the build, the device, how
+format, version 3): a header naming the commits, the build, the device, how
 recon's rings run on it, the stream, how it ran, the timing, the tile depth,
-the labels and the time (and on a phone its thermal state and Low Power
-Mode), then each stream frame's stage rows (host, wait and GPU ms), the
-renderer's newest rows as it was taken (gfx's profiler's, two display frames
-behind), and its frame row: the worker's device counts (submits, waits,
-blocked time, staging buffers, dispatches, barriers), what the deblock did,
-the rounds its decode ran, the queue's idle and latency, and its latency
-from due to published, taken and presented.
+the labels, whether vertices were shared and the time (and on a phone its
+thermal state and Low Power Mode), then each stream frame's stage rows
+(host, wait and GPU ms), the renderer's newest rows as it was taken (gfx's
+profiler's, two display frames behind), and its frame row: the worker's
+device counts (submits, waits, blocked time, staging buffers, dispatches,
+barriers), what the deblock did, the rounds its decode ran, the queue's idle
+and latency, its latency from due to published, taken and presented, its
+mesh's vertices, and its record's set.
 
 `vp_probe` writes one on a desktop, with no window:
 
@@ -208,11 +210,13 @@ worker alone on the GPU the core picks, for a GPU with no headless surface
 (NVIDIA's). `--timing` is `off`, `sampled` (one frame in `kSampleEvery`) or
 `all`; `--tile-depth 1` tiles the worker's timed batches by "decode" and
 "mesh" alone (0, every scope, by default); `--labels off` asks for no debug
-labels; `--frames N` stops after N frames; `--connect host[:port]` plays a
-sender.
+labels; `--share-vertices off` gives each triangle three vertices of its
+own (shared by default); `--frames N` stops after N frames;
+`--connect host[:port]` plays a sender.
 
 The iOS app writes one when launched with `-- --measure <name in Documents>
-[--passes P] [--frames N] [--timing T] [--tile-depth D] [--labels on|off]`:
+[--passes P] [--frames N] [--timing T] [--tile-depth D] [--labels on|off]
+[--share-vertices on|off]`:
 it plays that stream, logs into `Documents/measure/<utc>-<commit>.csv`, and
 shows "measure done"; a launch that cannot log writes why into a `.failed`
 file there instead.
@@ -230,9 +234,10 @@ tools/measure/measure --dry-run lab <ref>   # prints the commands, runs none
 ```
 
 Each runs two passes of rafa2.vrst, the first a warm-up, with timing off and
-then all; `--tile-depth` and `--labels` select the probe's settings. For
-`mac` and `lab`, their defaults (0 and on) also work with older probes;
-nondefaults require the target probe to support the option. `lab` builds
+then all; `--tile-depth`, `--labels` and `--share-vertices` select the
+probe's settings. A setting at its default (0, on and on) is not passed, so
+older probes and apps also run; for `mac` and `lab`, a nondefault requires
+the target probe to support the option. `lab` builds
 `vp_probe` in its own clone of the player on the lab and runs it under
 `uvrun --time`. `mac` builds it in the Mac's worktree for runs, on the
 siblings' checkouts that are clean at their pins, and runs it once the Mac is
@@ -240,9 +245,10 @@ idle, its load written beside each log. `iphone` and `ipad` build the signed
 Release app in that worktree on 6 jobs, install it, copy rafa2.vrst into its
 Documents if missing, then launch it once per timing; they start an app on
 the device, so they run only with the owner's go-ahead. Each log is named
-`<utc>-<commit>-<mode>-<timing>.csv`. `summarize` reads formats 1 and 2, and
-gives per stage, the worker's and the renderer's, the mean, p50 and p95 of
-host, wait and GPU, the counts per frame, the frames' figures (device time,
+`<utc>-<commit>-<mode>-<timing>.csv`. `summarize` reads formats 1 to 3, and
+gives the settings, per stage, the worker's and the renderer's, the mean, p50
+and p95 of host, wait and GPU, the counts and vertices per frame, the
+frames' figures (device time,
 queue idle and latency, the latency to the present, or to taken for frames
 with none, its legs, rounds), a run's load, and with two logs their diff.
 

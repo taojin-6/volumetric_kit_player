@@ -3,8 +3,9 @@
 
 // PlayerView on a device, over gfx's headless surface and the tests' stream
 // (test_stream.hpp), with gfx's ImGuiTouch as the platform half: create
-// refuses what it cannot use; frames present and shown() advances, their
-// triangles sharing vertices, onto a frame that meshes nothing too, which
+// refuses what it cannot use; frames present and shown() advances, each with
+// its record's set, their triangles sharing vertices, or asked not to, three
+// of their own each, onto a frame that meshes nothing too, which
 // still presents; 0 x 0 skips without blocking; a step moves one frame; the
 // worker's failure surfaces from frame(); a tap on Normals switches the mesh's
 // flags from lit to normals and back, and frames keep presenting; a tap on
@@ -152,6 +153,7 @@ class PlayerViewTest : public core::test::VulkanTest {
     config.validation = active_validation() != core::test::Validation::Off;
     config.compact_stats = compact_stats_;
     config.device_timing = device_timing_;
+    config.share_vertices = share_vertices_;
     return config;
   }
 
@@ -349,6 +351,7 @@ class PlayerViewTest : public core::test::VulkanTest {
   bool source_button_ = PlayerViewConfig{}.source_button;
   bool compact_stats_ = PlayerViewConfig{}.compact_stats;
   std::optional<DeviceTiming> device_timing_;
+  bool share_vertices_ = PlayerViewConfig{}.share_vertices;
   gfx::ui::EdgeInsets safe_area_;
 };
 
@@ -409,7 +412,9 @@ TEST_F(PlayerViewTest, FramesPresentAndShownAdvances) {
   ASSERT_TRUE(advanced) << shown.size() << " frame(s) shown";
   // In order, from the first; the loop wraps only after kFrames.
   EXPECT_EQ(shown, (std::vector<std::uint64_t>{0, 1, 2}));
-  // Its triangles share their vertices (mesh_wiring): fewer than 3 each.
+  EXPECT_EQ(view_->shown()->set, vp_test::set_of(2)) << "its record's";
+  // Its triangles share their vertices by default (mesh_wiring): fewer than
+  // 3 each.
   const recon::mesh::DeviceMesh& mesh = view_->mesh();
   EXPECT_TRUE(mesh.shares_vertices);
   EXPECT_GT(mesh.triangle_count, 0u);
@@ -420,6 +425,23 @@ TEST_F(PlayerViewTest, FramesPresentAndShownAdvances) {
     presented += ticked.value() ? 1 : 0;
   }
   EXPECT_EQ(presented, 3u) << "a headless surface never settles";
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
+
+// Asked not to share them (PlayerViewConfig::share_vertices), each triangle
+// has three vertices of its own, and frames present as before.
+TEST_F(PlayerViewTest, UnsharedEachTriangleHasThreeVerticesOfItsOwn) {
+  share_vertices_ = false;
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([&] {
+    return view_->shown() && view_->shown()->index >= 1 &&
+           view_->mesh().triangle_count > 0;
+  }));
+  const recon::mesh::DeviceMesh& mesh = view_->mesh();
+  EXPECT_FALSE(mesh.shares_vertices);
+  EXPECT_EQ(mesh.vertex_count, 3 * mesh.triangle_count);
+  ASSERT_TRUE(present());
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
 }

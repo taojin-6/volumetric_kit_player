@@ -57,7 +57,8 @@ core::Result<std::optional<MeasureArgs>> parse_measure_args(
   for (std::size_t i = 0; i < args.size(); ++i) {
     const std::string& arg = args[i];
     if (arg != "--measure" && arg != "--passes" && arg != "--frames" &&
-        arg != "--timing" && arg != "--tile-depth" && arg != "--labels") {
+        arg != "--timing" && arg != "--tile-depth" && arg != "--labels" &&
+        arg != "--share-vertices") {
       continue;  // the system's
     }
     if (i + 1 == args.size()) {
@@ -103,20 +104,21 @@ core::Result<std::optional<MeasureArgs>> parse_measure_args(
       measure.tile_depth = *depth;
       other = true;
     } else {
-      const std::optional<bool> labels = parse_switch(value);
-      if (!labels) {
-        return core::Status::invalid_argument("--labels '" + value +
+      // --labels or --share-vertices: a switch.
+      const std::optional<bool> on = parse_switch(value);
+      if (!on) {
+        return core::Status::invalid_argument(arg + " '" + value +
                                               "': on or off");
       }
-      measure.debug_labels = *labels;
+      (arg == "--labels" ? measure.debug_labels : measure.share_vertices) = *on;
       other = true;
     }
   }
   if (!named) {
     if (other) {
       return core::Status::invalid_argument(
-          "--passes, --frames, --timing, --tile-depth and --labels need "
-          "--measure");
+          "--passes, --frames, --timing, --tile-depth, --labels and "
+          "--share-vertices need --measure");
     }
     return std::optional<MeasureArgs>();
   }

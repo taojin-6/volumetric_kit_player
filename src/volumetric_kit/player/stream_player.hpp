@@ -74,6 +74,7 @@ struct LiveStatus {
   /// (@ref live_reason). Empty until one has, and once a park has ended one.
   std::string last_error;
   std::uint64_t seq = 0;                      ///< The newest record received.
+  std::uint64_t set = recon::stream::kNoSet;  ///< The newest record's.
   Playback::Clock::time_point last_record{};  ///< When it arrived.
 };
 
@@ -121,6 +122,10 @@ struct FrameStamp {
   std::uint64_t pts_ns = 0;  ///< Its pts, on its track's clock.
   std::uint64_t bytes = 0;   ///< Its record's payload bytes.
   bool key = false;          ///< A key record: an intra (I) frame; else P.
+  /// The capture set its record belongs to (recon::stream::RecordInfo::set),
+  /// or recon::stream::kNoSet for a record that names none. A rebuild keeps
+  /// its frame's.
+  std::uint64_t set = recon::stream::kNoSet;
   /// Its stages, each with its host time and the part of it blocked on the
   /// device (`core::StageRow::wait_ms`): "read" (its record, CRC included,
   /// into one of the decoder's input slots, and other tracks' records passed

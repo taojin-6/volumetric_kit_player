@@ -2,10 +2,10 @@
 // Copyright (c) 2026 Tao Jin
 
 // mesh_wiring on the host: the draw's usage on the extractor's buffers, a ring
-// two slots deeper than the frames in flight, shared vertices, and the
-// families: one family is EXCLUSIVE and read in place, two are CONCURRENT and
-// read across. And drawable on recon's exchange: a refused mesh fails every
-// frame after it.
+// two slots deeper than the frames in flight, vertices shared unless asked
+// not to be, and the families: one family is EXCLUSIVE and read in place, two
+// are CONCURRENT and read across. And drawable on recon's exchange: a refused
+// mesh fails every frame after it.
 
 #include "volumetric_kit/player/mesh_wiring.hpp"
 
@@ -97,11 +97,23 @@ TEST(MeshWiring, TwoFamiliesAreReadAcross) {
   expect_bindable(wiring);
 }
 
-// The draw is indexed, so triangles share their vertices: about a third of
-// the vertices to hold, write and fetch.
-TEST(MeshWiring, VerticesAreShared) {
+// The draw is indexed, so triangles share their vertices by default: about a
+// third of the vertices to hold, write and fetch. Asked, they share none, and
+// the rest is as shared.
+TEST(MeshWiring, VerticesAreSharedUnlessAskedNotTo) {
   EXPECT_TRUE(mesh_wiring(0, 0, 2).mc.share_vertices);
   EXPECT_TRUE(mesh_wiring(0, 1, 2).mc.share_vertices);
+  EXPECT_TRUE(mesh_wiring(0, 1, 2, /*share_vertices=*/true).mc.share_vertices);
+  for (const std::uint32_t compute : {0u, 1u}) {
+    const MeshWiring shared = mesh_wiring(0, compute, 2);
+    const MeshWiring own = mesh_wiring(0, compute, 2, /*share_vertices=*/false);
+    EXPECT_FALSE(own.mc.share_vertices);
+    EXPECT_EQ(families(own), families(shared));
+    EXPECT_EQ(own.mc.slot_count, shared.mc.slot_count);
+    EXPECT_EQ(own.exchange.cross_family, shared.exchange.cross_family);
+    EXPECT_EQ(own.exchange.frames_in_flight, shared.exchange.frames_in_flight);
+    expect_bindable(own);
+  }
 }
 
 TEST(MeshWiring, ARefusedMeshFailsEveryLaterFrame) {

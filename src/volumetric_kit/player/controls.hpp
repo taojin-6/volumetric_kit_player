@@ -46,7 +46,9 @@ inline constexpr float kButtonEms = 4.5f;
 ///        @ref live_status_line. Deblock, a box that shows and sets
 ///        StreamPlayer::deblock, takes a row of its own below the others when
 ///        the row would not fit the work area with it, as on a phone in
-///        portrait. There is no text field, so touch needs no keyboard.
+///        portrait; a status line too wide for it breaks between its parts,
+///        as a stats line does. There is no text field, so touch needs no
+///        keyboard.
 ///
 /// @code
 /// overlay.new_frame();
@@ -79,7 +81,7 @@ bool draw_source();
 /// @brief A live player's status line.
 ///
 /// @code
-/// // "live · seq 1234 · nothing for 3 s"
+/// // "live · seq 1234 · set 77 · nothing for 3 s"
 /// const std::string line =
 ///     live_status_line(player.live_status(), Playback::Clock::now());
 /// @endcode
@@ -88,23 +90,25 @@ bool draw_source();
 /// @return "connecting to <address>", or with a `last_error`
 ///         "reconnecting to <address>: <last_error>";
 ///         "connected · the sender has no I-frame yet"; "live · seq <seq>",
-///         with " · nothing for <n> s" once no record has come for over a
-///         second, n in whole seconds.
+///         with " · set <set>" when the newest record names one, and
+///         " · nothing for <n> s" once no record has come for over a second,
+///         n in whole seconds.
 std::string live_status_line(const LiveStatus& status,
                              Playback::Clock::time_point now);
 
 /// @brief The status line under the controls.
 ///
 /// @code
-/// // "frame 12/150 · playing · loop"
+/// // "frame 12/150 · set 77 · playing · loop"
 /// const std::string line = status_line(stamp, 150, true, true);
 /// @endcode
 /// @param shown        The last stream frame drawn; empty before the first.
 /// @param frame_count  The track's frames.
 /// @param playing      Whether it plays, rather than being paused.
 /// @param loop         Whether it loops.
-/// @return The frame drawn, counted from 1, over the track's; `playing` or
-///         `paused`; and `loop` when on: "frame 12/150 · playing · loop".
+/// @return The frame drawn, counted from 1, over the track's; its set
+///         (FrameStamp::set) when it has one; `playing` or `paused`; and
+///         `loop` when on: "frame 12/150 · set 77 · playing · loop".
 ///         "loading" before the first.
 std::string status_line(const std::optional<FrameStamp>& shown,
                         std::uint64_t frame_count, bool playing, bool loop);
@@ -177,9 +181,10 @@ std::string display_line(const gfx::FrameMetrics& render);
 ///        stating its gfx::ui::StageWindow). Only the header takes input: a
 ///        finger or the mouse on the body reaches the camera.
 ///
-/// A line wider than the room it has breaks before its last " · ", the rest
-/// indented below it, so the panel stays on screen: the deblock line with its
-/// blocks on a phone.
+/// A line wider than the room it has breaks between its parts, at its " · ",
+/// each row holding as many parts as fit and the rows after the first
+/// indented, so the panel stays on screen: the deblock line with its blocks on
+/// a phone breaks before them.
 ///
 /// It opens at launch, and a tap or click on the header closes and opens it.
 /// While it is open its figures are rebuilt every @ref kRefresh, so the

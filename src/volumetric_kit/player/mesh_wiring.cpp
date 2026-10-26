@@ -9,7 +9,7 @@ namespace volumetric_kit::player {
 
 MeshWiring mesh_wiring(std::uint32_t graphics_family,
                        std::uint32_t compute_family,
-                       std::uint32_t frames_in_flight) {
+                       std::uint32_t frames_in_flight, bool share_vertices) {
   MeshWiring wiring;
   recon::mesh::MarchingCubesConfig& mc = wiring.mc;
   mc.extra_vertex_usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
@@ -20,10 +20,9 @@ MeshWiring mesh_wiring(std::uint32_t graphics_family,
   // Each frame in flight holds a generation, one published may wait to be
   // taken, and the next is meshed in its frame's batch before that take.
   mc.slot_count = frames_in_flight + 2;
-  // About a third of the vertices to hold, write and fetch: the draw is
-  // indexed, and only recon's several-view texturer needs a triangle's
-  // vertices its own.
-  mc.share_vertices = true;
+  // Shared, about a third of the vertices to hold, write and fetch: the draw
+  // is indexed, so it takes either.
+  mc.share_vertices = share_vertices;
   wiring.exchange.frames_in_flight = frames_in_flight;
   wiring.exchange.cross_family = graphics_family != compute_family;
   return wiring;

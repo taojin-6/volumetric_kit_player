@@ -2,7 +2,8 @@
 // Copyright (c) 2026 Tao Jin
 
 // The controls and the stats panel on the host: status_line's,
-// live_status_line's and stats_lines' wording, file and live, the deblock's
+// live_status_line's and stats_lines' wording, file and live, a frame's set
+// only where its record names one, the deblock's
 // for each filter with some, none or all of its blocks exact, and off;
 // live_reason; parse_live_address; and
 // draw_controls and StatsPanel on a CPU-only ImGui context fed by gfx's
@@ -11,7 +12,8 @@
 // shows pressed while on, hovered or not, Deblock, on at first, toggles the
 // player's deblock, on the row or, where the row would not fit, below it,
 // "Pause" and "Normals" fit their buttons, a finger on the controls is
-// ImGui's, and they keep clear of the safe area; a live player's, never
+// ImGui's, and they keep clear of the safe area; a status line too wide for
+// the work area breaks between its parts; a live player's, never
 // started, are Normals and Deblock over its status line. The Source button is
 // drawn only
 // when asked for, at the work area's top right clear of the safe area and of
@@ -104,6 +106,19 @@ TEST(StatusLine, NamesTheFrameFromOneThePlayStateAndLoop) {
   const FrameStamp stamp = stamp_of(11, 41'234, false);
   EXPECT_EQ(status_line(stamp, 150, true, true),
             "frame 12/150 · playing · loop");
+  EXPECT_EQ(status_line(stamp, 150, false, false), "frame 12/150 · paused");
+}
+
+// The set only for a frame whose record names one.
+TEST(StatusLine, NamesTheFramesSetWhenItHasOne) {
+  FrameStamp stamp = stamp_of(11, 41'234, false);
+  stamp.set = 77;
+  EXPECT_EQ(status_line(stamp, 150, true, true),
+            "frame 12/150 · set 77 · playing · loop");
+  stamp.set = 0;
+  EXPECT_EQ(status_line(stamp, 150, false, false),
+            "frame 12/150 · set 0 · paused");
+  stamp.set = stream::kNoSet;
   EXPECT_EQ(status_line(stamp, 150, false, false), "frame 12/150 · paused");
 }
 
@@ -324,6 +339,21 @@ TEST(LiveStatusLine, NamesTheNewestSeqAndPastASecondHowLongNothingCame) {
             "live · seq 1234 · nothing for 3 s");
 }
 
+// The newest record's set, only when it names one.
+TEST(LiveStatusLine, NamesTheNewestRecordsSetWhenItHasOne) {
+  LiveStatus status;
+  status.state = LiveState::kLive;
+  status.address = "lab:47801";
+  status.seq = 1234;
+  status.set = 77;
+  status.last_record = t0;
+  EXPECT_EQ(live_status_line(status, t0), "live · seq 1234 · set 77");
+  EXPECT_EQ(live_status_line(status, t0 + milliseconds(3500)),
+            "live · seq 1234 · set 77 · nothing for 3 s");
+  status.set = stream::kNoSet;
+  EXPECT_EQ(live_status_line(status, t0), "live · seq 1234");
+}
+
 TEST(ParseLiveAddress, TakesAHostAndAnOptionalPort) {
   const auto parsed = [](const char* text) {
     const core::Result<LiveAddress> address = parse_live_address(text);
@@ -407,13 +437,14 @@ class ControlsTest : public ::testing::Test {
                     std::chrono::duration<double>(seconds_));
   }
 
-  // One frame, 1/60 s after the last, with the controls, Source while
-  // `source_shown_`, and the stats in it; a press on Source is counted.
+  // One frame, 1/60 s after the last, with the controls over
+  // `controls_shown_`, Source while `source_shown_`, and the stats in it; a
+  // press on Source is counted.
   void frame() {
     seconds_ += 1.0 / 60.0;
     touch_->new_frame(display(seconds_, safe_area_, width_));
     ImGui::NewFrame();
-    draw_controls(*player_, std::nullopt, normals_);
+    draw_controls(*player_, controls_shown_, normals_);
     if (source_shown_ && draw_source()) {
       ++source_presses_;
     }
@@ -567,6 +598,8 @@ class ControlsTest : public ::testing::Test {
   StatsPanel panel_;
   std::optional<FrameStamp> shown_;
   std::uint32_t triangles_ = 0;
+  // The frame the status line names; none, "loading".
+  std::optional<FrameStamp> controls_shown_;
   bool breakdowns_ = false;  // take() adds one, submit and finish
   gfx::FrameMetrics render_;
   bool source_shown_ = false;
@@ -882,6 +915,33 @@ TEST_F(ControlsTest, ALineTooWideForTheWorkAreaBreaksBeforeItsLastPart) {
                   off + ImGui::GetTextLineHeightWithSpacing());
   ASSERT_EQ(panel_.lines()[2],
             "deblock LG · T 0.500 mm · 131,072 of 131,072 blocks exact");
+}
+
+// The status line breaks between its parts as a stats line does, so the
+// controls stay on screen. With the widest set a record names, it takes one
+// row at 625 points, and at 288 two: its frame and set, then its play state
+// and loop below them, each row inside the work area.
+TEST_F(ControlsTest, AStatusLineTooWideForTheWorkAreaBreaksBetweenItsParts) {
+  // The panel at `width` over the stream's last frame in `set`. An
+  // auto-sized window takes its size on its second frame.
+  const auto height_at = [&](std::uint32_t width, std::uint64_t set) {
+    controls_shown_ = stamp_of(2, 1'000, false);
+    controls_shown_->set = set;
+    width_ = width;
+    frame();
+    frame();
+    return panel().ContentSize.y;
+  };
+  constexpr std::uint64_t kWidestSet = stream::kNoSet - 1;
+  EXPECT_FLOAT_EQ(height_at(625, kWidestSet), height_at(625, stream::kNoSet));
+  const float no_set = height_at(288, stream::kNoSet);
+  EXPECT_FLOAT_EQ(height_at(288, kWidestSet),
+                  no_set + ImGui::GetTextLineHeightWithSpacing());
+  EXPECT_LE(panel().Size.x,
+            288.0f - 2.0f * ImGui::GetStyle().DisplaySafeAreaPadding.x);
+  ASSERT_EQ(status_line(controls_shown_, player_->frame_count(),
+                        player_->playing(), player_->loop()),
+            "frame 3/3 · set 18446744073709551614 · playing · loop");
 }
 
 // Compact, as on a phone, the rate sits in the renderer's column, and a line

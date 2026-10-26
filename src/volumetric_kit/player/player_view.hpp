@@ -69,6 +69,10 @@ struct PlayerViewConfig {
   /// (`core::InstanceConfig::request_debug_utils`): on, as recon labels its
   /// dispatches in Release; off for M4's A/B. Validation keeps them on.
   bool debug_labels = true;
+  /// Whether the extractor shares vertices between triangles
+  /// (recon::mesh::MarchingCubesConfig::share_vertices, through mesh_wiring):
+  /// true, as by default; false, no vertex shared, three a triangle.
+  bool share_vertices = true;
 };
 
 /// @brief The swapchain @ref PlayerView asks gfx for: gfx's FIFO default and
@@ -121,8 +125,9 @@ class PlayerView {
   ///                 outlive the view.
   /// @param extent   The drawable now, in pixels; both sides > 0.
   /// @param player   An opened player, not started.
-  /// @param config   The UI's sizes, the Source button, validation, and a
-  ///                 measurement's timing, tile depth and labels.
+  /// @param config   The UI's sizes, the Source button, validation, a
+  ///                 measurement's timing, tile depth and labels, and vertex
+  ///                 sharing.
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
   ///         @p player or an empty @p extent; or the first failure (device,
   ///         swapchain, pipeline, overlay, profiler, StreamPlayer::start).

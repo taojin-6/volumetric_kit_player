@@ -88,27 +88,40 @@ vp_add_test(measure_log volumetric_kit::player
 # the worker alone (--worker), its status and stats printed once a second, and
 # each frame logged with --csv: the measurement runner's (tools/measure/,
 # DECISIONS.md), a tool. ctest runs it on the tests' stream, two passes of every
-# frame timed: the worker alone everywhere, and the view where the loader has a
-# headless surface, as MoltenVK does; then it checks the logs, as the summarizer
-# reads them. It validates as the core's test policy asks, as the tests do.
+# frame timed, with vertices shared and not: the worker alone everywhere, and
+# the view where the loader has a headless surface, as MoltenVK does; then it
+# checks the logs, as the summarizer reads them. It validates as the core's test
+# policy asks, as the tests do.
 add_executable(vp_probe vp_probe.cpp)
 target_link_libraries(vp_probe PRIVATE volumetric_kit::player
                                        volumetric_kit::core_test_policy)
 vp_target_warnings(vp_probe)
 set(VP_PROBE_DIR "${CMAKE_CURRENT_BINARY_DIR}/probe")
 file(MAKE_DIRECTORY "${VP_PROBE_DIR}")
-set(VP_PROBE_CSV "${VP_PROBE_DIR}/worker.csv")
-set(probes vp_probe_worker_csv)
-add_test(NAME vp_probe_worker_csv
-         COMMAND vp_probe --worker --file "${VP_TEST_STREAMS}/sphere.vrst"
-                 --passes 2 --timing all --csv "${VP_PROBE_DIR}/worker.csv")
+set(probe_modes worker)
 if(APPLE)
-  add_test(NAME vp_probe_view_csv
-           COMMAND vp_probe --file "${VP_TEST_STREAMS}/sphere.vrst" --passes 2
-                   --timing all --csv "${VP_PROBE_DIR}/view.csv")
-  list(APPEND probes vp_probe_view_csv)
-  string(APPEND VP_PROBE_CSV ":${VP_PROBE_DIR}/view.csv")
+  list(APPEND probe_modes view)
 endif()
+set(probes "")
+set(VP_PROBE_CSV "")
+foreach(mode IN LISTS probe_modes)
+  set(worker "")
+  if(mode STREQUAL "worker")
+    set(worker --worker)
+  endif()
+  foreach(sharing on off)
+    set(csv "${VP_PROBE_DIR}/${mode}_${sharing}.csv")
+    add_test(
+      NAME vp_probe_${mode}_${sharing}_csv
+      COMMAND
+        vp_probe ${worker} --file "${VP_TEST_STREAMS}/sphere.vrst" --passes 2
+        --timing all --share-vertices ${sharing} --csv "${csv}")
+    list(APPEND probes vp_probe_${mode}_${sharing}_csv)
+    list(APPEND VP_PROBE_CSV "${csv}")
+  endforeach()
+endforeach()
+# The summarizer's check takes the logs joined by os.pathsep.
+string(REPLACE ";" ":" VP_PROBE_CSV "${VP_PROBE_CSV}")
 set_tests_properties(
   ${probes} PROPERTIES FIXTURES_REQUIRED vp_streams FIXTURES_SETUP vp_probe_csv
                        TIMEOUT 300)

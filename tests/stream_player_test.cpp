@@ -4,7 +4,8 @@
 // StreamPlayer on a device, over the tests' stream (test_stream.hpp). Its
 // track's counts and rate are what was written. Paused and stepped, so each
 // frame goes when the test says: frames arrive in order with their index,
-// pts, payload bytes, key, stage times (read, decode, mesh, submit, the wait
+// pts, payload bytes, key, set (kNoSet for a record that names none), stage
+// times (read, decode, mesh, submit, the wait
 // for its batch and finish, untimed with no device half) and the worker's
 // device counts over the frame alone; timed, decode and mesh have device
 // halves over recon's breakdowns, every frame or one in kSampleEvery, and
@@ -33,7 +34,8 @@
 // an unobserved voxel exact, each mesh like that rebuild exactly when all
 // are; set before start, the first decode takes it; toggled while paused, the
 // frame shown, not the next, is rebuilt, meshed and published again as a
-// rebuild, never timed, with nothing else going, at the end with loop off
+// rebuild with its set, never timed, with nothing else going, at the end with
+// loop off
 // too, and parked only at unpark; toggled while playing, the frames after
 // take it with no rebuild. A park holds the worker:
 // nothing is published while parked, a mesh waiting for the consumer
@@ -48,7 +50,8 @@
 //
 // Live, from a recon StreamServer on 127.0.0.1 publishing the stream (looped
 // and restamped for a steady flow), or a raw peer: frames arrive with their
-// seq as their index, a mesh of their own decode, decode, submit, wait,
+// seq as their index and their set, the status's too, a mesh of their own
+// decode, decode, submit, wait,
 // finish and mesh rows alone and the deblock on, which a toggle turns off and
 // on from the next record; each record is a decode batch and each mesh one,
 // with no staging buffer once the slots have grown; a join after a P-frame
@@ -551,6 +554,7 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     EXPECT_TRUE(got->rebuild);
     EXPECT_EQ(got->index, frame);
     EXPECT_EQ(got->pts_ns, pts_of(frame));
+    EXPECT_EQ(got->set, vp_test::set_of(frame)) << "its frame's";
     EXPECT_EQ(got->deblock_on, on);
     EXPECT_STREQ(got->deblock.filter, filter);
     EXPECT_NEAR(got->deblock.step, kTrueSdfStep, kStepError);
@@ -751,6 +755,9 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
     EXPECT_EQ(frame->bytes, all[i].size);
     EXPECT_EQ(frame->key, all[i].info.key);
     EXPECT_EQ(frame->key, i % kIntraPeriod == 0);
+    // Its record's set; kNoSet for the record that names none.
+    EXPECT_EQ(frame->set, all[i].info.set);
+    EXPECT_EQ(frame->set, vp_test::set_of(i));
     EXPECT_FALSE(frame->timed);
     const std::vector<core::StageRow>& rows = frame->stages.rows();
     ASSERT_EQ(rows.size(), 6u) << "frame " << i;
@@ -2580,6 +2587,10 @@ TEST_F(LivePlayerTest, FramesArriveWithTheirSeqAsTheirIndex) {
     EXPECT_EQ(frame->pts_ns, pts_of(i));
     EXPECT_EQ(frame->bytes, recording_.payloads[i].size());
     EXPECT_EQ(frame->key, i % kIntraPeriod == 0);
+    // Its record's set, as the status line's; kNoSet for the record that
+    // names none.
+    EXPECT_EQ(frame->set, vp_test::set_of(i));
+    EXPECT_EQ(player->live_status().set, vp_test::set_of(i));
     EXPECT_EQ(frame->records, 1u);
     EXPECT_EQ(frame->record_bytes, frame->bytes);
     EXPECT_TRUE(frame->deblock_on);

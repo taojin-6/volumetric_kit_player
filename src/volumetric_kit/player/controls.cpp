@@ -76,19 +76,41 @@ std::string grouped(std::uint32_t count) {
 // What joins a stats line's parts.
 constexpr std::string_view kSeparator = " · ";
 
-// A stats line, or, where it is wider than `width`, its part before its last
-// separator and, indented below it, the rest.
-void draw_stats_line(const std::string& line, float width) {
-  const std::size_t cut = line.rfind(kSeparator);
-  if (cut == std::string::npos ||
-      ImGui::CalcTextSize(line.c_str()).x <= width) {
-    ImGui::TextUnformatted(line.c_str());
-    return;
+// A stats or status line of parts joined by kSeparator: whole where it fits
+// `width`; else each row as many whole parts as fit, at least one, the rows
+// after the first indented. Where all but its last part fit, that is those
+// and, below them, the last.
+void draw_parted_line(std::string_view line, float width) {
+  bool indented = false;
+  do {
+    const float room =
+        indented ? width - ImGui::GetStyle().IndentSpacing : width;
+    std::size_t end = std::min(line.find(kSeparator), line.size());
+    while (end < line.size()) {
+      const std::size_t next =
+          std::min(line.find(kSeparator, end + kSeparator.size()), line.size());
+      if (ImGui::CalcTextSize(line.data(), line.data() + next).x > room) {
+        break;
+      }
+      end = next;
+    }
+    ImGui::TextUnformatted(line.data(), line.data() + end);
+    line.remove_prefix(std::min(line.size(), end + kSeparator.size()));
+    if (!line.empty() && !indented) {
+      ImGui::Indent();
+      indented = true;
+    }
+  } while (!line.empty());
+  if (indented) {
+    ImGui::Unindent();
   }
-  ImGui::TextUnformatted(line.c_str(), line.c_str() + cut);
-  ImGui::Indent();
-  ImGui::TextUnformatted(line.c_str() + cut + kSeparator.size());
-  ImGui::Unindent();
+}
+
+// The widest text a window holds inside the main viewport's work area.
+float text_room() {
+  const ImGuiStyle& style = ImGui::GetStyle();
+  return ImGui::GetMainViewport()->WorkSize.x -
+         2.0f * (style.DisplaySafeAreaPadding.x + style.WindowPadding.x);
 }
 
 // A button's size: kButtonEms font sizes wide, a frame tall.
@@ -157,8 +179,9 @@ void draw_file_controls(StreamPlayer& player,
   ImGui::SameLine();
   draw_normals(normals);
   draw_deblock(player);
-  ImGui::TextUnformatted(
-      status_line(shown, player.frame_count(), player.playing(), loop).c_str());
+  draw_parted_line(
+      status_line(shown, player.frame_count(), player.playing(), loop),
+      text_room());
 }
 
 }  // namespace
@@ -174,9 +197,9 @@ void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
     if (player.live()) {
       draw_normals(normals);
       draw_deblock(player);
-      ImGui::TextUnformatted(
-          live_status_line(player.live_status(), Playback::Clock::now())
-              .c_str());
+      draw_parted_line(
+          live_status_line(player.live_status(), Playback::Clock::now()),
+          text_room());
     } else {
       draw_file_controls(player, shown, normals);
     }
@@ -214,6 +237,9 @@ std::string live_status_line(const LiveStatus& status,
       break;
   }
   std::string line = "live · seq " + std::to_string(status.seq);
+  if (status.set != recon::stream::kNoSet) {
+    line += " · set " + std::to_string(status.set);
+  }
   const auto quiet = std::chrono::duration_cast<std::chrono::seconds>(
       now - status.last_record);
   if (now - status.last_record > std::chrono::seconds(1)) {
@@ -228,8 +254,11 @@ std::string status_line(const std::optional<FrameStamp>& shown,
     return "loading";
   }
   std::string line = "frame " + std::to_string(shown->index + 1) + "/" +
-                     std::to_string(frame_count) + " · " +
-                     (playing ? "playing" : "paused");
+                     std::to_string(frame_count);
+  if (shown->set != recon::stream::kNoSet) {
+    line += " · set " + std::to_string(shown->set);
+  }
+  line += playing ? " · playing" : " · paused";
   if (loop) {
     line += " · loop";
   }
@@ -330,12 +359,10 @@ void StatsPanel::draw(const PlaybackStats& stats,
   }
   // The widest text the body's window holds inside the work area.
   const ImGuiStyle& style = ImGui::GetStyle();
-  const float width =
-      viewport->WorkSize.x -
-      2.0f * (style.DisplaySafeAreaPadding.x + style.WindowPadding.x);
+  const float width = text_room();
   if (!compact_) {
     for (const std::string& line : lines_) {
-      draw_stats_line(line, width);
+      draw_parted_line(line, width);
     }
     gfx::ui::draw_stage_table("stages", rows_, window_);
     ImGui::TextUnformatted(display_.c_str());
@@ -382,7 +409,7 @@ void StatsPanel::draw(const PlaybackStats& stats,
   const std::size_t worker_lines = lines_.size() < 2 ? 0 : lines_.size() - 2;
   begin_column("##worker");
   for (std::size_t i = 0; i < worker_lines; ++i) {
-    draw_stats_line(lines_[i], worker_width);
+    draw_parted_line(lines_[i], worker_width);
   }
   draw_compact_table("stages", stages, window_);
   ImGui::EndChild();
@@ -391,7 +418,7 @@ void StatsPanel::draw(const PlaybackStats& stats,
   }
   begin_column("##render");
   for (std::size_t i = worker_lines; i < lines_.size(); ++i) {
-    draw_stats_line(lines_[i], width);
+    draw_parted_line(lines_[i], width);
   }
   ImGui::TextUnformatted(display_.c_str());
   draw_compact_table("render", drawn, render_window_);

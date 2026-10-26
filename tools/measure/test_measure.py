@@ -6,14 +6,15 @@ Dry runs print commands without running them. Runner tests use temporary
 repositories and command stubs; no build, measurement or device is started.
 
 DryRun: lab sends a script bash can parse that builds vp_probe and runs it
-under uvrun once per timing, at the tile depth and labels asked for; iphone
-builds the app on 6 jobs and installs it in the Mac's worktree for runs at
-the ref's commit and launches it once per timing, with the tile depth and
-labels; mac builds vp_probe in that worktree on each sibling's clean
-checkout at its pin, a worktree of it too, fetches the others, and waits for
-the Mac to be idle before the build and each run, whose load goes beside its
-log; a worktree already there is checked out instead; a ref the checkout
-does not know fetches every sibling.
+under uvrun once per timing, at the tile depth, labels and vertex sharing
+asked for; iphone builds the app on 6 jobs and installs it in the Mac's
+worktree for runs at the ref's commit and launches it once per timing, with
+the tile depth and labels, and --share-vertices off only when asked; mac
+builds vp_probe in that worktree on each sibling's clean checkout at its pin,
+a worktree of it too, fetches the others, and waits for the Mac to be idle
+before the build and each run, whose load goes beside its log, passing
+--share-vertices off only when asked; a worktree already there is checked
+out instead; a ref the checkout does not know fetches every sibling.
 
 Runner: failed fetches cannot use cached refs on the Mac or lab, a failed
 phone launch stops before polling, and lab logs with spaces in their paths
@@ -114,15 +115,18 @@ class DryRun(MeasureCase):
 
     def test_lab_sends_a_script_that_builds_and_runs_under_uvrun(self):
         text = self.measure("lab", "pr/7", "--passes", "3", "--frames", "9",
-                            "--tile-depth", "1", "--labels", "off")
+                            "--tile-depth", "1", "--labels", "off",
+                            "--share-vertices", "off")
         lines = text.splitlines()
         self.assertEqual(lines[0], "+ ssh lab.example bash -s <<'EOF'")
         script = "\n".join(lines[1:lines.index("EOF")])
         parsed = subprocess.run(["bash", "-n"], input=script, text=True,
                                 capture_output=True)
         self.assertEqual(parsed.returncode, 0, parsed.stderr)
-        self.assertIn('for option in --tile-depth --labels', script)
-        for line in ("passes=3; frames=9", "depth=1; labels=off", "ref=pr/7",
+        self.assertIn('for option in --tile-depth --labels --share-vertices',
+                      script)
+        for line in ("passes=3; frames=9", "depth=1; labels=off",
+                     "sharing=off", "ref=pr/7",
                      'build_probe uv "$repo" "$root/build"',
                      'run_probe uvtime "$root/build" "$stream" "$timing" '
                      '"$csv"'):
@@ -154,6 +158,14 @@ class DryRun(MeasureCase):
                           "--timing", "off", "--tile-depth", "0", "--labels",
                           "on"])
         self.assertRegex(commands[-1], r"-iphone-off\.csv\)$")
+        # Vertices unshared only when asked, as the default is the app's.
+        unshared = self.commands(self.measure(
+            "iphone", sha, "--timing", "off", "--share-vertices", "off"))
+        self.assertEqual(unshared[-2][-4:], ["--labels", "on",
+                                             "--share-vertices", "off"])
+        shared = self.commands(self.measure(
+            "iphone", sha, "--timing", "off", "--share-vertices", "on"))
+        self.assertNotIn("--share-vertices", shared[-2])
 
     def test_mac_builds_on_the_clean_siblings_at_their_pins(self):
         pins = {name: self.repo(f"volumetric_kit_{name}")
@@ -203,6 +215,23 @@ class DryRun(MeasureCase):
         self.assertEqual(commands[9], "(the logs summarized into "
                          f"{logs[0][:-len('-off.csv')]}.md)")
         self.assertEqual(len(commands), 10)
+
+    def test_mac_passes_unshared_vertices_only_when_asked(self):
+        sha = self.player_at({"core": "0" * 40})
+        for args, passed in (
+                ([], []), (["--share-vertices", "on"], []),
+                (["--share-vertices", "off"], ["--share-vertices", "off"])):
+            with self.subTest(args=args):
+                probes = [command for command in self.commands(self.measure(
+                    "mac", sha, "--timing", "off", *args))
+                          if isinstance(command, list)
+                          and command[0].endswith("/vp_probe")]
+                self.assertEqual(len(probes), 1, probes)
+                at = probes[0].index("--csv")
+                self.assertEqual(probes[0][at - len(passed):at], passed)
+                self.assertEqual(probes[0][at - len(passed) - 2:
+                                           at - len(passed)],
+                                 ["--timing", "off"])
 
     def test_mac_checks_out_a_worktree_already_there(self):
         sha = self.player_at({"core": "0" * 40})
@@ -451,10 +480,11 @@ class Runner(MeasureCase):
 
     def test_default_mac_and_lab_runs_support_old_and_new_probes(self):
         sha = self.probe_stubs()
-        for flags in ([], ["--tile-depth", "--labels"]):
+        for flags in ([], ["--tile-depth", "--labels", "--share-vertices"]):
             self.env["TEST_PROBE_FLAGS"] = json.dumps(flags)
             for mode in ("mac", "lab"):
-                for defaults in ([], ["--tile-depth", "0", "--labels", "on"]):
+                for defaults in ([], ["--tile-depth", "0", "--labels", "on",
+                                      "--share-vertices", "on"]):
                     with self.subTest(flags=flags, mode=mode, defaults=defaults):
                         before = len(self.commands())
                         done = self.measure(mode, sha, "--timing", "off",
@@ -467,6 +497,7 @@ class Runner(MeasureCase):
                         self.assertEqual(len(probes), 1, probes)
                         self.assertNotIn("--tile-depth", probes[0])
                         self.assertNotIn("--labels", probes[0])
+                        self.assertNotIn("--share-vertices", probes[0])
                         self.assertIn("--worker", probes[0])
                         at = probes[0].index("--passes")
                         self.assertEqual(probes[0][at:at + 4],
@@ -476,7 +507,8 @@ class Runner(MeasureCase):
         sha = self.probe_stubs()
         self.env["TEST_PROBE_FLAGS"] = "[]"
         for mode in ("mac", "lab"):
-            for option, value in (("--tile-depth", "1"), ("--labels", "off")):
+            for option, value in (("--tile-depth", "1"), ("--labels", "off"),
+                                  ("--share-vertices", "off")):
                 with self.subTest(mode=mode, option=option):
                     before = len(self.commands())
                     done = self.measure(mode, sha, "--timing", "off",
@@ -489,20 +521,23 @@ class Runner(MeasureCase):
 
     def test_mac_and_lab_pass_supported_nondefaults_to_the_probe(self):
         sha = self.probe_stubs()
-        self.env["TEST_PROBE_FLAGS"] = '["--tile-depth", "--labels"]'
+        self.env["TEST_PROBE_FLAGS"] = json.dumps(
+            ["--tile-depth", "--labels", "--share-vertices"])
         for mode in ("mac", "lab"):
             with self.subTest(mode=mode):
                 before = len(self.commands())
                 done = self.measure(mode, sha, "--timing", "off",
-                                    "--tile-depth", "1", "--labels", "off")
+                                    "--tile-depth", "1", "--labels", "off",
+                                    "--share-vertices", "off")
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertIn("fixture.vrst", done.stdout)
                 probes = [args for args in self.commands()[before:]
                           if args[0] == "vp_probe" and len(args) > 1]
                 self.assertEqual(len(probes), 1, probes)
                 at = probes[0].index("--tile-depth")
-                self.assertEqual(probes[0][at:at + 4],
-                                 ["--tile-depth", "1", "--labels", "off"])
+                self.assertEqual(probes[0][at:at + 6],
+                                 ["--tile-depth", "1", "--labels", "off",
+                                  "--share-vertices", "off"])
 
 
 if __name__ == "__main__":
