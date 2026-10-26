@@ -42,7 +42,7 @@ ctest --test-dir "$root/build" --output-on-failure
 `VP_BUILD_APPS`, `VP_BUILD_TESTS` (never on iOS) and `VP_WARNINGS_AS_ERRORS`
 default ON when the player is the top-level project, and OFF when another
 project adds it with `add_subdirectory` to link `volumetric_kit::player`.
-`VP_DESKTOP_APP` follows `VP_BUILD_APPS`; `-DVP_DESKTOP_APP=OFF` builds
+`VP_DESKTOP_APP` defaults to `VP_BUILD_APPS`; `-DVP_DESKTOP_APP=OFF` builds
 everything but the desktop app, with no GLFW.
 
 Two targets make the desktop programs library calls, so a program of its own
