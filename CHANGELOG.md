@@ -200,6 +200,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cache, rather than compile every pipeline in every test process.
 - A status or stats line too wide for the work area breaks between its
   parts, each row as many as fit, rather than once, before its last.
+- The live worker connects, and connects again after an end, through
+  `player::LiveConnection` (`live_connection.hpp`), its wait after an error
+  `kLiveRetry`. `LiveAddress`, `parse_live_address`, `to_string` and
+  `live_reason` move into that header, which `stream_player.hpp` includes.
+  What a live player shows, and when it retries, are unchanged.
 
 ### Fixed
 

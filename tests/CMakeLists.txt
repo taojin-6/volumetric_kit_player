@@ -52,6 +52,8 @@ set_tests_properties(
              vp_streams
              TIMEOUT
              300)
+# The live connection and its retry, against a sender on 127.0.0.1: host only.
+vp_add_test(live_connection volumetric_kit::player)
 # The mesh wiring, and the controls on a CPU ImGui context: host only.
 vp_add_test(mesh_wiring volumetric_kit::player)
 vp_add_test(controls volumetric_kit::player)
