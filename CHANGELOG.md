@@ -161,7 +161,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   included, the scenario or the command line sets over
   (`desktop_view_config` and `probe_view_config` give the result). vp_probe's
   `--latency` and `--save-meshes` exit 2 when a program set `make_hooks`,
-  and its log's `run` names a program's hooks.
+  and its log's `run` names a program's hooks. CI's window step also plays
+  the stream through `run_desktop` with a program's hooks
+  (`tests/vp_desktop_hooks.cpp`).
 
 ### Changed
 

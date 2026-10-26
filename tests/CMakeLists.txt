@@ -76,6 +76,14 @@ if(TARGET volumetric_kit_player)
             VP_CONFIG_EXAMPLES="${PROJECT_SOURCE_DIR}/config/examples")
   add_dependencies(vp_cli_test volumetric_kit_player)
 endif()
+# run_desktop in a program's own main, with hooks of the program's that count
+# their calls: CI's Xvfb step runs it as it runs the app, never ctest, as it
+# opens a window (AGENTS.md).
+if(TARGET volumetric_kit::player_desktop)
+  add_executable(vp_desktop_hooks vp_desktop_hooks.cpp)
+  target_link_libraries(vp_desktop_hooks PRIVATE volumetric_kit::player_desktop)
+  vp_target_warnings(vp_desktop_hooks)
+endif()
 # The command of vp_test_streams, above.
 add_executable(vp_write_stream vp_write_stream.cpp)
 target_link_libraries(

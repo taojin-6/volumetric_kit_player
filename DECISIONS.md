@@ -39,6 +39,11 @@ amends 2026-10-25's library entry.
 - **The subproject consumer test links both:** with its defaults it builds
   the library and `player_probe` and no GLFW; configured again with
   `VP_DESKTOP_APP` on, `player_desktop` too; neither the app nor `vp_probe`.
+- **CI's window step also runs `vp_desktop_hooks`,** a program of the tests'
+  that calls `run_desktop` with hooks counting their calls, and fails the
+  leg unless they were made once and ran for a mesh and a draw. Why: a test
+  never opens a window, so nothing else shows a program's `make_hooks`
+  reaching the window's view.
 
 ## 2026-10-26 — Per-frame hooks for the worker and the draw
 
@@ -804,7 +809,8 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   of the real window, surface and present path, and NVIDIA's ICD has no
   headless surface; without the insert, a clean log would prove nothing. A
   step, never a ctest, so no agent opens a window (AGENTS.md); the Mac legs
-  never open it, as their runners are daemons with no window server.
+  never open it, as their runners are daemons with no window server. *Since
+  2026-10-26 a program with hooks runs there too.*
 
 ## 2026-10-18 — An application over pinned core, recon and gfx
 
