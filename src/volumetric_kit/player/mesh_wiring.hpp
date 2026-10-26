@@ -20,9 +20,9 @@ namespace volumetric_kit::player {
 /// @brief The extractor's config and the exchange's, which must agree.
 struct MeshWiring {
   /// The extractor's: the draw's usage, both families, a ring two slots
-  /// deeper than the renderer's frames in flight (one published and not yet
-  /// taken, one meshed in the next frame's batch), and vertices shared or
-  /// not, as asked.
+  /// deeper than the renderer's frames in flight, one frame counted as two
+  /// (one published and not yet taken, one meshed in the next frame's
+  /// batch), one more with `holds`, and vertices shared or not, as asked.
   recon::mesh::MarchingCubesConfig mc;
   /// The exchange's: the renderer's frames in flight, and whether it reads
   /// from another family than the extractor writes on.
@@ -49,11 +49,14 @@ struct MeshWiring {
 ///                          true, about a third of the vertices to hold,
 ///                          write and fetch; false, three of its own a
 ///                          triangle, a cheaper extraction.
+/// @param holds             One more mesh in the ring, for a commit hook that
+///                          may hold or skip one (FrameTaker): a skipped mesh
+///                          keeps its slot until the next is drawn.
 /// @return The two configs.
 MeshWiring mesh_wiring(std::uint32_t graphics_family,
                        std::uint32_t compute_family,
                        std::uint32_t frames_in_flight,
-                       bool share_vertices = true);
+                       bool share_vertices = true, bool holds = false);
 
 /// @brief Whether the renderer can go on drawing @p exchange's meshes.
 ///

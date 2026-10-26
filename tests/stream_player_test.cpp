@@ -26,7 +26,20 @@
 // quit is prompt, playing, paused or waiting for a consumer that takes
 // nothing; the worker sleeps until taken() rather than polling for the take; a
 // fatal error stops the worker, a failed build on it included, as does a ring
-// one short; start is refused once started or stopped.
+// one short; start is refused once started or stopped. With hooks
+// (frame_hooks.hpp): after_mesh runs once before each publish, a redone
+// frame's and a rebuild's included, with the grid its mesh was made from;
+// the mesh published is ready once after_mesh's batch is, a steady frame
+// then two submits with no added blocking wait, and the batch finished, its
+// readback written, by the next after_mesh, a park, before its on_park, a
+// stop, and before an unpublished frame's extra goes, though a park waits
+// for it no longer than its timeout, returning false with no on_park and the
+// hold kept; an after_mesh failure stops playback. vp_probe --worker's
+// consumer (FrameTaker): a held frame keeps the one before, the file at most
+// two frames ahead; a skipped frame is never drawn and the ring one mesh
+// deeper never runs out; a second skip before a draw holds; a commit failure
+// is the take's and holds the frame; and each slot keeps the extra of the
+// frame it drew until its next take.
 // Playing, no frame arrives before its pts says. The deblock is on by
 // default, and each frame says what it did, its filter and its blocks, the
 // exact ones among them: the true-SDF stream's, none exact, each mesh unlike
@@ -73,8 +86,12 @@
 // that are no stream, a session with no geometry track and a name that does not
 // resolve show why, with status() OK; a reason of StreamClient's shows less
 // its prefix, which names the address; a park ends the wait to retry, so
-// the unpark connects at once; and a stop is prompt while a refused connect
-// waits to retry, connected and idle, and parked. On the host: open refuses
+// the unpark connects at once; a stop is prompt while a refused connect
+// waits to retry, connected and idle, and parked; and with hooks, after_mesh
+// runs before each publish with its grid, a park runs on_park and the unpark
+// on_resume, a held frame keeps the one before while records keep decoding,
+// and a new connection's grid waits for the last after_mesh batch. On the
+// host: open refuses
 // what it cannot play, and connect an empty host or port 0. The device tests
 // skip with no device. A stop that no control can wake fails only on ctest's
 // timeout.
@@ -100,6 +117,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <functional>
 #include <future>
@@ -121,6 +139,7 @@
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/player/frame_hooks.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
@@ -136,8 +155,11 @@ namespace networking = recon::networking;
 namespace stream = recon::stream;
 using namespace std::chrono_literals;
 using volumetric_kit::player::DeviceTiming;
+using volumetric_kit::player::FrameCommit;
 using volumetric_kit::player::FrameExchange;
+using volumetric_kit::player::FrameHooks;
 using volumetric_kit::player::FrameStamp;
+using volumetric_kit::player::FrameTaker;
 using volumetric_kit::player::LiveState;
 using volumetric_kit::player::LiveStatus;
 using volumetric_kit::player::PlaybackStats;
@@ -238,6 +260,49 @@ bool park_mid_step(StreamPlayer& player) {
   return true;
 }
 
+// What a test's after_mesh saw of a mesh: its frame, the mesh, and the
+// grid's blocks.
+struct Meshed {
+  std::uint64_t index = 0;
+  std::uint64_t pass = 0;
+  bool rebuild = false;
+  std::uint64_t generation = 0;
+  std::uint32_t blocks = 0;  // the grid's allocated blocks
+  std::uint32_t triangles = 0;
+  const core::TimelineSemaphore* ready = nullptr;  // the mesh's, as it saw it
+};
+
+// A test's hooks' record: written by the worker, read by the test.
+class HookLog {
+ public:
+  void add(const Meshed& meshed) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    meshed_.push_back(meshed);
+  }
+  std::vector<Meshed> meshed() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return meshed_;
+  }
+  // The highest frame index meshed in pass `pass`; none before one.
+  std::optional<std::uint64_t> newest(std::uint64_t pass = 1) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::optional<std::uint64_t> newest;
+    for (const Meshed& meshed : meshed_) {
+      if (meshed.pass == pass && (!newest || meshed.index > *newest)) {
+        newest = meshed.index;
+      }
+    }
+    return newest;
+  }
+
+  std::atomic<int> parks{0};    // on_park's calls
+  std::atomic<int> resumes{0};  // on_resume's
+
+ private:
+  mutable std::mutex mutex_;
+  std::vector<Meshed> meshed_;
+};
+
 class StreamPlayerTest : public core::test::VulkanDeviceTest {
  protected:
   core::DeviceRequirements requirements() const override {
@@ -274,7 +339,8 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   }
 
   // The stream opened and started on the test's device, paused unless
-  // `playing`, into `slot_count` ring slots; the fixture owns it.
+  // `playing`, into `slot_count` ring slots, with hooks_ when set; the
+  // fixture owns it.
   StreamPlayer* start(bool playing,
                       std::uint32_t slot_count = kFramesInFlight + 2) {
     core::Result<std::unique_ptr<StreamPlayer>> opened =
@@ -288,10 +354,53 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
       player_->pause();
     }
     player_->set_device_timing(timing_);
-    const core::Status started = player_->start(
-        device(), allocator(), extractor_config(slot_count), exchange_);
+    const core::Status started =
+        player_->start(device(), allocator(), extractor_config(slot_count),
+                       exchange_, hooks_ ? &*hooks_ : nullptr);
     EXPECT_TRUE(started.ok()) << started.message();
     return started.ok() ? player_.get() : nullptr;
+  }
+
+  // The next frame `taker` commits, taking a display frame each millisecond
+  // on alternate slots, as vp_probe's --worker does: its stamp, or empty
+  // when none comes within `wait`, or with a failure recorded when the take
+  // fails. Its mesh's ready value has been reached (FrameTaker).
+  std::optional<FrameStamp> take_with(FrameTaker& taker,
+                                      SteadyClock::duration wait = kArrival) {
+    const SteadyClock::time_point deadline = SteadyClock::now() + wait;
+    while (SteadyClock::now() < deadline) {
+      core::Result<std::optional<FrameStamp>> taken = taker.take(slot_);
+      slot_ = (slot_ + 1) % kFramesInFlight;
+      if (!taken.ok()) {
+        ADD_FAILURE() << taken.status().message();
+        return std::nullopt;
+      }
+      if (taken->has_value()) {
+        if (!exchange_.live().empty()) {
+          expect_ready(exchange_.live());
+        }
+        return std::move(*taken);
+      }
+      std::this_thread::sleep_for(1ms);
+    }
+    return std::nullopt;
+  }
+
+  // hooks_ with an after_mesh that notes each mesh into log_, as it saw it,
+  // and an on_park and an on_resume that count into it.
+  FrameHooks& logging_hooks() {
+    hooks_.emplace();
+    hooks_->after_mesh =
+        [this](core::CommandBatch&, const recon::volume::VoxelBlockGrid& grid,
+               const recon::mesh::DeviceMesh& mesh, FrameStamp& stamp) {
+          log_.add({stamp.index, stamp.pass, stamp.rebuild, mesh.generation,
+                    grid.map().allocated_blocks(), mesh.triangle_count,
+                    mesh.ready.semaphore});
+          return core::Status();
+        };
+    hooks_->on_park = [this] { ++log_.parks; };
+    hooks_->on_resume = [this] { ++log_.resumes; };
+    return *hooks_;
   }
 
   // The next mesh the worker publishes, taken as a renderer's frame takes
@@ -705,7 +814,10 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   DeviceTiming timing_ = DeviceTiming::kOff;
   FrameExchange exchange_;
   std::uint32_t slot_ = 0;
-  // Destroyed first: its worker uses the exchange.
+  // The hooks start() gives the worker, when set, and what they note.
+  std::optional<FrameHooks> hooks_;
+  HookLog log_;
+  // Destroyed first: its worker uses the exchange and the hooks.
   std::unique_ptr<StreamPlayer> player_;
 };
 
@@ -2046,6 +2158,781 @@ TEST_F(StreamPlayerTest, ToggledWhilePlayingTheFramesAfterTakeIt) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
+// --- Hooks (frame_hooks.hpp): the worker's, and FrameTaker's ---------------
+
+// A view of the extractor's `buffer` of `bytes`: its deleter frees nothing.
+core::Buffer borrowed(VkBuffer buffer, VkDeviceSize bytes,
+                      VkBufferUsageFlags usage, VkSharingMode sharing) {
+  return core::Buffer(
+      buffer, bytes, usage, sharing, nullptr, [] {}, std::nullopt);
+}
+
+// The extras a test's after_mesh made, by frame, and which have been
+// released: shared with each extra's deleter, which may run after the test's
+// body, from the exchange's teardown.
+struct Extras {
+  std::mutex mutex;
+  std::vector<std::uint64_t> released;  // frame indices, in release order
+
+  // An extra for frame `index`, which notes its release.
+  static std::shared_ptr<const void> make(const std::shared_ptr<Extras>& log,
+                                          std::uint64_t index) {
+    return std::shared_ptr<const void>(
+        new std::uint64_t(index), [log](const void* extra) {
+          const auto* frame = static_cast<const std::uint64_t*>(extra);
+          {
+            std::lock_guard<std::mutex> lock(log->mutex);
+            log->released.push_back(*frame);
+          }
+          delete frame;
+        });
+  }
+  bool was_released(std::uint64_t index) {
+    std::lock_guard<std::mutex> lock(mutex);
+    return std::find(released.begin(), released.end(), index) != released.end();
+  }
+};
+
+// Stepped through a pass, then toggled while paused: after_mesh runs once
+// before each publish, each frame's and then the rebuild's, with the grid its
+// mesh was made from, which holds that frame's blocks, and the mesh then
+// committed, ready at after_mesh's batch's point, not the extract's.
+TEST_F(StreamPlayerTest, AfterMeshRunsOnceBeforeEachPublishWithItsMeshsGrid) {
+  const std::vector<std::uint32_t> blocks = block_counts();
+  ASSERT_EQ(blocks.size(), kFrames);
+  logging_hooks();
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  std::vector<std::uint64_t> generations;
+  std::vector<const core::TimelineSemaphore*> readies;  // as committed
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    player->step();
+    const std::optional<FrameStamp> frame = take_with(taker);
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_EQ(frame->index, i);
+    generations.push_back(exchange_.live().generation);
+    readies.push_back(exchange_.live().ready.semaphore);
+  }
+  player->set_deblock(false);
+  const std::optional<FrameStamp> rebuilt = take_with(taker);
+  ASSERT_TRUE(rebuilt.has_value()) << "no rebuild";
+  EXPECT_TRUE(rebuilt->rebuild);
+  generations.push_back(exchange_.live().generation);
+  readies.push_back(exchange_.live().ready.semaphore);
+  const std::vector<Meshed> meshed = log_.meshed();
+  ASSERT_EQ(meshed.size(), kFrames + 1);
+  for (std::size_t i = 0; i < meshed.size(); ++i) {
+    SCOPED_TRACE(::testing::Message() << "publish " << i);
+    const std::uint64_t frame = std::min<std::uint64_t>(i, kFrames - 1);
+    EXPECT_EQ(meshed[i].index, frame);
+    EXPECT_EQ(meshed[i].rebuild, i == kFrames);
+    EXPECT_EQ(meshed[i].blocks, blocks[frame]);
+    EXPECT_EQ(meshed[i].generation, generations[i]);
+    EXPECT_GT(meshed[i].triangles, 0u);
+    EXPECT_NE(readies[i], nullptr);
+    EXPECT_NE(readies[i], meshed[i].ready) << "published at the extract's";
+  }
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// The grow stream's frame kGrownFrame is decoded again at its finish and
+// meshed in a batch of its own: after_mesh runs once for it, with the grown
+// grid holding its blocks.
+TEST_F(StreamPlayerTest, AfterMeshRunsForAFrameMeshedAgainAfterARedo) {
+  path_ = scratch_.copy(VP_TEST_STREAMS, vp_test::kGrowStream);
+  ASSERT_FALSE(path_.empty());
+  const std::vector<std::uint32_t> blocks = block_counts();
+  ASSERT_EQ(blocks.size(), kFrames);
+  logging_hooks();
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  for (std::uint64_t i = 0; i <= vp_test::kGrownFrame; ++i) {
+    player->step();
+    const std::optional<FrameStamp> frame = take_with(taker);
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_EQ(frame->index, i);
+  }
+  const std::vector<Meshed> meshed = log_.meshed();
+  ASSERT_EQ(meshed.size(), vp_test::kGrownFrame + 1);
+  const Meshed& grown = meshed.back();
+  EXPECT_EQ(grown.index, vp_test::kGrownFrame);
+  EXPECT_EQ(grown.blocks, blocks[vp_test::kGrownFrame]);
+  EXPECT_EQ(grown.generation, exchange_.live().generation);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// The mesh published is ready once after_mesh's batch is: a consumer batch
+// that waits for its ready value reads what that batch wrote, each frame its
+// own value.
+TEST_F(StreamPlayerTest, AMeshIsPublishedReadyOnceAfterMeshsBatchIs) {
+  core::BufferDesc desc;
+  desc.size = sizeof(std::uint32_t);
+  desc.usage =
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  desc.memory = core::MemoryUsage::DeviceOnly;
+  core::Result<core::Buffer> made = allocator().create_buffer(desc);
+  ASSERT_TRUE(made.ok()) << made.status().message();
+  const core::Buffer written = std::move(made).value();
+  std::atomic<const core::TimelineSemaphore*> meshed{nullptr};  // its ready's
+  hooks_.emplace();
+  hooks_->after_mesh = [&written, &meshed](core::CommandBatch& batch,
+                                           const recon::volume::VoxelBlockGrid&,
+                                           const recon::mesh::DeviceMesh& mesh,
+                                           FrameStamp& stamp) {
+    meshed = mesh.ready.semaphore;
+    return batch.fill(written, 0, sizeof(std::uint32_t),
+                      static_cast<std::uint32_t>(100 + stamp.index));
+  };
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  std::uint64_t last = 0;  // the ready value published last
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    player->step();
+    // Taken as it comes, its ready value reached or not.
+    std::optional<FrameStamp> frame;
+    ASSERT_TRUE(eventually([&] {
+      exchange_.begin_frame(
+          slot_, [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+            frame = std::move(stamp);
+            player->taken();
+            return true;
+          });
+      slot_ = (slot_ + 1) % kFramesInFlight;
+      return frame.has_value();
+    })) << "no frame "
+        << i;
+    // Not the extract's point, which after_mesh saw: one value on a
+    // timeline of the hooks' batches each.
+    const core::TimelinePoint ready = exchange_.live().ready;
+    ASSERT_NE(ready.semaphore, nullptr);
+    EXPECT_NE(ready.semaphore, meshed.load()) << "frame " << i;
+    EXPECT_EQ(ready.value, last + 1) << "frame " << i;
+    last = ready.value;
+    std::uint32_t value = 0;
+    core::CommandBatch read(device(), allocator());
+    ASSERT_TRUE(read.readback(written, 0, sizeof value, &value).ok());
+    core::Result<core::PendingBatch> pending =
+        read.submit_async({exchange_.live().ready}, {});
+    ASSERT_TRUE(pending.ok()) << pending.status().message();
+    const core::Status waited = pending->wait();
+    ASSERT_TRUE(waited.ok()) << waited.message();
+    EXPECT_EQ(value, 100 + frame->index) << "frame " << i;
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);  // before `written` goes
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A take holds a mesh whose ready value the device has not reached, without
+// asking the commit hook, and commits it at the first take after: a mesh
+// published behind a value the host sets, to a player opened but not
+// started, whose taken() only wakes its worker.
+TEST_F(StreamPlayerTest, ATakeHoldsAMeshUntilItsReadyValueIsReached) {
+  core::Result<std::unique_ptr<StreamPlayer>> opened =
+      StreamPlayer::open(path_);
+  ASSERT_TRUE(opened.ok()) << opened.status().message();
+  player_ = std::move(opened).value();
+  core::Result<core::TimelineSemaphore> made =
+      core::TimelineSemaphore::create(device());
+  ASSERT_TRUE(made.ok()) << made.status().message();
+  core::TimelineSemaphore ready = std::move(made).value();
+  int asked = 0;
+  FrameHooks hooks;
+  hooks.commit = [&asked](const recon::mesh::DeviceMesh&, FrameStamp&) {
+    ++asked;
+    return core::Result<FrameCommit>(FrameCommit::kDraw);
+  };
+  FrameTaker taker(*player_, exchange_, kFramesInFlight, &hooks);
+  // An empty mesh, which needs no buffer to be handed to the commit.
+  recon::mesh::DeviceMesh mesh;
+  mesh.generation = 1;
+  mesh.ready = {&ready, 1};
+  FrameStamp stamp;
+  stamp.index = 7;
+  exchange_.publish(mesh, stamp);
+  for (std::uint32_t slot = 0; slot < 4; ++slot) {
+    const core::Result<std::optional<FrameStamp>> held =
+        taker.take(slot % kFramesInFlight);
+    ASSERT_TRUE(held.ok()) << held.status().message();
+    EXPECT_FALSE(held->has_value()) << "committed unreached";
+  }
+  EXPECT_EQ(asked, 0);
+  EXPECT_EQ(taker.frames_held(), 1u);
+  EXPECT_EQ(exchange_.live().generation, 0u);
+  ASSERT_TRUE(ready.signal(1).ok());
+  const core::Result<std::optional<FrameStamp>> taken = taker.take(0);
+  ASSERT_TRUE(taken.ok()) << taken.status().message();
+  ASSERT_TRUE(taken->has_value());
+  EXPECT_EQ((*taken)->index, 7u);
+  EXPECT_TRUE((*taken)->taken.has_value());
+  EXPECT_EQ(asked, 1);
+  EXPECT_EQ(exchange_.live().generation, 1u);
+  EXPECT_EQ(taker.frames_held(), 1u);
+}
+
+// Played, a steady frame with after_mesh is two submits, its batch and
+// after_mesh's, with no staging buffer and at most one wait that blocked,
+// as with none (OneBatchPerFrame): after_mesh's batch is waited for only at
+// the next after_mesh, when the GPU has run it, so most frames have none, as
+// a frame's own fence has normally signalled by its due time; a wait right
+// after its submit would block each frame. Taken with no device work of the
+// test's.
+TEST_F(StreamPlayerTest, AfterMeshAddsOneSubmitAndNoBlockingWait) {
+  core::BufferDesc desc;
+  desc.size = sizeof(std::uint32_t);
+  desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  desc.memory = core::MemoryUsage::DeviceOnly;
+  core::Result<core::Buffer> made = allocator().create_buffer(desc);
+  ASSERT_TRUE(made.ok()) << made.status().message();
+  const core::Buffer written = std::move(made).value();
+  hooks_.emplace();
+  hooks_->after_mesh = [&written](core::CommandBatch& batch,
+                                  const recon::volume::VoxelBlockGrid&,
+                                  const recon::mesh::DeviceMesh&,
+                                  FrameStamp& stamp) {
+    return batch.fill(written, 0, sizeof(std::uint32_t),
+                      static_cast<std::uint32_t>(stamp.index));
+  };
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  std::uint64_t seen = 0;
+  std::uint64_t blocked = 0;  // frames with a wait that blocked
+  while (seen < kFrames) {
+    const std::optional<FrameStamp> frame = take_with(taker);
+    ASSERT_TRUE(frame.has_value()) << "no frame after " << seen;
+    if (frame->pass < 2) {
+      continue;
+    }
+    ++seen;
+    SCOPED_TRACE(::testing::Message() << "frame " << frame->index);
+    EXPECT_EQ(frame->counters.submits, 2u);
+    EXPECT_EQ(frame->counters.staging_buffers, 0u);
+    EXPECT_LE(frame->counters.host_waits, 1u);
+    blocked += frame->counters.host_waits != 0 ? 1 : 0;
+  }
+  EXPECT_LE(blocked, seen / 2) << "after_mesh's batch waited for at once";
+  EXPECT_LT(stop_time(*player), kPrompt);  // before `written` goes
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A readback after_mesh records is written by the next after_mesh: the
+// worker finished its batch first.
+TEST_F(StreamPlayerTest, AfterMeshsReadbackIsWrittenBeforeTheNextAfterMesh) {
+  struct Read {
+    VkDrawIndexedIndirectCommand command{};
+    std::uint32_t triangles = 0;
+  };
+  std::deque<Read> reads;  // the worker's, until it stops
+  int unwritten = 0;
+  hooks_.emplace();
+  hooks_->after_mesh = [&](core::CommandBatch& batch,
+                           const recon::volume::VoxelBlockGrid&,
+                           const recon::mesh::DeviceMesh& mesh, FrameStamp&) {
+    if (!reads.empty() &&
+        reads.back().command.indexCount !=
+            recon::mesh::kIndicesPerTriangle * reads.back().triangles) {
+      ++unwritten;
+    }
+    reads.emplace_back();
+    reads.back().triangles = mesh.triangle_count;
+    return batch.readback(
+        borrowed(mesh.indirect, sizeof(VkDrawIndexedIndirectCommand),
+                 mesh.indirect_usage, mesh.sharing_mode),
+        0, sizeof(VkDrawIndexedIndirectCommand), &reads.back().command);
+  };
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    ASSERT_TRUE(take_with(taker).has_value()) << "no frame " << i;
+  }
+  stop_time(*player);  // its batch finished before the stop returns
+  ASSERT_GE(reads.size(), kFrames);
+  EXPECT_EQ(unwritten, 0);
+  EXPECT_EQ(reads.back().command.indexCount,
+            recon::mesh::kIndicesPerTriangle * reads.back().triangles);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Played, then parked: the park finishes after_mesh's batch, its readback
+// written, then runs on_park, once until an unpark, and returns; nothing else
+// runs while parked; the unpark runs on_resume, then the worker goes on.
+TEST_F(StreamPlayerTest, AParkFinishesAfterMeshsBatchThenOnParkAndOnResume) {
+  std::mutex mutex;
+  std::deque<VkDrawIndexedIndirectCommand> commands;  // under mutex
+  std::deque<std::uint32_t> triangles;                // under mutex
+  int unfinished_at_park = 0;  // on_park's, on the park's thread
+  logging_hooks();
+  const auto log = hooks_->after_mesh;
+  const auto parked = hooks_->on_park;
+  hooks_->on_park = [&, parked] {
+    parked();
+    std::lock_guard<std::mutex> lock(mutex);
+    if (commands.empty() ||
+        commands.back().indexCount !=
+            recon::mesh::kIndicesPerTriangle * triangles.back()) {
+      ++unfinished_at_park;
+    }
+  };
+  hooks_->after_mesh = [&, log](core::CommandBatch& batch,
+                                const recon::volume::VoxelBlockGrid& grid,
+                                const recon::mesh::DeviceMesh& mesh,
+                                FrameStamp& stamp) {
+    VKC_TRY(log(batch, grid, mesh, stamp));
+    std::lock_guard<std::mutex> lock(mutex);
+    commands.emplace_back();
+    triangles.push_back(mesh.triangle_count);
+    return batch.readback(
+        borrowed(mesh.indirect, sizeof(VkDrawIndexedIndirectCommand),
+                 mesh.indirect_usage, mesh.sharing_mode),
+        0, sizeof(VkDrawIndexedIndirectCommand), &commands.back());
+  };
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  for (int i = 0; i < 2; ++i) {
+    ASSERT_TRUE(take_with(taker).has_value());
+  }
+  ASSERT_TRUE(player->park(kArrival));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_FALSE(commands.empty());
+    EXPECT_EQ(commands.back().indexCount,
+              recon::mesh::kIndicesPerTriangle * triangles.back())
+        << "after_mesh's batch unfinished at the park's return";
+    EXPECT_EQ(unfinished_at_park, 0) << "on_park before the batch finished";
+  }
+  EXPECT_EQ(log_.parks, 1);
+  EXPECT_EQ(log_.resumes, 0);
+  const std::size_t meshed = log_.meshed().size();
+  std::this_thread::sleep_for(kQuiet);
+  EXPECT_EQ(log_.meshed().size(), meshed) << "after_mesh ran parked";
+  ASSERT_TRUE(player->park(kArrival));
+  EXPECT_EQ(log_.parks, 1) << "on_park again before an unpark";
+  player->unpark();
+  EXPECT_EQ(log_.resumes, 1);
+  EXPECT_TRUE(eventually([&] {
+    (void)take_with(taker, 1ms);
+    return log_.meshed().size() > meshed;
+  })) << "no after_mesh after the unpark";
+  player->unpark();  // not parked: no on_resume
+  EXPECT_EQ(log_.resumes, 1);
+  EXPECT_LT(stop_time(*player), kPrompt);  // before `commands` goes
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Paused, frame 1 stepped to with an after_mesh batch of copies that run
+// about kBusy, and published: a park then finds the worker idle and waits
+// for that batch no longer than its timeout. It returns false with the batch
+// still running, its readback unwritten and on_park not run, and the hold
+// stays: a step goes only at the unpark. A later park finishes the batch,
+// then runs on_park.
+TEST_F(StreamPlayerTest, AParkWaitsForAfterMeshsBatchNoLongerThanItsTimeout) {
+  constexpr VkDeviceSize kCopyBytes = VkDeviceSize{64} << 20;
+  constexpr std::uint32_t kMaxCopies = 16384;
+  constexpr auto kBusy = 400ms;
+  constexpr auto kWait = 20ms;  // the park's timeout
+  constexpr std::uint32_t kValue = 7;
+  const auto make = [this](VkDeviceSize size) {
+    core::BufferDesc desc;
+    desc.size = size;
+    desc.usage =
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    desc.memory = core::MemoryUsage::DeviceOnly;
+    return allocator().create_buffer(desc);
+  };
+  core::Result<core::Buffer> from = make(kCopyBytes);
+  core::Result<core::Buffer> to = make(kCopyBytes);
+  core::Result<core::Buffer> mark = make(sizeof(std::uint32_t));
+  ASSERT_TRUE(from.ok()) << from.status().message();
+  ASSERT_TRUE(to.ok()) << to.status().message();
+  ASSERT_TRUE(mark.ok()) << mark.status().message();
+  const auto record_copies = [&](core::CommandBatch& batch,
+                                 std::uint32_t count) -> core::Status {
+    for (std::uint32_t i = 0; i < count; ++i) {
+      VKC_TRY(batch.copy(*from, 0, *to, 0, kCopyBytes));
+    }
+    return core::Status();
+  };
+  // As many copies as run about kBusy on this device: timed from 8, four
+  // times more each round, until a batch of them takes 50 ms.
+  std::uint32_t copies = 8;
+  for (;;) {
+    core::CommandBatch batch(device(), allocator());
+    core::Status ran = record_copies(batch, copies);
+    const SteadyClock::time_point began = SteadyClock::now();
+    if (ran.ok()) {
+      ran = batch.submit();
+    }
+    ASSERT_TRUE(ran.ok()) << ran.message();
+    const SteadyClock::duration took = SteadyClock::now() - began;
+    if (took >= 50ms || copies >= kMaxCopies) {
+      const double scale = std::chrono::duration<double>(kBusy) / took;
+      copies = static_cast<std::uint32_t>(
+          std::clamp(copies * scale, 1.0, static_cast<double>(kMaxCopies)));
+      break;
+    }
+    copies *= 4;
+  }
+  logging_hooks();
+  std::atomic<bool> heavy{false};  // the next after_mesh records the copies
+  std::uint32_t marked = 0;        // their batch's readback
+  const auto log = hooks_->after_mesh;
+  hooks_->after_mesh = [&, log](core::CommandBatch& batch,
+                                const recon::volume::VoxelBlockGrid& grid,
+                                const recon::mesh::DeviceMesh& mesh,
+                                FrameStamp& stamp) -> core::Status {
+    VKC_TRY(log(batch, grid, mesh, stamp));
+    if (!heavy.exchange(false)) {
+      return core::Status();
+    }
+    VKC_TRY(record_copies(batch, copies));
+    VKC_TRY(batch.fill(*mark, 0, sizeof(std::uint32_t), kValue));
+    return batch.readback(*mark, 0, sizeof(std::uint32_t), &marked);
+  };
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  player->step();
+  ASSERT_TRUE(take_with(taker).has_value());  // frame 0
+  // From here on no early return, so the stop comes before what the copies'
+  // batch uses goes.
+  heavy = true;
+  player->step();
+  // Frame 1 published, so its step has ended: kept back untaken.
+  bool running = false;  // its batch, when its publish was seen
+  EXPECT_TRUE(eventually([&] {
+    const recon::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
+        slot_, [&](const recon::mesh::DeviceMesh& mesh, FrameStamp&) {
+          if (mesh.ready.semaphore != nullptr) {
+            const core::Result<std::uint64_t> reached =
+                mesh.ready.semaphore->value();
+            running = reached.ok() && *reached < mesh.ready.value;
+          }
+          return recon::mesh::CommitDecision::kPark;
+        });
+    slot_ = (slot_ + 1) % kFramesInFlight;
+    return outcome == recon::mesh::ExchangeOutcome::kParked;
+  })) << "frame 1 not published";
+  EXPECT_TRUE(running) << "the copies finished before the publish was seen";
+  const std::size_t meshed = log_.meshed().size();
+  EXPECT_FALSE(player->park(kWait)) << "the park waited out the copies";
+  EXPECT_EQ(log_.parks, 0) << "on_park with after_mesh's batch running";
+  EXPECT_EQ(marked, 0u) << "the readback written";  // nothing waits meanwhile
+  player->step();
+  std::this_thread::sleep_for(kQuiet);
+  EXPECT_EQ(log_.meshed().size(), meshed) << "a step after a timed-out park";
+  EXPECT_TRUE(player->park(kArrival));
+  EXPECT_EQ(marked, kValue)
+      << "after_mesh's batch unfinished at the park's end";
+  EXPECT_EQ(log_.parks, 1);
+  player->unpark();
+  EXPECT_EQ(log_.resumes, 1);
+  for (std::uint64_t i = 1; i <= 2; ++i) {
+    const std::optional<FrameStamp> frame = take_with(taker);
+    if (!frame) {
+      ADD_FAILURE() << "no frame " << i << " after the unpark";
+      break;
+    }
+    EXPECT_EQ(frame->index, i);
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);  // before the buffers and `marked` go
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// after_mesh's failure stops playback with its status: no frame after it is
+// published.
+TEST_F(StreamPlayerTest, AnAfterMeshFailureStopsPlaybackWithItsStatus) {
+  std::atomic<int> calls{0};
+  hooks_.emplace();
+  hooks_->after_mesh = [&calls](core::CommandBatch&,
+                                const recon::volume::VoxelBlockGrid&,
+                                const recon::mesh::DeviceMesh&, FrameStamp&) {
+    if (++calls == 3) {
+      return core::Status::unsupported("the test's after_mesh refuses");
+    }
+    return core::Status();
+  };
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  std::vector<std::uint64_t> shown;
+  ASSERT_TRUE(eventually([&] {
+    const std::optional<FrameStamp> frame = take_with(taker, 1ms);
+    if (frame) {
+      shown.push_back(frame->index);
+    }
+    return !player->status().ok();
+  }));
+  const core::Status status = player->status();
+  EXPECT_EQ(status.domain(), Code::Unsupported) << status.message();
+  EXPECT_NE(status.message().find("after_mesh refuses"), std::string::npos)
+      << status.message();
+  EXPECT_FALSE(take_with(taker, kQuiet).has_value());
+  EXPECT_LT(stop_time(*player), kPrompt);  // before `calls` goes
+  EXPECT_EQ(calls, 3);
+  EXPECT_LE(shown.size(), 2u);
+}
+
+// A stop while the worker waits to publish a frame that nothing takes
+// finishes that frame's after_mesh batch before its stamp, and so its extra,
+// goes: the extra's release finds the batch's readback written.
+TEST_F(StreamPlayerTest, AnUnpublishedFramesExtraGoesOnceItsBatchHasFinished) {
+  constexpr std::uint32_t kValue = 7;
+  core::BufferDesc desc;
+  desc.size = sizeof(std::uint32_t);
+  desc.usage =
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  desc.memory = core::MemoryUsage::DeviceOnly;
+  core::Result<core::Buffer> made = allocator().create_buffer(desc);
+  ASSERT_TRUE(made.ok()) << made.status().message();
+  const core::Buffer written = std::move(made).value();
+  // Each after_mesh's readback, kept here so a late write lands in memory
+  // still there, and its extra's release: shared with the extras' deleters,
+  // which may run after the test's body.
+  struct Reads {
+    std::mutex mutex;
+    std::deque<std::uint32_t> values;  // the readbacks' destinations
+    int released = 0;
+    int unwritten = 0;  // released before its batch finished
+  };
+  const auto reads = std::make_shared<Reads>();
+  hooks_.emplace();
+  hooks_->after_mesh = [&written, reads](core::CommandBatch& batch,
+                                         const recon::volume::VoxelBlockGrid&,
+                                         const recon::mesh::DeviceMesh&,
+                                         FrameStamp& stamp) -> core::Status {
+    std::uint32_t* value = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(reads->mutex);
+      value = &reads->values.emplace_back(0u);
+    }
+    VKC_TRY(batch.fill(written, 0, sizeof(std::uint32_t), kValue));
+    VKC_TRY(batch.readback(written, 0, sizeof(std::uint32_t), value));
+    stamp.extra = std::shared_ptr<const void>(value, [reads](const void* read) {
+      std::lock_guard<std::mutex> lock(reads->mutex);
+      ++reads->released;
+      if (*static_cast<const std::uint32_t*>(read) != kValue) {
+        ++reads->unwritten;
+      }
+    });
+    return core::Status();
+  };
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  // Nothing is taken: frame 0 is published, and frame 1, meshed, waits.
+  ASSERT_TRUE(eventually([&] {
+    std::lock_guard<std::mutex> lock(reads->mutex);
+    return reads->values.size() >= 2;
+  }));
+  std::this_thread::sleep_for(kQuiet);     // in the wait of frame 1's publish
+  EXPECT_LT(stop_time(*player), kPrompt);  // before `written` goes
+  {
+    std::lock_guard<std::mutex> lock(reads->mutex);
+    EXPECT_EQ(reads->values.size(), 2u);
+    EXPECT_EQ(reads->released, 1) << "frame 1's, never published";
+    EXPECT_EQ(reads->unwritten, 0) << "an extra went before its batch";
+  }
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A commit hook's failure is the take's, and the frame is held, neither drawn
+// nor skipped: asked again at the next take, which may draw it.
+TEST_F(StreamPlayerTest, ACommitFailureIsTheTakesAndHoldsTheFrame) {
+  int asked = 0;  // for frame 1, on the take's thread
+  hooks_.emplace();
+  hooks_->commit = [&asked](const recon::mesh::DeviceMesh&,
+                            FrameStamp& stamp) -> core::Result<FrameCommit> {
+    if (stamp.index == 1 && ++asked <= 2) {
+      return core::Status::unsupported("the test's commit refuses");
+    }
+    return core::Result<FrameCommit>(FrameCommit::kDraw);
+  };
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  player->step();
+  ASSERT_TRUE(take_with(taker).has_value());  // frame 0
+  const std::uint64_t before = exchange_.live().generation;
+  player->step();
+  core::Status refused;
+  ASSERT_TRUE(eventually([&] {
+    core::Result<std::optional<FrameStamp>> taken = taker.take(slot_);
+    slot_ = (slot_ + 1) % kFramesInFlight;
+    if (!taken.ok()) {
+      refused = taken.status();
+      return true;
+    }
+    EXPECT_FALSE(taken->has_value()) << "frame 1 drawn";
+    return false;
+  }));
+  EXPECT_EQ(refused.domain(), Code::Unsupported) << refused.message();
+  EXPECT_NE(refused.message().find("commit refuses"), std::string::npos)
+      << refused.message();
+  EXPECT_EQ(exchange_.live().generation, before) << "the frame before stays";
+  const core::Result<std::optional<FrameStamp>> again = taker.take(slot_);
+  slot_ = (slot_ + 1) % kFramesInFlight;
+  EXPECT_FALSE(again.ok()) << "not asked again";
+  const std::optional<FrameStamp> frame = take_with(taker);
+  ASSERT_TRUE(frame.has_value());
+  EXPECT_EQ(frame->index, 1u);
+  EXPECT_EQ(asked, 3);
+  EXPECT_EQ(taker.frames_skipped(), 0u);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// vp_probe --worker's consumer (FrameTaker) under a commit hook that holds
+// frame 2: frame 1 stays live, the hook is asked again each take, and the
+// worker publishes frame 3 and meshes frame 4, two ahead, then waits for
+// the take; released, frames 2 to 5 follow in order. Frame 2 counts as held
+// once, as may a frame whose ready value the take found unreached.
+TEST_F(StreamPlayerTest, AHeldFrameKeepsTheOneBeforeAndTheFileTwoAheadAtMost) {
+  logging_hooks();
+  std::atomic<bool> release{false};
+  int holds = 0;  // the hook's kHold answers: the take's thread's
+  hooks_->commit = [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+    if (stamp.index == 2 && !release) {
+      ++holds;
+      return core::Result<FrameCommit>(FrameCommit::kHold);
+    }
+    return core::Result<FrameCommit>(FrameCommit::kDraw);
+  };
+  StreamPlayer* player = start(/*playing=*/true, kFramesInFlight + 3);
+  ASSERT_NE(player, nullptr);
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  for (std::uint64_t i = 0; i < 2; ++i) {
+    const std::optional<FrameStamp> frame = take_with(taker);
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_EQ(frame->index, i);
+  }
+  const std::uint64_t held = exchange_.live().generation;
+  const std::uint64_t held_before = taker.frames_held();
+  // Frame 3 is due half a second on (kGapNs), frame 4 a period after.
+  ASSERT_TRUE(eventually([&] {
+    EXPECT_FALSE(take_with(taker, 1ms).has_value()) << "a frame while held";
+    return log_.newest().value_or(0) >= 4;
+  }));
+  EXPECT_FALSE(take_with(taker, kQuiet).has_value());
+  EXPECT_EQ(log_.newest(), 4u) << "more than two frames ahead";
+  EXPECT_EQ(exchange_.live().generation, held) << "the frame before stays";
+  EXPECT_GE(holds, 5);
+  EXPECT_EQ(taker.frames_held(), held_before + 1);
+  release = true;
+  for (std::uint64_t i = 2; i < kFrames; ++i) {
+    const std::optional<FrameStamp> frame = take_with(taker);
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_EQ(frame->index, i);
+  }
+  EXPECT_EQ(taker.frames_skipped(), 0u);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A commit hook that skips every odd frame, over three passes: no odd frame
+// is ever drawn, the frame before stays live meanwhile, the next one
+// follows, and the ring one mesh deeper (mesh_wiring's holds) never runs
+// out.
+TEST_F(StreamPlayerTest, ASkippedFrameIsNeverDrawnAndTheRingNeverRunsOut) {
+  constexpr std::uint64_t kPasses = 3;
+  hooks_.emplace();
+  hooks_->commit = [](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+    return core::Result<FrameCommit>(stamp.index % 2 == 1 ? FrameCommit::kSkip
+                                                          : FrameCommit::kDraw);
+  };
+  StreamPlayer* player = start(/*playing=*/true, kFramesInFlight + 3);
+  ASSERT_NE(player, nullptr);
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  std::vector<std::uint64_t> drawn;
+  for (std::uint64_t i = 0; i < kPasses * kFrames / 2; ++i) {
+    const std::optional<FrameStamp> frame = take_with(taker);
+    ASSERT_TRUE(frame.has_value()) << "no frame after " << drawn.size() << "; "
+                                   << player->status().message();
+    drawn.push_back(frame->index);
+  }
+  std::vector<std::uint64_t> expected;
+  for (std::uint64_t pass = 0; pass < kPasses; ++pass) {
+    for (std::uint64_t i = 0; i < kFrames; i += 2) {
+      expected.push_back(i);
+    }
+  }
+  EXPECT_EQ(drawn, expected);
+  // The last pass's last odd frame may not be taken yet.
+  EXPECT_GE(taker.frames_skipped(), kPasses * kFrames / 2 - 1);
+  EXPECT_LE(taker.frames_skipped(), kPasses * kFrames / 2);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// One frame is skipped at most between two drawn: frame 2 skipped, the hook's
+// skip of frame 3 holds it instead, asked again each take, until the hook
+// draws it.
+TEST_F(StreamPlayerTest, ASecondSkipBeforeADrawHoldsTheFrame) {
+  std::atomic<int> asked{0};  // for frame 3
+  hooks_.emplace();
+  hooks_->commit = [&asked](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+    if (stamp.index == 2 || (stamp.index == 3 && ++asked < 4)) {
+      return core::Result<FrameCommit>(FrameCommit::kSkip);
+    }
+    return core::Result<FrameCommit>(FrameCommit::kDraw);
+  };
+  StreamPlayer* player = start(/*playing=*/false, kFramesInFlight + 3);
+  ASSERT_NE(player, nullptr);
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  for (std::uint64_t i = 0; i < 2; ++i) {
+    player->step();
+    const std::optional<FrameStamp> frame = take_with(taker);
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_EQ(frame->index, i);
+  }
+  player->step();  // frame 2, skipped
+  ASSERT_TRUE(eventually([&] {
+    EXPECT_FALSE(take_with(taker, 1ms).has_value()) << "frame 2 drawn";
+    return taker.frames_skipped() == 1;
+  }));
+  player->step();  // frame 3, its skip held
+  const std::optional<FrameStamp> frame = take_with(taker);
+  ASSERT_TRUE(frame.has_value());
+  EXPECT_EQ(frame->index, 3u);
+  EXPECT_EQ(asked, 4);
+  EXPECT_EQ(taker.frames_skipped(), 1u);
+  EXPECT_EQ(taker.frames_held(), 1u);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Each slot keeps the extra of the frame it drew until its next take: frame
+// 0's goes only at the take of the slot that drew it last, after frame 1 is
+// committed on the other; frame 1's while it is live, never.
+TEST_F(StreamPlayerTest, ATakerKeepsAnExtraUntilTheSlotsThatDrewItTakeAgain) {
+  const auto extras = std::make_shared<Extras>();
+  hooks_.emplace();
+  hooks_->after_mesh =
+      [extras](core::CommandBatch&, const recon::volume::VoxelBlockGrid&,
+               const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+        stamp.extra = Extras::make(extras, stamp.index);
+        return core::Status();
+      };
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  player->step();
+  ASSERT_TRUE(take_with(taker).has_value());  // frame 0, on one slot
+  for (int i = 0; i < 3; ++i) {               // and on both
+    ASSERT_TRUE(taker.take(slot_).ok());
+    slot_ = (slot_ + 1) % kFramesInFlight;
+  }
+  player->step();
+  ASSERT_TRUE(take_with(taker).has_value());  // frame 1, on slot_ - 1
+  EXPECT_FALSE(extras->was_released(0)) << "the other slot drew frame 0 last";
+  ASSERT_TRUE(taker.take(slot_).ok());
+  EXPECT_TRUE(extras->was_released(0));
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(taker.take(slot_).ok());
+    slot_ = (slot_ + 1) % kFramesInFlight;
+  }
+  EXPECT_FALSE(extras->was_released(1)) << "frame 1 is live";
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
 // --- Live: the tests' stream served on 127.0.0.1 ----------------------------
 // Never 0.0.0.0, which could raise a firewall prompt.
 
@@ -2360,8 +3247,8 @@ class LivePlayerTest : public StreamPlayerTest {
     ASSERT_TRUE(published.ok()) << published.message();
   }
 
-  // A live player of `host`:`port`, started on the test's device; the
-  // fixture owns it.
+  // A live player of `host`:`port`, started on the test's device, with
+  // hooks_ when set; the fixture owns it.
   StreamPlayer* start_live(std::uint16_t port,
                            const std::string& host = "127.0.0.1") {
     core::Result<std::unique_ptr<StreamPlayer>> connected =
@@ -2372,7 +3259,8 @@ class LivePlayerTest : public StreamPlayerTest {
     }
     player_ = std::move(connected).value();
     const core::Status started =
-        player_->start(device(), allocator(), extractor_config(), exchange_);
+        player_->start(device(), allocator(), extractor_config(), exchange_,
+                       hooks_ ? &*hooks_ : nullptr);
     EXPECT_TRUE(started.ok()) << started.message();
     return started.ok() ? player_.get() : nullptr;
   }
@@ -3265,6 +4153,149 @@ TEST_F(LivePlayerTest, AStopIsPromptWhileParked) {
   ASSERT_TRUE(reaches(LiveState::kConnected));
   ASSERT_TRUE(player->park(kArrival));
   EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Live, after_mesh runs once before each publish, with the grid its mesh was
+// made from, holding that record's blocks, and the mesh is committed ready
+// at after_mesh's batch's point; a park runs on_park, and the unpark
+// on_resume.
+TEST_F(LivePlayerTest, AfterMeshRunsBeforeEachLivePublishWithItsMeshsGrid) {
+  const std::vector<std::uint32_t> blocks = block_counts();
+  ASSERT_EQ(blocks.size(), kFrames);
+  logging_hooks();
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  std::vector<std::uint64_t> generations;
+  std::vector<const core::TimelineSemaphore*> readies;  // as committed
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    ASSERT_NO_FATAL_FAILURE(publish(*server, i));
+    const std::optional<FrameStamp> frame = take_with(taker);
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_EQ(frame->index, i);
+    generations.push_back(exchange_.live().generation);
+    readies.push_back(exchange_.live().ready.semaphore);
+  }
+  const std::vector<Meshed> meshed = log_.meshed();
+  ASSERT_EQ(meshed.size(), kFrames);
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    EXPECT_EQ(meshed[i].index, i);
+    EXPECT_EQ(meshed[i].blocks, blocks[i]) << "frame " << i;
+    EXPECT_EQ(meshed[i].generation, generations[i]) << "frame " << i;
+    EXPECT_NE(readies[i], nullptr) << "frame " << i;
+    EXPECT_NE(readies[i], meshed[i].ready)
+        << "frame " << i << " published at the extract's point";
+  }
+  ASSERT_TRUE(player->park(kArrival));
+  EXPECT_EQ(log_.parks, 1);
+  EXPECT_EQ(log_.resumes, 0);
+  player->unpark();
+  EXPECT_EQ(log_.resumes, 1);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Live, a commit hook that holds frame 1: frame 0 stays live while the
+// worker goes on decoding each record that comes; released, frame 1 is
+// drawn, then a newer one.
+TEST_F(LivePlayerTest, AHeldFrameKeepsTheOneBeforeWhileRecordsKeepDecoding) {
+  std::atomic<bool> release{false};
+  hooks_.emplace();
+  hooks_->commit = [&release](const recon::mesh::DeviceMesh&,
+                              FrameStamp& stamp) {
+    return core::Result<FrameCommit>(
+        stamp.index == 1 && !release ? FrameCommit::kHold : FrameCommit::kDraw);
+  };
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  ASSERT_NO_FATAL_FAILURE(publish(*server, 0));
+  const std::optional<FrameStamp> first = take_with(taker);
+  ASSERT_TRUE(first.has_value());
+  EXPECT_EQ(first->index, 0u);
+  const std::uint64_t held = exchange_.live().generation;
+  ASSERT_NO_FATAL_FAILURE(publish(*server, 1));
+  ASSERT_TRUE(eventually([&] {
+    EXPECT_FALSE(take_with(taker, 1ms).has_value()) << "a frame while held";
+    return taker.frames_held() == 1;
+  }));
+  for (std::uint64_t i = 2; i < kFrames; ++i) {
+    ASSERT_NO_FATAL_FAILURE(publish(*server, i));
+    ASSERT_TRUE(eventually([&] {
+      EXPECT_FALSE(take_with(taker, 1ms).has_value()) << "a frame while held";
+      return player->live_status().seq == i;
+    })) << "record "
+        << i << " not received while held";
+  }
+  EXPECT_EQ(exchange_.live().generation, held) << "the frame before stays";
+  release = true;
+  const std::optional<FrameStamp> second = take_with(taker);
+  ASSERT_TRUE(second.has_value());
+  EXPECT_EQ(second->index, 1u);
+  // The newest, after the records decoded meanwhile.
+  std::optional<FrameStamp> newest;
+  while (!newest || newest->index < kFrames - 1) {
+    newest = take_with(taker);
+    ASSERT_TRUE(newest.has_value());
+    EXPECT_GT(newest->index, 1u);
+  }
+  EXPECT_GE(newest->records, 2u);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Live, after_mesh's batch reads the grid its mesh was made from. When the
+// sender goes and the next connection makes a grid of its own, the last grid
+// goes only once that batch has finished, so the layer sees no buffer
+// destroyed in use (the fixture fails on its errors). The mesh stays untaken
+// until then, so no take reads the batch's value first.
+TEST_F(LivePlayerTest, ANewConnectionsGridWaitsForAfterMeshsBatch) {
+  std::mutex mutex;
+  std::deque<float> reads;  // under mutex: each batch's readback destination
+  hooks_.emplace();
+  hooks_->after_mesh =
+      [&](core::CommandBatch& batch, const recon::volume::VoxelBlockGrid& grid,
+          const recon::mesh::DeviceMesh&, FrameStamp&) -> core::Status {
+    VKC_ASSIGN(const recon::volume::AttributeView tsdf, grid.attribute("tsdf"));
+    std::lock_guard<std::mutex> lock(mutex);
+    return batch.readback(*tsdf.buffer, 0, sizeof(float),
+                          &reads.emplace_back(0.0f));
+  };
+  std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  const std::uint16_t port = server->port();
+  StreamPlayer* player = start_live(port);
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  ASSERT_NO_FATAL_FAILURE(publish(*server, 0));
+  ASSERT_TRUE(eventually([&] {
+    std::lock_guard<std::mutex> lock(mutex);
+    return !reads.empty();
+  }));
+  server.reset();
+  ASSERT_TRUE(eventually([&] {
+    const LiveStatus status = player->live_status();
+    return status.state == LiveState::kConnecting && !status.last_error.empty();
+  }));
+  server = serve(port);
+  ASSERT_NE(server, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  ASSERT_TRUE(take_with(taker).has_value());  // the last connection's
+  ASSERT_NO_FATAL_FAILURE(publish(*server, 0));
+  const std::optional<FrameStamp> frame = take_with(taker);
+  ASSERT_TRUE(frame.has_value());
+  EXPECT_EQ(frame->index, 0u);
+  EXPECT_LT(stop_time(*player), kPrompt);  // before `reads` goes
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    EXPECT_EQ(reads.size(), 2u);
+  }
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 

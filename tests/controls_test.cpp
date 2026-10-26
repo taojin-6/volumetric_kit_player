@@ -11,14 +11,14 @@
 // playing(), Step pauses, Loop toggles, Normals flips the view's shading and
 // shows pressed while on, hovered or not, Deblock, on at first, toggles the
 // player's deblock, on the row or, where the row would not fit, below it,
+// Unlit, off at first, flips the view's Unlit, after Deblock or below it,
 // "Pause" and "Normals" fit their buttons, a finger on the controls is
 // ImGui's, and they keep clear of the safe area; a status line too wide for
 // the work area breaks between its parts, the rows after the first indented;
-// a live player's, never started, are Normals and Deblock over its status
-// line. The Source button is drawn only when asked for, at the work area's
-// top right clear of the safe area and of
-// the stats' body, leaving the controls where they were, and a tap on it is
-// one press. The stats sit at the
+// a live player's, never started, are Normals, Deblock and Unlit over its
+// status line. The Source button is drawn only when asked for, at the work
+// area's top right clear of the safe area and of the stats' body, leaving the
+// controls where they were, and a tap on it is one press. The stats sit at the
 // work area's top left; a finger on their header is ImGui's and on their body
 // the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
@@ -36,6 +36,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cfloat>
 #include <chrono>
 #include <cstdint>
@@ -444,7 +445,7 @@ class ControlsTest : public ::testing::Test {
     seconds_ += 1.0 / 60.0;
     touch_->new_frame(display(seconds_, safe_area_, width_));
     ImGui::NewFrame();
-    draw_controls(*player_, controls_shown_, normals_);
+    draw_controls(*player_, controls_shown_, normals_, unlit_);
     if (source_shown_ && draw_source()) {
       ++source_presses_;
     }
@@ -594,6 +595,7 @@ class ControlsTest : public ::testing::Test {
   vp_test::Scratch scratch_;
   std::unique_ptr<StreamPlayer> player_;
   bool normals_ = false;  // the view's shading, which the controls flip
+  bool unlit_ = false;    // the view's Unlit, which its box flips
   std::optional<PlaybackStats> stats_;
   StatsPanel panel_;
   std::optional<FrameStamp> shown_;
@@ -668,8 +670,8 @@ TEST_F(ControlsTest, DeblockIsOnAtFirstAndATapTogglesIt) {
 }
 
 // 340 points across, the row with Deblock would be wider than the panel may
-// grow, so Deblock is below it, at its left, and the status line below that;
-// a tap there toggles it.
+// grow, so Deblock is below it, at its left, Unlit after it, and the status
+// line below them; a tap there toggles it.
 TEST_F(ControlsTest, WhereTheRowWouldNotFitDeblockIsBelowIt) {
   width_ = 340;
   frame();
@@ -679,6 +681,9 @@ TEST_F(ControlsTest, WhereTheRowWouldNotFitDeblockIsBelowIt) {
   const glm::vec2 deblock =
       vp_test::control_top_left(window, vp_test::kDeblock);
   EXPECT_EQ(deblock.x, vp_test::control_top_left(window, 0).x);
+  const glm::vec2 unlit = vp_test::control_top_left(window, vp_test::kUnlit);
+  EXPECT_EQ(unlit.y, deblock.y);
+  EXPECT_GT(unlit.x, deblock.x);
   const float row = vp_test::control_size(window, 0).y;
   const float spacing = ImGui::GetStyle().ItemSpacing.y;
   EXPECT_NEAR(window.ContentSize.y,
@@ -691,6 +696,34 @@ TEST_F(ControlsTest, WhereTheRowWouldNotFitDeblockIsBelowIt) {
   EXPECT_TRUE(player_->playing()) << "the tap pressed Deblock alone";
 }
 
+// Unlit, a box after Deblock, off at first: a tap flips the view's Unlit and
+// nothing else, and another flips it back. 400 points across, the row holds
+// Deblock but not Unlit, which takes a line below at its left; 600 across, it
+// is on the row.
+TEST_F(ControlsTest, UnlitFlipsTheViewsUnlitAndFollowsDeblock) {
+  for (const std::uint32_t width : {400u, 600u}) {
+    SCOPED_TRACE(width);
+    width_ = width;
+    frame();
+    frame();
+    const ImGuiWindow& window = panel();
+    EXPECT_TRUE(vp_test::deblock_on_row(window));
+    const glm::vec2 unlit = vp_test::control_top_left(window, vp_test::kUnlit);
+    const glm::vec2 first = vp_test::control_top_left(window, 0);
+    EXPECT_EQ(unlit.y == first.y, width == 600u);
+    EXPECT_EQ(item_under(control(vp_test::kUnlit)),
+              ImGui::FindWindowByName(kControlsWindow)->GetID("Unlit"));
+    ASSERT_FALSE(unlit_);
+    tap(control(vp_test::kUnlit));
+    EXPECT_TRUE(unlit_);
+    EXPECT_FALSE(normals_);
+    EXPECT_TRUE(player_->deblock());
+    EXPECT_TRUE(player_->playing()) << "the tap pressed Unlit alone";
+    tap(control(vp_test::kUnlit));
+    EXPECT_FALSE(unlit_);
+  }
+}
+
 // At the desktop's scale, this context's, as at the iOS shell's
 // (player_view_test), "Pause" and "Normals" fit their buttons.
 TEST_F(ControlsTest, PauseAndNormalsFitTheirButtons) {
@@ -701,12 +734,13 @@ TEST_F(ControlsTest, PauseAndNormalsFitTheirButtons) {
             vp_test::text_width(panel(), "Normals") + padding);
 }
 
-// A live player's controls are Normals and Deblock over its status line: a
-// frame and a line tall and as wide as the line, which a row with
-// Play/Pause, Step and Loop would outgrow. A tap on Normals flips the view's
-// shading, and one on Deblock the player's deblock.
+// A live player's controls are Normals, Deblock and Unlit over its status
+// line: a frame and a line tall and as wide as the wider of the two, which a
+// row with Play/Pause, Step and Loop would outgrow. A tap on Normals flips
+// the view's shading, one on Deblock the player's deblock, and one on Unlit
+// the view's Unlit.
 TEST_F(ControlsTest,
-       ALivePlayersControlsAreNormalsAndDeblockOverItsStatusLine) {
+       ALivePlayersControlsAreNormalsDeblockAndUnlitOverItsStatusLine) {
   core::Result<std::unique_ptr<StreamPlayer>> live =
       StreamPlayer::connect({"127.0.0.1", 47801});  // never started: no I/O
   ASSERT_TRUE(live.ok()) << live.status().message();
@@ -719,18 +753,27 @@ TEST_F(ControlsTest,
               vp_test::control_size(window, 0).y +
                   ImGui::GetStyle().ItemSpacing.y + line,
               1.0f);
-  const float width =
+  const float text =
       ImGui::GetIO()
           .Fonts->Fonts[0]
           ->CalcTextSizeA(line, FLT_MAX, 0.0f, "connecting to 127.0.0.1:47801")
           .x;
-  EXPECT_NEAR(window.ContentSize.x, width, 1.0f);
+  const ImVec2 padding = ImGui::GetStyle().WindowPadding;
+  const glm::vec2 unlit = vp_test::live_top_left(window, vp_test::kUnlit);
+  const float row = unlit.x + vp_test::control_width(window, vp_test::kUnlit) -
+                    (window.Pos.x + padding.x);
+  EXPECT_EQ(unlit.y, window.Pos.y + padding.y);
+  EXPECT_NEAR(window.ContentSize.x, std::max(text, row), 1.0f);
   tap(control(0));
   EXPECT_TRUE(normals_);
   tap(control(0));
   EXPECT_FALSE(normals_);
   EXPECT_TRUE(player_->deblock());
   tap(vp_test::live_deblock_middle(panel()));
+  EXPECT_FALSE(player_->deblock());
+  EXPECT_FALSE(normals_);
+  tap(vp_test::live_middle(panel(), vp_test::kUnlit));
+  EXPECT_TRUE(unlit_);
   EXPECT_FALSE(player_->deblock());
   EXPECT_FALSE(normals_);
 }

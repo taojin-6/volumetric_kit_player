@@ -96,8 +96,9 @@ vp_add_test(measure_log volumetric_kit::player
 # checks the logs, as the summarizer reads them. It validates as the core's test
 # policy asks, as the tests do.
 add_executable(vp_probe vp_probe.cpp)
-target_link_libraries(vp_probe PRIVATE volumetric_kit::player
-                                       volumetric_kit::core_test_policy)
+target_link_libraries(
+  vp_probe PRIVATE volumetric_kit::player volumetric_kit::recon_io
+                   volumetric_kit::core_test_policy)
 vp_target_warnings(vp_probe)
 set(VP_PROBE_DIR "${CMAKE_CURRENT_BINARY_DIR}/probe")
 file(MAKE_DIRECTORY "${VP_PROBE_DIR}")
@@ -155,6 +156,36 @@ set_tests_properties(
              "skipped"
              TIMEOUT
              60)
+# vp_probe's hooks' options on the tests' stream, each run checked by
+# probe_check.py: --latency's figures, the draws' through the view, and every
+# record released; --save-meshes' PLY of each of its 6 frames (test_stream.hpp's
+# kFrames), as its line states.
+set(VP_PROBE_CHECK "${CMAKE_CURRENT_SOURCE_DIR}/probe_check.py")
+set(hooked "")
+foreach(mode IN LISTS probe_modes)
+  set(worker "")
+  set(draws 1)
+  if(mode STREQUAL "worker")
+    set(worker --worker)
+    set(draws 0)
+  endif()
+  add_test(
+    NAME vp_probe_${mode}_latency
+    COMMAND
+      Python3::Interpreter -B "${VP_PROBE_CHECK}" latency ${draws}
+      $<TARGET_FILE:vp_probe> ${worker} --latency --file
+      "${VP_TEST_STREAMS}/sphere.vrst")
+  set(meshes "${VP_PROBE_DIR}/meshes_${mode}")
+  add_test(
+    NAME vp_probe_${mode}_save_meshes
+    COMMAND
+      Python3::Interpreter -B "${VP_PROBE_CHECK}" save-meshes "${meshes}" 6
+      $<TARGET_FILE:vp_probe> ${worker} --save-meshes "${meshes}" --file
+      "${VP_TEST_STREAMS}/sphere.vrst")
+  list(APPEND hooked vp_probe_${mode}_latency vp_probe_${mode}_save_meshes)
+endforeach()
+set_tests_properties(${hooked} PROPERTIES FIXTURES_REQUIRED vp_streams TIMEOUT
+                                          300)
 # MoltenVK has a headless surface and several queue families, so on Apple the
 # view's tests cross families rather than skip: on MoltenVK's default families
 # above, and again on its specialized ones, as the core's cross-family tests do,

@@ -22,12 +22,14 @@
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/orbit_camera.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
+#include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 #include "volumetric_kit/player/controls.hpp"
+#include "volumetric_kit/player/frame_hooks.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
@@ -74,6 +76,12 @@ struct PlayerViewConfig {
   /// true, as by default; false, no vertex shared, three a triangle: a
   /// cheaper extraction for about three times the vertices (DECISIONS.md).
   bool share_vertices = true;
+  /// Called in create, after the device and the pipeline, before the worker
+  /// starts (frame_hooks.hpp). Given, the ring holds one mesh more
+  /// (mesh_wiring's `holds`); what the hooks capture must outlive the view.
+  MakeHooks make_hooks;
+  /// The panel's Unlit, at start (PlayerView::unlit).
+  bool unlit = false;
 };
 
 /// @brief The swapchain @ref PlayerView asks gfx for: gfx's FIFO default and
@@ -119,20 +127,22 @@ class PlayerView {
   ///        and a gfx::Profiler for the stats' "draw (mesh+UI)" row, which
   ///        @ref frame attaches to the frame loop while the draw is timed
   ///        (PlayerViewConfig::device_timing). Aim the camera at the first
-  ///        view: target (0, 0.85, 0), 3 m. Then start @p player at the
-  ///        config's tile depth; its worker builds its kernels, and it plays
-  ///        unless the caller paused it.
+  ///        view: target (0, 0.85, 0), 3 m. Make the hooks
+  ///        (PlayerViewConfig::make_hooks). Then start @p player at the
+  ///        config's tile depth, with the hooks; its worker builds its
+  ///        kernels, and it plays unless the caller paused it.
   /// @param surface  The window system's source; its window or layer must
   ///                 outlive the view.
   /// @param extent   The drawable now, in pixels; both sides > 0.
   /// @param player   An opened player, not started.
   /// @param config   The UI's sizes, the Source button, validation, a
-  ///                 measurement's timing, tile depth and labels, and vertex
-  ///                 sharing.
+  ///                 measurement's timing, tile depth and labels, vertex
+  ///                 sharing, the hooks and Unlit.
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
   ///         @p player or an empty @p extent; or the first failure (device,
-  ///         swapchain, pipeline, overlay, profiler, StreamPlayer::start).
-  ///         Host allocation failures return `OutOfMemory`.
+  ///         swapchain, pipeline, overlay, profiler, make_hooks,
+  ///         StreamPlayer::start). Host allocation failures return
+  ///         `OutOfMemory`.
   static core::Result<std::unique_ptr<PlayerView>> create(
       const gfx::windowing::SurfaceSource& surface, VkExtent2D extent,
       std::unique_ptr<StreamPlayer> player,
@@ -146,12 +156,14 @@ class PlayerView {
   PlayerView(PlayerView&&) = delete;
   PlayerView& operator=(PlayerView&&) = delete;
 
-  /// @brief One tick: draw the controls and the stats, take the newest mesh,
-  ///        draw it behind a GPU wait on its `ready` value (already reached,
-  ///        so it stalls nothing; it carries the worker's writes across
-  ///        queues), and present. A frame taken is stamped when taken and
-  ///        when presented (FrameStamp::taken, presented), and counted in the
-  ///        stats once presented.
+  /// @brief One tick: draw the controls and the stats, take the newest mesh
+  ///        (FrameTaker, with the commit hook), run before_draw, draw the
+  ///        mesh behind a GPU wait on its `ready` value (already reached, so
+  ///        it stalls nothing; it carries the worker's writes across queues)
+  ///        with the binding it returned and the view's own (Unlit), and
+  ///        present. A frame taken is stamped when taken and when presented
+  ///        (FrameStamp::taken, presented), and counted in the stats once
+  ///        presented; a skipped frame is neither.
   /// @pre The UI platform half bound to @ref ui_context ran its new_frame this
   ///      tick, unless @p extent is 0 x 0 (a touch shell skips the tick's
   ///      new_frame then).
@@ -177,9 +189,39 @@ class PlayerView {
   ///        (the desktop's N key).
   /// @param normals  Whether to colour it by its normals.
   void set_normals(bool normals) noexcept { normals_ = normals; }
-  /// @return The flags the mesh draws with (gfx::pipelines::HybridMeshFlags):
-  ///         kHybridMeshNormals while @ref normals, else kHybridMeshLit.
+  /// @return Whether the mesh shows its vertex colours unshaded: the view's
+  ///         own DrawBinding then clears kHybridMeshLit. @ref normals takes
+  ///         precedence. PlayerViewConfig::unlit at first; the panel's Unlit
+  ///         flips it.
+  bool unlit() const noexcept { return unlit_; }
+  /// @brief Show the vertex colours unshaded, or light them, from the next
+  ///        frame (the desktop's U key).
+  /// @param unlit  Whether to leave them unshaded.
+  void set_unlit(bool unlit) noexcept { unlit_ = unlit; }
+  /// @return The flags the mesh draws with (gfx::pipelines::HybridMeshFlags)
+  ///         before a DrawBinding clears any: kHybridMeshNormals while
+  ///         @ref normals, else kHybridMeshLit.
   std::uint32_t mesh_flags() const noexcept;
+  /// @return The frames a commit hook skipped (FrameTaker::frames_skipped).
+  std::uint64_t frames_skipped() const noexcept {
+    return taker_.frames_skipped();
+  }
+  /// @return The frames held before their commit or skip
+  ///         (FrameTaker::frames_held).
+  std::uint64_t frames_held() const noexcept { return taker_.frames_held(); }
+  /// @brief Record the mesh as the last frame drew it: the live mesh under
+  ///        the camera, with its flags less the frame's DrawBinding clears
+  ///        and that binding's set. @ref frame records its draw through
+  ///        this; with @ref target_layout's target, a caller can read back
+  ///        what it drew, as the swapchain's images cannot be (the tests).
+  /// @param cmd     A command buffer of the drawing device's, inside a pass
+  ///                of a target laid out as @ref target_layout; whatever
+  ///                submits it waits for the mesh's `ready` value.
+  /// @param extent  The pass's, in pixels.
+  void record_mesh(VkCommandBuffer cmd, VkExtent2D extent) const;
+  /// @return The swapchain's target layout, which the mesh pipeline was built
+  ///         for: a target of it takes @ref record_mesh.
+  gfx::RenderTargetLayout target_layout() const;
   /// @return Whether the Source button (PlayerViewConfig::source_button) was
   ///         pressed since the last call: true once per press. The shell
   ///         takes it after @ref frame, so it asks what to play outside the
@@ -254,12 +296,17 @@ class PlayerView {
   FrameExchange exchange_;
   gfx::camera::OrbitCamera camera_;
   bool normals_ = false;         // the mesh's shading (mesh_flags)
+  bool unlit_ = false;           // its vertex colours unshaded
   bool source_button_ = false;   // frame() draws Source
   bool source_request_ = false;  // pressed since take_source_request
   std::optional<DeviceTiming> device_timing_;  // fixed; else the panel's
   bool profiled_ = false;      // the draw timed this tick (render_metrics)
   bool frame_failed_ = false;  // an interrupted frame requires a new view
+  core::Status hook_failure_;  // a commit or before_draw failure, kept
   std::unique_ptr<StreamPlayer> player_;
+  FrameHooks hooks_;     // the worker's until stop, the drawing thread's
+  FrameTaker taker_;     // over player_ and exchange_, with hooks_
+  DrawBinding binding_;  // the last frame's draw's: before_draw's and Unlit
   PlaybackStats stats_;  // from player_'s track
   std::optional<FrameStamp> shown_;
   std::uint32_t shown_triangles_ = 0;  // shown_'s mesh's
