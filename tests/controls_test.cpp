@@ -13,10 +13,10 @@
 // player's deblock, on the row or, where the row would not fit, below it,
 // "Pause" and "Normals" fit their buttons, a finger on the controls is
 // ImGui's, and they keep clear of the safe area; a status line too wide for
-// the work area breaks between its parts; a live player's, never
-// started, are Normals and Deblock over its status line. The Source button is
-// drawn only
-// when asked for, at the work area's top right clear of the safe area and of
+// the work area breaks between its parts, the rows after the first indented;
+// a live player's, never started, are Normals and Deblock over its status
+// line. The Source button is drawn only when asked for, at the work area's
+// top right clear of the safe area and of
 // the stats' body, leaving the controls where they were, and a tap on it is
 // one press. The stats sit at the
 // work area's top left; a finger on their header is ImGui's and on their body
@@ -920,7 +920,7 @@ TEST_F(ControlsTest, ALineTooWideForTheWorkAreaBreaksBeforeItsLastPart) {
 // The status line breaks between its parts as a stats line does, so the
 // controls stay on screen. With the widest set a record names, it takes one
 // row at 625 points, and at 288 two: its frame and set, then its play state
-// and loop below them, each row inside the work area.
+// and loop below them, indented, each row inside the work area.
 TEST_F(ControlsTest, AStatusLineTooWideForTheWorkAreaBreaksBetweenItsParts) {
   // The panel at `width` over the stream's last frame in `set`. An
   // auto-sized window takes its size on its second frame.
@@ -939,6 +939,14 @@ TEST_F(ControlsTest, AStatusLineTooWideForTheWorkAreaBreaksBetweenItsParts) {
                   no_set + ImGui::GetTextLineHeightWithSpacing());
   EXPECT_LE(panel().Size.x,
             288.0f - 2.0f * ImGui::GetStyle().DisplaySafeAreaPadding.x);
+  // The second row, the controls' last item, starts one indent in: ImGui's
+  // cursor ends it, its width past its start.
+  const ImGuiWindow& window = panel();
+  EXPECT_NEAR(
+      window.DC.CursorPosPrevLine.x -
+          vp_test::text_width(window, "playing · loop"),
+      window.Pos.x + window.WindowPadding.x + ImGui::GetStyle().IndentSpacing,
+      1.0f);
   ASSERT_EQ(status_line(controls_shown_, player_->frame_count(),
                         player_->playing(), player_->loop()),
             "frame 3/3 · set 18446744073709551614 · playing · loop");
