@@ -6,15 +6,18 @@
 #
 # * subproject: the consumer (CMakeLists.txt here) adds the player from
 #   SOURCE_DIR and builds its program Release, which links
-#   volumetric_kit::player and runs.
+#   volumetric_kit::player and player_probe and runs; then, where DESKTOP is on,
+#   configures it again with VP_DESKTOP_APP turned on and builds its program,
+#   which links player_desktop too, and runs it.
 # * top_level: the player configured alone, from a clean tree, as the top-level
 #   project, where its apps, tests and -Werror default ON.
 #
-# GENERATOR and CXX_COMPILER repeat the calling build's, and VP_DESKTOP_APP
-# reaches the player as given, so a build without GLFW checks without it. Every
-# FETCHCONTENT_SOURCE_DIR_<NAME> given is passed on, so it needs no network. The
-# build takes CMAKE_BUILD_PARALLEL_LEVEL's jobs, or one per core.
-foreach(_var CHECK SOURCE_DIR BINARY_DIR GENERATOR CXX_COMPILER)
+# GENERATOR and CXX_COMPILER repeat the calling build's, and DESKTOP is its
+# VP_DESKTOP_APP, which reaches the top-level player as given, so a build
+# without GLFW checks without it. Every FETCHCONTENT_SOURCE_DIR_<NAME> given is
+# passed on, so it needs no network. The build takes
+# CMAKE_BUILD_PARALLEL_LEVEL's jobs, or one per core.
+foreach(_var CHECK SOURCE_DIR BINARY_DIR GENERATOR CXX_COMPILER DESKTOP)
   if(NOT DEFINED ${_var})
     message(FATAL_ERROR "check.cmake: ${_var} is not set")
   endif()
@@ -23,7 +26,7 @@ endforeach()
 set(_given -G "${GENERATOR}" "-DCMAKE_CXX_COMPILER=${CXX_COMPILER}")
 get_cmake_property(_vars VARIABLES)
 foreach(_var IN LISTS _vars)
-  if(_var MATCHES "^(FETCHCONTENT_SOURCE_DIR_.+|VP_DESKTOP_APP)$")
+  if(_var MATCHES "^FETCHCONTENT_SOURCE_DIR_.+$")
     list(APPEND _given "-D${_var}=${${_var}}")
   endif()
 endforeach()
@@ -42,33 +45,46 @@ function(_vp_cmake what)
 endfunction()
 
 if(CHECK STREQUAL "subproject")
-  _vp_cmake(
-    "Configuring the consumer"
-    -S
-    "${CMAKE_CURRENT_LIST_DIR}"
-    -B
-    "${BINARY_DIR}"
-    ${_given}
-    -DCMAKE_BUILD_TYPE=Release
-    "-DVP_SOURCE_DIR=${SOURCE_DIR}")
   set(_jobs "")
   if(NOT DEFINED ENV{CMAKE_BUILD_PARALLEL_LEVEL})
     cmake_host_system_information(RESULT _cores QUERY NUMBER_OF_LOGICAL_CORES)
     set(_jobs --parallel ${_cores})
   endif()
-  _vp_cmake(
-    "Building the consumer on the player"
-    --build
-    "${BINARY_DIR}"
-    --config
-    Release
-    --target
-    vp_consumer
-    ${_jobs})
+  set(_desktops OFF)
+  if(DESKTOP)
+    list(APPEND _desktops ON)
+  endif()
+  foreach(_desktop IN LISTS _desktops)
+    _vp_cmake(
+      "Configuring the consumer (VP_CONSUMER_DESKTOP=${_desktop})"
+      -S
+      "${CMAKE_CURRENT_LIST_DIR}"
+      -B
+      "${BINARY_DIR}"
+      ${_given}
+      -DCMAKE_BUILD_TYPE=Release
+      "-DVP_SOURCE_DIR=${SOURCE_DIR}"
+      "-DVP_CONSUMER_DESKTOP=${_desktop}")
+    _vp_cmake(
+      "Building the consumer on the player (VP_CONSUMER_DESKTOP=${_desktop})"
+      --build
+      "${BINARY_DIR}"
+      --config
+      Release
+      --target
+      vp_consumer
+      ${_jobs})
+  endforeach()
 elseif(CHECK STREQUAL "top_level")
   file(REMOVE_RECURSE "${BINARY_DIR}")
-  _vp_cmake("Configuring the player" -S "${SOURCE_DIR}" -B "${BINARY_DIR}"
-            ${_given})
+  _vp_cmake(
+    "Configuring the player"
+    -S
+    "${SOURCE_DIR}"
+    -B
+    "${BINARY_DIR}"
+    ${_given}
+    "-DVP_DESKTOP_APP=${DESKTOP}")
   foreach(_option VP_BUILD_APPS VP_BUILD_TESTS VP_WARNINGS_AS_ERRORS)
     file(STRINGS "${BINARY_DIR}/CMakeCache.txt" _entry
          REGEX "^${_option}:BOOL=")

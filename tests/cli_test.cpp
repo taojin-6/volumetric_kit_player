@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// The desktop app's entry point, the app run as a process. A command line the
-// core's parse_args refuses, the old one's included, exits 2 with its message
-// and the usage on stderr; --help and -h exit 0 with the usage on stdout. A
-// scenario the core cannot load, or refuses, exits 2 with its message. One it
-// loads runs: a missing stream and a file that is not one exit 1 with
-// StreamPlayer::open's refusal and nothing else, before glfwInit. Each runs
-// with VP_NO_WINDOW set, which stops the app just before glfwInit with a
-// refusal that names what the window would play, its title (DECISIONS.md); a
-// stream that opens, and a live scenario, which nothing refuses, exit 1 with
-// that refusal. A run not back within kPrompt, as a window's loop would not
-// be, is killed and fails the test. On the host: the scenarios in
-// config/examples/, and parse_count, which vp_probe's --frames and a
-// live address's port take.
+// The desktop app's entry point, the app run as a process: its main is one
+// call of run_desktop (desktop.hpp). A command line the core's parse_args
+// refuses, the old one's included, exits 2 with its message and the usage on
+// stderr; --help and -h exit 0 with the usage on stdout. A scenario the core
+// cannot load, or refuses, exits 2 with its message. One it loads runs: a
+// missing stream and a file that is not one exit 1 with StreamPlayer::open's
+// refusal and nothing else, before glfwInit. Each runs with VP_NO_WINDOW set,
+// which stops the app just before glfwInit with a refusal that names what the
+// window would play, its title (DECISIONS.md); a stream that opens, and a live
+// scenario, which nothing refuses, exit 1 with that refusal. A run not back
+// within kPrompt, as a window's loop would not be, is killed and fails the
+// test. On the host: the view's settings run_desktop plays a scenario with
+// (desktop_view_config), the program's with the scenario's validation; the
+// scenarios in config/examples/, and parse_count, which vp_probe's --frames
+// and a live address's port take.
 
 #include <gtest/gtest.h>
 #include <poll.h>
@@ -36,7 +38,11 @@
 #include "test_stream.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/config/config.hpp"
+#include "volumetric_kit/player/app_config.hpp"
 #include "volumetric_kit/player/command_line.hpp"
+#include "volumetric_kit/player/desktop.hpp"
+#include "volumetric_kit/player/frame_hooks.hpp"
+#include "volumetric_kit/player/player_view.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
 extern char** environ;
@@ -45,6 +51,7 @@ namespace {
 
 namespace core = volumetric_kit::core;
 namespace cfg = volumetric_kit::core::config;
+namespace vkp = volumetric_kit::player;
 using namespace std::chrono_literals;
 using volumetric_kit::player::LiveAddress;
 using volumetric_kit::player::parse_count;
@@ -343,6 +350,60 @@ TEST(CliTest, ALiveScenarioReachesTheNoWindowBackstop) {
     EXPECT_EQ(run.exit_code, 1) << live.text << "\n" << run.err;
     EXPECT_EQ(run.out, "");
     EXPECT_EQ(run.err, no_window(live.address));
+  }
+}
+
+// A program's make_hooks, which desktop_view_config keeps.
+core::Result<vkp::FrameHooks> no_hooks(const vkp::HookContext& /*context*/) {
+  return vkp::FrameHooks{};
+}
+
+// The view's settings the app plays a scenario with: the program's, its
+// make_hooks included, with the scenario's window.validation in place of the
+// program's, which a Debug build turns on.
+TEST(DesktopViewConfig, KeepsTheProgramsSettingsWithTheScenariosValidation) {
+  using MakeHooksFn =
+      core::Result<vkp::FrameHooks> (*)(const vkp::HookContext&);
+  vkp::AppConfig config;
+  config.view.ui_scale = 1.3f;
+  config.view.ui_min_frame_height = 44.0f;
+  config.view.source_button = true;
+  config.view.compact_stats = true;
+  config.view.device_timing = vkp::DeviceTiming::kSampled;
+  config.view.tile_depth = 1;
+  config.view.debug_labels = false;
+  config.view.share_vertices = false;
+  config.view.unlit = true;
+  config.view.make_hooks = &no_hooks;
+  const Scratch scratch;
+  const std::string path = scratch.file("play.json");
+  for (const bool validation : {false, true}) {
+    SCOPED_TRACE(validation ? "window.validation true" : "none");
+    config.view.validation = !validation;
+    const char* window = validation ? R"(,"window":{"validation":true})" : "";
+    write_file(path, scenario(R"("path":"s.vrst")", window));
+    const core::Result<cfg::Config> loaded =
+        cfg::load(path, cfg::Application::Player);
+    ASSERT_TRUE(loaded.ok()) << loaded.status().message();
+    const vkp::PlayerViewConfig view =
+        vkp::desktop_view_config(config, *loaded);
+    EXPECT_EQ(view.ui_scale, 1.3f);
+    EXPECT_EQ(view.ui_min_frame_height, 44.0f);
+    EXPECT_TRUE(view.source_button);
+    EXPECT_TRUE(view.compact_stats);
+    EXPECT_EQ(view.device_timing, vkp::DeviceTiming::kSampled);
+    EXPECT_EQ(view.tile_depth, 1u);
+    EXPECT_FALSE(view.debug_labels);
+    EXPECT_FALSE(view.share_vertices);
+    EXPECT_TRUE(view.unlit);
+    const MakeHooksFn* kept = view.make_hooks.target<MakeHooksFn>();
+    ASSERT_NE(kept, nullptr) << "make_hooks dropped";
+    EXPECT_EQ(*kept, &no_hooks);
+#ifdef NDEBUG
+    EXPECT_EQ(view.validation, validation);
+#else
+    EXPECT_TRUE(view.validation);
+#endif
   }
 }
 

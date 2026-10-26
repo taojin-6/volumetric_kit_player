@@ -29,9 +29,11 @@ records why.
 
 - `src/volumetric_kit/player/`: the logic, as the static, build-tree-only
   library `volumetric_kit::player`. Headers sit beside their sources, as the
-  app exports nothing.
-- `apps/volumetric_kit_player/`: the desktop app, the one target that links
-  GLFW; `apps/ios/`: the iOS app, in Objective-C++.
+  app exports nothing. From the same directory, `player_desktop` (the one
+  library that links GLFW) and `player_probe`: the desktop app's and
+  vp_probe's entry points.
+- `apps/volumetric_kit_player/`: the desktop app's main; `apps/ios/`: the iOS
+  app, in Objective-C++.
 - `tests/<name>_test.cpp`, each added with `vp_add_test` in
   `tests/CMakeLists.txt`.
 - Namespace `volumetric_kit::player`; `VP_*` for the player's macros and

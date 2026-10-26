@@ -4,6 +4,40 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-26 — The desktop app and vp_probe are library calls
+
+`desktop.hpp` (`run_desktop`, target `player_desktop`) and `probe.hpp`
+(`run_probe`, target `player_probe`), each taking an `AppConfig`
+(`app_config.hpp`); the app's main and vp_probe's are one call each. It
+amends 2026-10-25's library entry.
+
+- **A program of its own runs either with the view's settings it chooses,
+  `make_hooks` included,** with no copy of the window loop or the probe.
+  Why: per-frame hooks (below) otherwise reach only a program that copies
+  one of them.
+- **The command line and the scenario set over `AppConfig::view`:** the app
+  the scenario's `window.validation` (on in Debug, as before), vp_probe its
+  options' validation, timing, tile depth, labels and vertex sharing. Why:
+  what a run asks for wins over what the program built in.
+- **vp_probe's `--latency` and `--save-meshes` install their hooks as
+  `make_hooks`,** as a program's own would, and exit 2 when the program set
+  it; the log's `run` names a program's hooks, a batch more a frame as
+  theirs are. Why: the view takes one `make_hooks`, and no caller needs two
+  sets of hooks composed.
+- **`VP_DESKTOP_APP` defaults to `VP_BUILD_APPS`, and a project that adds
+  the player may turn it on alone:** it builds `player_desktop` and gfx's
+  GLFW tier, and the app only with `VP_BUILD_APPS`. Why: that project's
+  program is then the window. The library still links no GLFW, nor does
+  `player_probe`; the configure checks both.
+- **`player_probe` is defined on every desktop, built only for a target
+  that links it,** with the core's test policy, which the player now asks
+  the core for on every desktop (built likewise). Why: vp_probe validates as
+  the tests do, and a project that never links it pays nothing. Neither
+  target is built for iOS, whose shell stays in `apps/ios/`.
+- **The subproject consumer test links both:** with its defaults it builds
+  the library and `player_probe` and no GLFW; configured again with
+  `VP_DESKTOP_APP` on, `player_desktop` too; neither the app nor `vp_probe`.
+
 ## 2026-10-26 — Per-frame hooks for the worker and the draw
 
 `frame_hooks.hpp`: `FrameHooks`, made once by `PlayerViewConfig::make_hooks`
@@ -110,7 +144,8 @@ This makes the failure explicit without submitting incomplete commands.
   compiler's warnings.
 - **`VP_DESKTOP_APP` stays, under `VP_BUILD_APPS`,** which turns it off. Why:
   the measurement runner passes it to every commit it builds, older ones
-  too.
+  too. *Since 2026-10-26 it defaults to `VP_BUILD_APPS` and may be on
+  without the apps.*
 - **A consumer project builds, not only configures** (`tests/consumer/`): it
   adds the player, each dependency the build fetched passed on as a local
   source, and builds and runs a program that links the library; beside it,
@@ -655,12 +690,13 @@ the sizes.
   would play.
 - **The configure fails if GLFW enters the library's link closure,** checked
   once every directory has linked. Why: the library links no window system
-  (below); only the app links gfx's GLFW tier.
+  (below); only the app links gfx's GLFW tier. *Through `player_desktop`
+  since 2026-10-26.*
 - **Keys are shortcuts for the panel:** Space, Right, L and N call the
   controls its buttons call; Esc closes. Why: one set of controls, which the
   panel shows on every platform.
 - **The wheel accumulator is a knowing copy** of calib's and gfx's examples'
-  (a TODO in `main.cpp`). Why: it shares the window's user pointer with the
+  (a TODO in `desktop.cpp`). Why: it shares the window's user pointer with the
   keys, and moving it to gfx means gfx owns that pointer, part of the GLFW
   input glue that calib's `calib_rig.cpp` TODO plans to move into gfx.
 - **`run.frames` counts presents of a stream frame,** then the app prints

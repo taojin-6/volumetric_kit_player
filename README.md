@@ -41,8 +41,21 @@ ctest --test-dir "$root/build" --output-on-failure
 
 `VP_BUILD_APPS`, `VP_BUILD_TESTS` (never on iOS) and `VP_WARNINGS_AS_ERRORS`
 default ON when the player is the top-level project, and OFF when another
-project adds it with `add_subdirectory` to link `volumetric_kit::player`;
-`-DVP_DESKTOP_APP=OFF` builds everything but the desktop app, with no GLFW.
+project adds it with `add_subdirectory` to link `volumetric_kit::player`.
+`VP_DESKTOP_APP` follows `VP_BUILD_APPS`; `-DVP_DESKTOP_APP=OFF` builds
+everything but the desktop app, with no GLFW.
+
+Two targets make the desktop programs library calls, so a program of its own
+runs one with the view's settings it chooses (`AppConfig`, `app_config.hpp`,
+its `make_hooks` included), as the app's and vp_probe's mains do:
+
+- `volumetric_kit::player_desktop`: `run_desktop(argc, argv, config)`, the
+  desktop app (`desktop.hpp`). It is built with `VP_DESKTOP_APP`, which a
+  project that adds the player may turn on alone, for it and gfx's GLFW tier
+  without the app.
+- `volumetric_kit::player_probe`: `run_probe(argc, argv, config)`, vp_probe
+  (`probe.hpp`). It is defined on every desktop and built only when
+  something links it.
 
 ## Run
 
