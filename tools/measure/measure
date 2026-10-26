@@ -496,6 +496,12 @@ launch() {
   case "$file" in
     *.failed) fail "the app logged nothing: $(cat "$copy")" ;;
   esac
+  # Older apps ignore unknown launch options. Accept a nondefault only if
+  # the log confirms it; missing metadata cannot prove vertices were unshared.
+  if [ -n "$unshared" ] &&
+    ! grep -qxF "# share_vertices: $unshared" "$copy"; then
+    fail "the app's log does not confirm --share-vertices $unshared: $copy"
+  fi
   echo "$copy"
 }
 
