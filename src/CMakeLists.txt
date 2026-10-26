@@ -10,6 +10,7 @@ add_library(
   player STATIC
   volumetric_kit/player/command_line.cpp
   volumetric_kit/player/controls.cpp
+  volumetric_kit/player/live_connection.cpp
   volumetric_kit/player/measure_log.cpp
   volumetric_kit/player/mesh_wiring.cpp
   volumetric_kit/player/playback.cpp

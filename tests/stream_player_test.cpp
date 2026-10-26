@@ -3174,6 +3174,38 @@ TEST_F(LivePlayerTest, AParkEndsTheWaitToRetry) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
+// A connection that fails just after a park, before the worker has seen it
+// (bytes that are no chunk, sent as the park returns, almost always reach
+// the receive under way): the park ends that failure's wait to retry too,
+// so the unpark connects again at once.
+TEST_F(LivePlayerTest, AParkJustBeforeAFailureEndsItsWaitToRetry) {
+  std::atomic<bool> fail{false};
+  const RawPeer peer(
+      [feed = stream_feed(), &fail](std::uint64_t piece) {
+        if (piece == 0) {
+          return feed(0);  // the session
+        }
+        return fail ? Bytes(4096, 0xff) : Bytes();
+      },
+      1ms);
+  StreamPlayer* player = start_live(peer.port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  ASSERT_TRUE(player->park(kArrival));
+  fail = true;
+  ASSERT_TRUE(peer.closed(1).has_value()) << "the connection stayed open";
+  std::this_thread::sleep_for(kQuiet);  // the worker sees the park
+  EXPECT_EQ(peer.accepted(), 1u) << "connected while parked";
+  fail = false;
+  player->unpark();
+  const SteadyClock::time_point unparked = SteadyClock::now();
+  ASSERT_TRUE(eventually([&] { return peer.accepted() >= 2; }));
+  const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+      SteadyClock::now() - unparked);
+  EXPECT_LT(waited, kQuiet) << waited.count() << " ms";
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
 // A sender of a track of another kind alone.
 TEST_F(LivePlayerTest, ASessionWithNoGeometryTrackShowsWhyWhileStatusStaysOk) {
   stream::Session session;

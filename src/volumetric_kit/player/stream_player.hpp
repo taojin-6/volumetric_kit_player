@@ -16,7 +16,6 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -26,38 +25,17 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
+#include "volumetric_kit/player/live_connection.hpp"
 #include "volumetric_kit/player/playback.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh_exchange.hpp"
 #include "volumetric_kit/recon/networking/stream_client.hpp"
-#include "volumetric_kit/recon/networking/stream_server.hpp"
 #include "volumetric_kit/recon/stream/session.hpp"
 #include "volumetric_kit/recon/stream/stream_reader.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace volumetric_kit::player {
-
-/// @brief A live stream's address: a sender's
-///        (recon::networking::StreamServer).
-struct LiveAddress {
-  std::string host;  ///< A name or a numeric IPv4 address.
-  std::uint16_t port = recon::networking::kDefaultPort;  ///< 1 to 65535.
-};
-
-/// @brief Parse a live stream's address, on the host alone.
-///
-/// @code
-/// VKC_ASSIGN(const LiveAddress address, parse_live_address("lab:47801"));
-/// @endcode
-/// @param text  "host" or "host:port".
-/// @return The address, on `recon::networking::kDefaultPort` when it names
-///         none; `core::Status::Code::InvalidArgument` naming what is wrong
-///         for an empty host or a port that is not a number from 1 to 65535.
-core::Result<LiveAddress> parse_live_address(std::string_view text);
-
-/// @return @p address as "host:port".
-std::string to_string(const LiveAddress& address);
 
 /// @brief Where a live player's connection stands.
 enum class LiveState {
@@ -77,24 +55,6 @@ struct LiveStatus {
   std::uint64_t set = recon::stream::kNoSet;  ///< The newest record's.
   Playback::Clock::time_point last_record{};  ///< When it arrived.
 };
-
-/// @brief Why a live connection ended, for its status line, which names the
-///        address already.
-///
-/// @code
-/// // "cannot connect: Connection refused"
-/// const std::string why = live_reason(
-///     core::Status::io_error(
-///         "StreamClient: lab:47801: cannot connect: Connection refused"),
-///     "lab:47801");
-/// @endcode
-/// @param ended    What ended it: recon's `networking::StreamClient` error, or
-///                 the player's own.
-/// @param address  to_string() of the address the client was given.
-/// @return @p ended's message less the "StreamClient: <address>: " or
-///         "StreamClient::connect: " it starts with (StreamClient's message
-///         convention); whole with neither, as a bare "out of memory".
-std::string live_reason(const core::Status& ended, const std::string& address);
 
 /// @brief How often the worker times its frames' device work
 ///        (@ref StreamPlayer::set_device_timing).
@@ -298,9 +258,9 @@ class StreamPlayer {
   /// its own once the consumer has taken the last mesh. It drains available
   /// input before waiting for a take, which wakes it immediately. A
   /// connection that ends or cannot be made is never an error:
-  /// the worker shows why (@ref live_status), and about a second later
-  /// connects again, with a new grid, until stopped. Play, pause, step and
-  /// loop do nothing.
+  /// the worker shows why (@ref live_status), and @ref kLiveRetry later
+  /// connects again (@ref LiveConnection), with a new grid, until stopped.
+  /// Play, pause, step and loop do nothing.
   /// @param address  The sender's.
   /// @return The player; `core::Status::Code::InvalidArgument` for an empty
   ///         host or port 0.
@@ -489,8 +449,8 @@ class StreamPlayer {
   // Once `frame` is due, finish it and publish its mesh (a refused frame
   // publishes nothing): false on quit.
   core::Result<bool> finish_frame(InFlight frame, Pass& pass);
-  // Connect, play the connection until it ends, and connect again, until
-  // quit; only a GPU failure is returned.
+  // Connect, play the connection until it ends, and connect again
+  // (LiveConnection), until quit; only a GPU failure is returned.
   core::Status play_live();
   // Play `client`'s connection until it ends, into `*ended`, or quit or a
   // park ends it (`*ended` OK). Only a GPU failure is returned.
@@ -564,10 +524,12 @@ class StreamPlayer {
   core::Result<bool> wait_at_end();
   // Live, outside any step: wait while parked; false on quit.
   bool wait_unparked();
-  // Live, as a connection ends (`ended` OK when quit or a park ended it):
-  // show why, or nothing for OK, and after a failure wait about a second for
-  // the retry, or until quit or a park; false on quit.
-  bool wait_to_retry(const core::Status& ended);
+  // Live: show the connection as connecting, with why the last ended or
+  // failed (LiveConnection::last_error), empty for none.
+  void show_connecting(const std::string& last_error);
+  // Live, outside any step: wait until `at`, a quit or a park; true for a
+  // park.
+  bool wait_to_retry(std::chrono::steady_clock::time_point at);
   // Apply a change to the controls under the lock, then wake the worker.
   template <typename Change>
   void control(Change&& change);
