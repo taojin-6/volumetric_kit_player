@@ -13,8 +13,10 @@ paced by the stream's timestamps or by the sender.
 > from a sender; the view
 > (`src/volumetric_kit/player/player_view.hpp`), which draws each mesh under
 > an orbit camera, a controls panel and a stats panel on any window system;
-> the desktop app (`apps/volumetric_kit_player/`), a GLFW window over the
-> view; and the iOS app (`apps/ios/`), a UIKit shell over the view.
+> the per-frame hooks (`src/volumetric_kit/player/frame_hooks.hpp`), a
+> caller's work on the worker after each mesh, at the take and before the
+> draw; the desktop app (`apps/volumetric_kit_player/`), a GLFW window over
+> the view; and the iOS app (`apps/ios/`), a UIKit shell over the view.
 
 [AGENTS.md](AGENTS.md) is the working guide for agents, and `CLAUDE.md`
 imports it. [DECISIONS.md](DECISIONS.md) records the choices made.
@@ -75,6 +77,7 @@ and, where its record names one, its capture set ("set N");
 Normals, shown pressed while on, colours the mesh by its world-space normals
 in place of lighting; and Deblock, on at first, has recon's decoder smooth
 each frame across its block faces, and while paused redoes the frame shown.
+Unlit shows the mesh's vertex colours unshaded; Normals takes precedence.
 The stats at the top left show the bitrate, the frame drawn, what the
 deblock did to it (its filter, T and the blocks it kept at their exact
 decode), the frames' GPU time, the worker's queue idle and queue latency, the
@@ -94,6 +97,7 @@ are the panel's shortcuts:
 | L | turns looping on or off |
 | N | turns Normals on or off |
 | D | turns Deblock on or off |
+| U | turns Unlit on or off |
 | Esc | closes the window |
 
 With `run.frames`, the app prints the frame drawn as it exits, for CI's
@@ -109,7 +113,7 @@ machine; for the lab's, over the VPN, copy it and set `source.host` to
 `taojin-desktop.arena.andrew.cmu.edu` or `192.168.21.217`.
 
 The picture joins at the sender's newest I-frame. The panel at the bottom is
-then Normals and Deblock over a status line: connecting, live with the
+then Normals, Deblock and Unlit over a status line: connecting, live with the
 newest record's seq and set and how long nothing has come, or reconnecting
 with why, about every second until Esc. The keys that play, pause, step and
 loop do nothing. The stats show the bitrate and the records a second over
@@ -213,6 +217,20 @@ worker alone on the GPU the core picks, for a GPU with no headless surface
 labels; `--share-vertices off` gives each triangle three vertices of its
 own (shared by default); `--frames N` stops after N frames;
 `--connect host[:port]` plays a sender.
+
+Two options run the player's per-frame hooks, as a caller would, so the
+cost of that path shows too (a batch more a frame, which the log's `run`
+names). `--latency` times each frame from its mesh finished on the worker
+to its commit and, through the view, to its first draw, and the shown
+frame's age at each draw, and prints their p50, p95 and max once a second
+with the frames held or skipped (its commit draws every frame, so a frame is
+held only by a take that found its mesh not yet ready); with `--worker`,
+mesh to commit alone. A park leaves the frames in flight out, and the run's
+last line says how many of its records are left unreleased, which fails it.
+`--save-meshes DIR`
+reads each mesh back in its hook's batch and writes it as `DIR/<frame>.ply`
+once that batch has finished, a line each with its vertices, triangles and
+the grid's blocks.
 
 The iOS app writes one when launched with `-- --measure <name in Documents>
 [--passes P] [--frames N] [--timing T] [--tile-depth D] [--labels on|off]

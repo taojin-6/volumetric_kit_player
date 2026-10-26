@@ -3,12 +3,16 @@
 
 #include "volumetric_kit/player/stream_player.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <utility>
 
 #include "volumetric_kit/core/base/exception_status.hpp"
 #include "volumetric_kit/core/vulkan/host_ring.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
+#include "volumetric_kit/player/frame_hooks.hpp"
 #include "volumetric_kit/recon/codec/decode_grid.hpp"
 #include "volumetric_kit/recon/stream/session.hpp"
 
@@ -273,7 +277,8 @@ LiveStatus StreamPlayer::live_status() const {
 core::Status StreamPlayer::start(core::Device& device,
                                  core::Allocator& allocator,
                                  const recon::mesh::MarchingCubesConfig& config,
-                                 FrameExchange& exchange) {
+                                 FrameExchange& exchange,
+                                 const FrameHooks* hooks) {
   if (worker_.joinable() || quit_) {
     return core::Status::invalid_argument(
         "StreamPlayer::start: already started or stopped");
@@ -282,6 +287,7 @@ core::Status StreamPlayer::start(core::Device& device,
   allocator_ = &allocator;
   config_ = config;
   exchange_ = &exchange;
+  hooks_ = hooks;
   try {
     worker_ = std::thread([this] { run(); });
   } catch (...) {
@@ -346,13 +352,30 @@ bool StreamPlayer::deblock() const {
 }
 
 bool StreamPlayer::park(std::chrono::milliseconds timeout) {
-  std::unique_lock<std::mutex> lock(mutex_);
-  parked_ = true;
-  changed_.notify_all();  // ends a wait to retry, and wakes a frame's pacing
-  return changed_.wait_for(lock, timeout, [this] { return busy_ == 0; });
+  const Clock::time_point deadline = Clock::now() + timeout;
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    parked_ = true;
+    changed_.notify_all();  // ends a wait to retry, and wakes a frame's pacing
+    if (!changed_.wait_until(lock, deadline, [this] { return busy_ == 0; })) {
+      return false;
+    }
+  }
+  // Idle, so no step starts: after_mesh's batch is the park's to finish, by
+  // the same deadline.
+  if (!finish_hook_batch_by(deadline)) {
+    return false;
+  }
+  if (hooks_ != nullptr && hooks_->on_park && !hooks_parked_.exchange(true)) {
+    hooks_->on_park();
+  }
+  return true;
 }
 
 void StreamPlayer::unpark() {
+  if (hooks_parked_.exchange(false) && hooks_->on_resume) {
+    hooks_->on_resume();
+  }
   control([this] { parked_ = false; });
 }
 
@@ -383,6 +406,11 @@ void StreamPlayer::run() {
     outcome = core::exception_status("StreamPlayer worker",
                                      core::Status::Code::IoError);
   }
+  // Before stop returns, so its readbacks are written.
+  core::Status finished = finish_hook_batch();
+  if (outcome.ok()) {
+    outcome = std::move(finished);
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   status_ = std::move(outcome);
 }
@@ -397,6 +425,11 @@ core::Status StreamPlayer::build() {
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(*device_, *allocator_, config_));
   VKC_ASSIGN(core::GpuTimer timer, core::GpuTimer::create(*device_));
+  if (hooks_ != nullptr && hooks_->after_mesh) {
+    VKC_ASSIGN(core::TimelineSemaphore timeline,
+               core::TimelineSemaphore::create(*device_));
+    hook_timeline_.emplace(std::move(timeline));
+  }
   decoder_.emplace(std::move(decoder));
   extractor_.emplace(std::move(extractor));
   timer_.emplace(std::move(timer));
@@ -609,10 +642,11 @@ core::Result<bool> StreamPlayer::finish_frame(InFlight frame, Pass& pass) {
   }
   stamp_deblock(frame.stamp);
   count_shown(frame.stamp.pts_ns, seen);
-  last_ = frame.stamp;
+  last_ = frame.stamp;  // before after_mesh, so with no extra
   last_->stages.clear();
   pass.shown = true;
-  frame.step.end();  // nothing in flight: a park may return
+  VKC_TRY(run_after_mesh(*shown, frame.stamp));
+  frame.step.end();  // nothing in flight but after_mesh's: a park may return
   return publish(*shown, std::move(frame.stamp));
 }
 
@@ -620,7 +654,9 @@ core::Status StreamPlayer::play_live() {
   LiveConnection connection(address_);
   while (wait_unparked()) {
     if (networking::StreamClient* const client = connection.poll()) {
-      // A new grid each connection, the decoder kept (DECISIONS.md).
+      // A new grid each connection, the decoder kept (DECISIONS.md), once
+      // after_mesh's batch, which may read the last one, has finished.
+      VKC_TRY(finish_hook_batch());
       grid_.reset();
       core::Status ended;
       VKC_TRY(play_connection(*client, &ended));
@@ -789,9 +825,10 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
         }
         newest.records = std::exchange(records, 0);
         newest.record_bytes = std::exchange(record_bytes, 0);
-        VKC_ASSIGN(const std::optional<mesh::DeviceMesh> shown,
+        VKC_ASSIGN(std::optional<mesh::DeviceMesh> shown,
                    mesh_alone(newest, newest_blocks, "mesh"));
         if (shown) {
+          VKC_TRY(run_after_mesh(*shown, newest));
           std::lock_guard<std::mutex> lock(mutex_);
           publish_now(*shown, std::move(newest));
         }
@@ -1063,6 +1100,9 @@ core::Result<bool> StreamPlayer::rebuild() {
     last_->deblock = stamp.deblock;
     VKC_ASSIGN(shown,
                mesh_alone(stamp, grid_->map().allocated_blocks(), "mesh"));
+    if (shown) {
+      VKC_TRY(run_after_mesh(*shown, stamp));
+    }
   }
   if (!shown) {
     return true;
@@ -1079,6 +1119,11 @@ core::Result<bool> StreamPlayer::publish(const mesh::DeviceMesh& mesh,
            (!parked_ && exchange_->release_and_may_publish(*extractor_));
   });
   if (quit_) {
+    lock.unlock();
+    // Never published, its extra goes with `stamp`: after_mesh's batch, which
+    // may use what the extra holds, finishes first. A failure reaches status()
+    // at the worker's end.
+    (void)finish_hook_batch();
     return false;
   }
   publish_now(mesh, std::move(stamp));  // under the lock: no park between
@@ -1091,6 +1136,62 @@ void StreamPlayer::publish_now(const mesh::DeviceMesh& mesh, FrameStamp stamp) {
   counted_ = counted;
   stamp.published = Clock::now();
   exchange_->publish(mesh, std::move(stamp));
+}
+
+core::Status StreamPlayer::run_after_mesh(mesh::DeviceMesh& mesh,
+                                          FrameStamp& stamp) {
+  if (hooks_ == nullptr || !hooks_->after_mesh) {
+    return {};
+  }
+  // Its fence has normally signalled: the GPU ran it a frame ago.
+  VKC_TRY(finish_hook_batch());
+  core::CommandBatch batch(*device_, *allocator_);
+  VKC_TRY(hooks_->after_mesh(batch, *grid_, mesh, stamp));
+  std::vector<core::TimelinePoint> waits;
+  if (mesh.ready.semaphore != nullptr) {
+    waits.push_back(mesh.ready);
+  }
+  const core::TimelinePoint ready{&*hook_timeline_, hook_value_ + 1};
+  VKC_ASSIGN(core::PendingBatch pending, batch.submit_async(waits, {ready}));
+  hook_value_ = ready.value;
+  {
+    std::lock_guard<std::timed_mutex> lock(hook_mutex_);
+    hook_batch_.emplace(std::move(pending));
+  }
+  mesh.ready = ready;
+  return {};
+}
+
+core::Status StreamPlayer::finish_hook_batch() {
+  std::lock_guard<std::timed_mutex> lock(hook_mutex_);
+  (void)wait_hook_batch(UINT64_MAX);  // never times out
+  return hook_failure_;
+}
+
+bool StreamPlayer::finish_hook_batch_by(Clock::time_point deadline) {
+  std::unique_lock<std::timed_mutex> lock(hook_mutex_, deadline);
+  if (!lock.owns_lock()) {
+    return false;  // the worker's, finishing it
+  }
+  const std::chrono::nanoseconds left =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(deadline -
+                                                           Clock::now());
+  return wait_hook_batch(
+      static_cast<std::uint64_t>(std::max<std::int64_t>(left.count(), 0)));
+}
+
+bool StreamPlayer::wait_hook_batch(std::uint64_t timeout_ns) {
+  if (hook_batch_) {
+    core::Status waited = hook_batch_->wait(timeout_ns);
+    if (core::is_timeout(waited)) {
+      return false;
+    }
+    hook_batch_.reset();
+    if (!waited.ok() && hook_failure_.ok()) {
+      hook_failure_ = std::move(waited);
+    }
+  }
+  return true;
 }
 
 core::Result<bool> StreamPlayer::wait_at_end() {

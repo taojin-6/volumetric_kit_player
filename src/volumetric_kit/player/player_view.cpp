@@ -93,9 +93,12 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
       gfx::ui::ImGuiOverlay overlay,
       gfx::ui::ImGuiOverlay::create(
           windowed.device(), windowed.instance_handle(), overlay_config));
-  const MeshWiring wiring =
-      mesh_wiring(shared->graphics_family(), shared->compute_family(),
-                  kFramesInFlight, config.share_vertices);
+  // A commit hook may skip a mesh, which keeps its slot until the next.
+  const MeshWiring wiring = mesh_wiring(
+      shared->graphics_family(), shared->compute_family(), kFramesInFlight,
+      config.share_vertices, static_cast<bool>(config.make_hooks));
+  const std::uint32_t compute_family = shared->compute_family();
+  const std::uint32_t graphics_family = shared->graphics_family();
   std::unique_ptr<PlayerView> view(
       new PlayerView(std::move(shared), std::move(windowed),
                      std::move(profiler), std::move(recon_device),
@@ -104,14 +107,22 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   view->camera_.set_target({0.0f, 0.85f, 0.0f});
   view->camera_.set_distance(3.0f);
   view->source_button_ = config.source_button;
+  view->unlit_ = config.unlit;
   view->stats_panel_ = StatsPanel(config.compact_stats);
   // The panel opens at launch, so its frames are timed from the first.
   view->device_timing_ = config.device_timing;
   view->player_->set_device_timing(
       config.device_timing.value_or(DeviceTiming::kAll));
   view->player_->set_tile_depth(config.tile_depth);
+  if (config.make_hooks) {
+    const HookContext context{view->recon_device_,   view->recon_allocator_,
+                              view->app_.device(),   view->app_.allocator(),
+                              &view->mesh_pipeline_, compute_family,
+                              graphics_family};
+    VKC_ASSIGN(view->hooks_, config.make_hooks(context));
+  }
   VKC_TRY(view->player_->start(view->recon_device_, view->recon_allocator_,
-                               wiring.mc, view->exchange_));
+                               wiring.mc, view->exchange_, &view->hooks_));
   return view;
 } catch (...) {
   return core::exception_status("PlayerView::create",
@@ -135,6 +146,7 @@ PlayerView::PlayerView(std::unique_ptr<core::SharedDevice> shared,
       overlay_(std::move(overlay)),
       exchange_(exchange),
       player_(std::move(player)),
+      taker_(*player_, exchange_, kFramesInFlight, &hooks_),
       stats_(player_->track_stats(), player_->rate()) {}
 
 PlayerView::~PlayerView() {
@@ -149,6 +161,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
         "PlayerView::frame: recreate the view after an exception");
   }
   VKC_TRY(player_->status());
+  VKC_TRY(hook_failure_);
   // 1. The draw is timed as the worker is, while the stats show it as of the
   // last frame: gfx's profiler marks every frame it is attached to, so it is
   // attached only then, in its place (the loop keeps its address; the
@@ -166,7 +179,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   // 2. The controls, Source if asked for, and the stats, as of the last frame
   // drawn.
   overlay_.new_frame();
-  draw_controls(*player_, shown_, normals_);
+  draw_controls(*player_, shown_, normals_, unlit_);
   if (source_button_ && draw_source()) {
     source_request_ = true;
   }
@@ -180,28 +193,39 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
     player_->set_device_timing(stats_panel_.open() ? DeviceTiming::kAll
                                                    : DeviceTiming::kOff);
   }
-  // 3. The newest mesh, an empty one included; the slot's last frame has
-  // completed. Each frame published is taken here once, stamped, and counted
-  // once presented.
+  // 3. The newest mesh, an empty one included, through the commit hook; the
+  // slot's last frame has completed. Each frame committed is stamped, and
+  // counted once presented.
+  core::Result<std::optional<FrameStamp>> taken = taker_.take(frame.slot);
+  core::Status failed = taken.status();
   bool took = false;
-  exchange_.begin_frame(
-      frame.slot,
-      [this, &took](const recon::mesh::DeviceMesh& mesh, FrameStamp& stamp) {
-        stamp.taken = PlaybackStats::Clock::now();
-        shown_triangles_ = mesh.triangle_count;
-        shown_ = std::move(stamp);
-        ++frames_taken_;
-        took = true;
-        player_->taken();
-        return true;
-      });
+  if (taken.ok() && taken->has_value()) {
+    shown_ = std::move(**taken);
+    shown_triangles_ = exchange_.live().triangle_count;
+    ++frames_taken_;
+    took = true;
+  }
   const core::Status drawn = drawable(exchange_);
-  // 4. The mesh, behind a GPU wait on its ready value, then the panels over
-  // it. The worker published it once that value was reached, so the wait
-  // stalls nothing; it makes the worker's writes visible to the draw on this
-  // queue.
+  // 4. The frame's binding: the view's own (Unlit) and before_draw's.
   const recon::mesh::DeviceMesh& live = exchange_.live();
-  if (live.valid() && !live.empty() && live.ready.semaphore != nullptr) {
+  const bool draws = live.valid() && !live.empty();
+  binding_ = DrawBinding{};
+  if (unlit_) {
+    binding_.mesh_flags_clear = pipelines::kHybridMeshLit;
+  }
+  if (draws && failed.ok() && hooks_.before_draw && shown_) {
+    core::Result<DrawBinding> bound = hooks_.before_draw(frame.cmd, *shown_);
+    if (bound.ok()) {
+      binding_.descriptor_set = bound->descriptor_set;
+      binding_.mesh_flags_clear |= bound->mesh_flags_clear;
+    } else {
+      failed = bound.status();
+    }
+  }
+  // 5. The mesh, behind a GPU wait on its ready value, then the panels over
+  // it. The take committed it once that value was reached, so the wait stalls
+  // nothing; it makes the worker's writes visible to the draw on this queue.
+  if (draws && live.ready.semaphore != nullptr) {
     frame.waits.push_back(
         {live.ready, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
                          VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT});
@@ -218,26 +242,13 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
     // about 0. Inert while the profiler is detached.
     const gfx::Profiler::Scope timed = profiler_.gpu_scope(frame.cmd, kDrawRow);
     frame.target->begin(frame.cmd, clear);
-    if (live.valid() && !live.empty()) {
-      const pipelines::HybridMeshDraw draw{live_mesh(live)};
-      const VkExtent2D size = app_.swapchain().extent();
-      pipelines::HybridMeshFrame draws;
-      draws.extent = size;
-      draws.view_proj = camera_
-                            .to_camera(kFovY,
-                                       static_cast<float>(size.width) /
-                                           static_cast<float>(size.height),
-                                       kNear, kFar)
-                            .view_proj();
-      draws.flags = mesh_flags();
-      draws.draws = &draw;
-      draws.draw_count = 1;
-      mesh_pipeline_.submit(frame.cmd, draws);
+    if (failed.ok()) {
+      record_mesh(frame.cmd, app_.swapchain().extent());
     }
     overlay_.render(frame.cmd);
     frame.target->end(frame.cmd);
   }
-  // 5. Every path from begin_frame ends the frame.
+  // 6. Every path from begin_frame ends the frame.
   frame_waits_ = frame.waits;
   const core::Status ended = app_.end_frame(frame);
   if (took) {
@@ -245,6 +256,10 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
       shown_->presented = PlaybackStats::Clock::now();
     }
     stats_.add_frame(*shown_, *shown_->taken);
+  }
+  if (!failed.ok()) {
+    hook_failure_ = failed;  // every later tick refuses with it
+    return failed;
   }
   VKC_TRY(drawn);
   if (!ended.ok()) {
@@ -270,6 +285,31 @@ const gfx::FrameMetrics& PlayerView::render_metrics() const noexcept {
 
 std::uint32_t PlayerView::mesh_flags() const noexcept {
   return normals_ ? pipelines::kHybridMeshNormals : pipelines::kHybridMeshLit;
+}
+
+void PlayerView::record_mesh(VkCommandBuffer cmd, VkExtent2D extent) const {
+  const recon::mesh::DeviceMesh& live = exchange_.live();
+  if (!live.valid() || live.empty()) {
+    return;
+  }
+  const pipelines::HybridMeshDraw draw{live_mesh(live)};
+  pipelines::HybridMeshFrame draws;
+  draws.extent = extent;
+  draws.view_proj = camera_
+                        .to_camera(kFovY,
+                                   static_cast<float>(extent.width) /
+                                       static_cast<float>(extent.height),
+                                   kNear, kFar)
+                        .view_proj();
+  draws.flags = mesh_flags() & ~binding_.mesh_flags_clear;
+  draws.atlas = binding_.descriptor_set;
+  draws.draws = &draw;
+  draws.draw_count = 1;
+  mesh_pipeline_.submit(cmd, draws);
+}
+
+gfx::RenderTargetLayout PlayerView::target_layout() const {
+  return app_.swapchain().layout();
 }
 
 bool PlayerView::ui_wants_pointer() const noexcept {

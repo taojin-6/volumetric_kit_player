@@ -39,28 +39,30 @@ inline constexpr const char* kSourceWindow = "##player_source";
 /// stays inside 375 pt.
 inline constexpr float kButtonEms = 4.5f;
 
-/// @brief Draw Play/Pause, Step, Loop, Normals and Deblock in a row, the
-///        status line below, at the bottom centre of the main viewport's work
-///        area, so they stay clear of a notch and a home indicator; a live
-///        player's (StreamPlayer::live), Normals and Deblock over its
-///        @ref live_status_line. Deblock, a box that shows and sets
-///        StreamPlayer::deblock, takes a row of its own below the others when
-///        the row would not fit the work area with it, as on a phone in
-///        portrait; a status line too wide for it breaks between its parts,
-///        as a stats line does. There is no text field, so touch needs no
-///        keyboard.
+/// @brief Draw Play/Pause, Step, Loop, Normals, Deblock and Unlit in a row,
+///        the status line below, at the bottom centre of the main viewport's
+///        work area, so they stay clear of a notch and a home indicator; a
+///        live player's (StreamPlayer::live), Normals, Deblock and Unlit over
+///        its @ref live_status_line. Deblock, a box that shows and sets
+///        StreamPlayer::deblock, and then Unlit, a box, each go after the
+///        line's last control, or start a line below when it would not fit
+///        the work area with them, as Deblock does on a phone in portrait; a
+///        status line too wide for it breaks between its parts, as a stats
+///        line does. There is no text field, so touch needs no keyboard.
 ///
 /// @code
 /// overlay.new_frame();
-/// draw_controls(player, shown, normals);
+/// draw_controls(player, shown, normals, unlit);
 /// @endcode
 /// @param player   The controls act on it; they are safe from this thread.
 /// @param shown    The last stream frame drawn, for the status line.
 /// @param normals  The view's shading (PlayerView::normals): a press on
 ///                 Normals flips it, and the button shows pressed while on.
+/// @param unlit    The view's Unlit (PlayerView::unlit), which its box shows
+///                 and a press flips.
 /// @pre An ImGui frame is open on the view's context.
 void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
-                   bool& normals);
+                   bool& normals, bool& unlit);
 
 /// @brief Draw the Source button, which asks for something else to play, at
 ///        the top right of the main viewport's work area. Its window has no

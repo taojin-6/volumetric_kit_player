@@ -25,24 +25,36 @@
 // error the layer reports; a frame drawn is stamped from its due time to its
 // present call, and the stats show its latency; the renderer's figures are
 // the profiler's while the draw is timed (render_metrics), and none while it
-// is not; and teardown mid-playback, the profiler attached, is clean. A live
-// view presents, on the two images its swapchain asks for (checked on the
-// host). The view makes its own shared device, validated as the test policy
-// asks, so the layer's errors fail the test. The tests skip where the loader
-// offers no headless surface (NVIDIA's ICD), but fail on Apple, where MoltenVK
-// has one. MoltenVK plans two queue families, so the mesh's buffers are
-// CONCURRENT and read across. One family, EXCLUSIVE and read in place, is
-// tested on the host only (mesh_wiring_test.cpp) until a leg runs the view on
-// one.
+// is not; and teardown mid-playback, the profiler attached, is clean. With
+// hooks (frame_hooks.hpp): after_mesh's extra reaches the commit and
+// before_draw, and is released only once every display frame that drew its
+// frame has run on the GPU; a bound image's set drawn with kHybridMeshLit
+// cleared shows the image's value in an offscreen pixel (record_mesh); Unlit,
+// from the panel's box or set_unlit, shows the vertex colour unshaded, and
+// off it is shaded; a commit hook holds and skips frames; and a before_draw
+// failure stops the view. A live view
+// presents, on the two images its swapchain asks for (checked on the host). The
+// view makes its own shared device, validated as the test policy asks, so the
+// layer's errors fail the test. The tests skip where the loader offers no
+// headless surface (NVIDIA's ICD), but fail on Apple, where MoltenVK has one.
+// MoltenVK plans two queue families, so the mesh's buffers are CONCURRENT and
+// read across. One family, EXCLUSIVE and read in place, is tested on the host
+// only (mesh_wiring_test.cpp) until a leg runs the view on one.
 
 #include "volumetric_kit/player/player_view.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <string>
@@ -58,14 +70,28 @@
 #include "test_allocation_failure.hpp"
 #include "test_stream.hpp"
 #include "volumetric_kit/core/testing/vulkan_fixture.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/shared_device.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/gfx/app/shared_device_config.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
+#include "volumetric_kit/gfx/core/offscreen_target.hpp"
+#include "volumetric_kit/gfx/core/render_target.hpp"
+#include "volumetric_kit/gfx/core/texture_upload.hpp"
+#include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
+#include "volumetric_kit/gfx/pipelines/hybrid_mesh_texture_set.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/player/controls.hpp"
+#include "volumetric_kit/player/frame_hooks.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
+#include "volumetric_kit/recon/mesh/device_mesh.hpp"
+#include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace {
 
@@ -74,10 +100,15 @@ namespace gfx = volumetric_kit::gfx;
 namespace recon = volumetric_kit::recon;
 using namespace std::chrono_literals;
 using volumetric_kit::player::DeviceTiming;
+using volumetric_kit::player::DrawBinding;
+using volumetric_kit::player::FrameCommit;
+using volumetric_kit::player::FrameHooks;
 using volumetric_kit::player::FrameStamp;
+using volumetric_kit::player::HookContext;
 using volumetric_kit::player::kControlsWindow;
 using volumetric_kit::player::kSourceWindow;
 using volumetric_kit::player::kStatsWindow;
+using volumetric_kit::player::MakeHooks;
 using volumetric_kit::player::PlayerView;
 using volumetric_kit::player::PlayerViewConfig;
 using volumetric_kit::player::StatsPanel;
@@ -173,8 +204,9 @@ class PlayerViewTest : public core::test::VulkanTest {
   }
 
   // The view's config: at `ui_scale_` and `ui_min_frame_height_`, with
-  // Source while `source_button_`, validated as the test policy asks.
-  PlayerViewConfig config() const {
+  // Source while `source_button_`, validated as the test policy asks, Unlit
+  // as `unlit_` and with `make_hooks_`'s hooks.
+  PlayerViewConfig config() {
     PlayerViewConfig config;
     config.ui_scale = ui_scale_;
     config.ui_min_frame_height = ui_min_frame_height_;
@@ -183,7 +215,84 @@ class PlayerViewTest : public core::test::VulkanTest {
     config.compact_stats = compact_stats_;
     config.device_timing = device_timing_;
     config.share_vertices = share_vertices_;
+    config.unlit = unlit_;
+    if (make_hooks_) {
+      // The context's devices and pipeline noted, for the test's own work on
+      // them; they live as long as the view.
+      config.make_hooks = [this](const HookContext& context) {
+        context_.emplace(
+            Context{&context.device, &context.allocator, &context.commit_device,
+                    &context.commit_allocator, context.pipeline,
+                    context.compute_family, context.graphics_family});
+        return make_hooks_(context);
+      };
+    }
     return config;
+  }
+
+  // The view's mesh, drawn again as its last frame drew it
+  // (PlayerView::record_mesh) into a `side` x `side` target laid out as its
+  // swapchain, on its drawing device, behind the mesh's ready value: the
+  // middle pixel, as R, G, B, A; empty with a failure recorded. Needs
+  // make_hooks_, for the devices.
+  std::vector<int> mesh_pixel(std::uint32_t side = 64) {
+    if (!context_) {
+      ADD_FAILURE() << "no hooks' context: set make_hooks_";
+      return {};
+    }
+    const gfx::RenderTargetLayout layout = view_->target_layout();
+    gfx::OffscreenTargetDesc desc;
+    desc.extent = {side, side};
+    desc.color_format = layout.color_formats[0];
+    desc.depth_format = layout.depth_format;
+    core::Result<gfx::OffscreenTarget> made =
+        gfx::OffscreenTarget::create(*context_->commit_allocator, desc);
+    if (!made.ok()) {
+      ADD_FAILURE() << made.status().message();
+      return {};
+    }
+    const gfx::OffscreenTarget& target = made.value();
+    std::vector<core::TimelinePoint> waits;
+    if (view_->mesh().ready.semaphore != nullptr) {
+      waits.push_back(view_->mesh().ready);
+    }
+    core::Result<core::Device::PendingSubmit> drawn =
+        context_->commit_device->submit_pending(
+            [&](VkCommandBuffer cmd) {
+              target.prepare(cmd);
+              gfx::RenderTargetBeginInfo begin;
+              begin.clear_color.float32[3] = 1.0f;
+              const gfx::RenderTarget pass = target.target();
+              pass.begin(cmd, begin);
+              view_->record_mesh(cmd, {side, side});
+              pass.end(cmd);
+              target.record_readback(cmd);
+            },
+            waits, {});
+    if (!drawn.ok()) {
+      ADD_FAILURE() << drawn.status().message();
+      return {};
+    }
+    const core::Status waited = drawn->wait();
+    if (!waited.ok()) {
+      ADD_FAILURE() << waited.message();
+      return {};
+    }
+    const auto* pixels = static_cast<const std::uint8_t*>(target.pixels());
+    const std::uint8_t* middle =
+        pixels + 4 * (static_cast<std::size_t>(side / 2) * side + side / 2);
+    const bool bgra = desc.color_format == VK_FORMAT_B8G8R8A8_SRGB ||
+                      desc.color_format == VK_FORMAT_B8G8R8A8_UNORM;
+    return bgra ? std::vector<int>{middle[2], middle[1], middle[0], middle[3]}
+                : std::vector<int>{middle[0], middle[1], middle[2], middle[3]};
+  }
+
+  // The camera on frame `index`'s sphere (test_stream.hpp: 0.08 m along x a
+  // frame, 0.12 m round), 0.6 m off, level, so the sphere fills the middle.
+  void aim_at(std::uint64_t index) {
+    view_->camera().set_target({0.08f * static_cast<float>(index), 0.0f, 0.0f});
+    view_->camera().set_distance(0.6f);
+    view_->camera().set_elevation(0.0f);
   }
 
   // A player over the tests' stream, or null with a failure recorded.
@@ -381,6 +490,19 @@ class PlayerViewTest : public core::test::VulkanTest {
   bool compact_stats_ = PlayerViewConfig{}.compact_stats;
   std::optional<DeviceTiming> device_timing_;
   bool share_vertices_ = PlayerViewConfig{}.share_vertices;
+  bool unlit_ = PlayerViewConfig{}.unlit;
+  MakeHooks make_hooks_;  // the view's hooks, with the context noted
+  // What the hooks were made with, as the view's create gave it.
+  struct Context {
+    core::Device* device;
+    core::Allocator* allocator;
+    core::Device* commit_device;
+    core::Allocator* commit_allocator;
+    const gfx::pipelines::HybridMeshPipeline* pipeline;
+    std::uint32_t compute_family;
+    std::uint32_t graphics_family;
+  };
+  std::optional<Context> context_;
   gfx::ui::EdgeInsets safe_area_;
 };
 
@@ -1054,6 +1176,387 @@ TEST_F(PlayerViewTest, MoltenVkPlansTwoFamilies) {
       << core::to_string(shared.value()->plan());
 }
 #endif
+
+// --- Hooks (frame_hooks.hpp) through the view --------------------------------
+
+// The byte a target stores for linear light `linear`, sRGB-encoded: an _SRGB
+// target encodes it, and the pipeline encodes for a UNORM one.
+int encoded(double linear) {
+  linear = std::clamp(linear, 0.0, 1.0);
+  const double srgb = linear <= 0.0031308
+                          ? 12.92 * linear
+                          : 1.055 * std::pow(linear, 1.0 / 2.4) - 0.055;
+  return static_cast<int>(std::lround(255.0 * srgb));
+}
+
+// A view of a mesh's vertex buffer, `count` vertices: its deleter frees
+// nothing.
+core::Buffer vertex_view(const recon::mesh::DeviceMesh& mesh,
+                         std::uint32_t count) {
+  return core::Buffer(
+      mesh.vertices, VkDeviceSize{count} * sizeof(recon::mesh::Vertex),
+      mesh.vertex_usage, mesh.sharing_mode, nullptr, [] {}, std::nullopt);
+}
+
+// The hooks' context names the worker's device, the view's own and its
+// pipeline; after_mesh's extra reaches the commit and before_draw with its
+// frame.
+TEST_F(PlayerViewTest, AnExtraReachesTheCommitAndBeforeDraw) {
+  struct Seen {
+    std::atomic<int> commits{0};
+    std::atomic<int> draws{0};
+    std::atomic<int> wrong{0};
+  };
+  const auto seen = std::make_shared<Seen>();
+  const auto check = [seen](const FrameStamp& stamp) {
+    const auto* index = static_cast<const std::uint64_t*>(stamp.extra.get());
+    if (index == nullptr || *index != stamp.index) {
+      ++seen->wrong;
+    }
+  };
+  make_hooks_ = [seen, check](const HookContext&) {
+    FrameHooks hooks;
+    hooks.after_mesh = [](core::CommandBatch&,
+                          const recon::volume::VoxelBlockGrid&,
+                          const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+      stamp.extra = std::make_shared<const std::uint64_t>(stamp.index);
+      return core::Status();
+    };
+    hooks.commit = [seen, check](const recon::mesh::DeviceMesh&,
+                                 FrameStamp& stamp) {
+      check(stamp);
+      ++seen->commits;
+      return core::Result<FrameCommit>(FrameCommit::kDraw);
+    };
+    hooks.before_draw = [seen, check](VkCommandBuffer cmd,
+                                      const FrameStamp& stamp) {
+      check(stamp);
+      if (cmd == VK_NULL_HANDLE) {
+        ++seen->wrong;
+      }
+      ++seen->draws;
+      return core::Result<DrawBinding>(DrawBinding{});
+    };
+    return core::Result<FrameHooks>(std::move(hooks));
+  };
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(context_.has_value());
+  EXPECT_EQ(context_->device, &view_->compute_device());
+  EXPECT_NE(context_->commit_device, context_->device);
+  EXPECT_NE(context_->pipeline, nullptr);
+  ASSERT_TRUE(tick_until([&] {
+    return view_->shown().has_value() && view_->shown()->index >= 2;
+  }));
+  EXPECT_GE(seen->commits, 3);
+  EXPECT_GE(seen->draws, seen->commits);
+  EXPECT_EQ(seen->wrong, 0);
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
+
+// A frame's extra is released only once every display frame that drew it
+// has run on the GPU. before_draw marks each display frame in a buffer the
+// host reads, from that frame's own commands; at an extra's release, every
+// display frame that drew its frame has marked it, and the view has begun at
+// least its frames in flight since the last of them, each once the slot's
+// last frame completed. At teardown, after the view's idle wait, the marks
+// alone are checked.
+TEST_F(PlayerViewTest, AnExtraIsReleasedOnlyOnceEveryDrawOfItsFrameHasRun) {
+  constexpr std::uint32_t kMarks = 4096;
+  constexpr std::uint64_t kFramesInFlight = 2;  // the view's
+  struct Results {
+    std::atomic<int> released{0};
+    std::atomic<int> early{0};  // fewer frames begun since its last draw
+    std::atomic<int> unrun{0};  // a draw of its frame not marked
+    std::atomic<bool> teardown{false};
+  };
+  // The buffer and the draws; the hooks' and the extras' alone, so it goes
+  // with the view, before its device.
+  struct Marks {
+    core::Buffer buffer;  // kMarks words, host-visible, on the view's device
+    std::mutex mutex;
+    std::uint64_t display = 0;  // display frames drawn so far
+    std::map<std::uint64_t, std::vector<std::uint64_t>> drew;  // by frame
+    std::uint64_t made = 0;  // extras made, a key each
+    std::shared_ptr<Results> results;
+  };
+  const auto results = std::make_shared<Results>();
+  make_hooks_ =
+      [results](const HookContext& context) -> core::Result<FrameHooks> {
+    const auto marks = std::make_shared<Marks>();
+    marks->results = results;
+    core::BufferDesc desc;
+    desc.size = kMarks * sizeof(std::uint32_t);
+    desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    desc.memory = core::MemoryUsage::Staging;
+    desc.host_access = core::HostAccess::Random;
+    VKC_ASSIGN(marks->buffer, context.commit_allocator.create_buffer(desc));
+    std::memset(marks->buffer.mapped(), 0, desc.size);
+    FrameHooks hooks;
+    // Each frame's extra, keyed apart from its index, which a pass repeats.
+    hooks.after_mesh =
+        [marks](core::CommandBatch&, const recon::volume::VoxelBlockGrid&,
+                const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+          std::uint64_t key = 0;
+          {
+            std::lock_guard<std::mutex> lock(marks->mutex);
+            key = ++marks->made;
+          }
+          stamp.extra = std::shared_ptr<const void>(
+              new std::uint64_t(key), [marks](const void* extra) {
+                const auto* frame = static_cast<const std::uint64_t*>(extra);
+                Results& results = *marks->results;
+                std::lock_guard<std::mutex> lock(marks->mutex);
+                const auto* words =
+                    static_cast<const std::uint32_t*>(marks->buffer.mapped());
+                std::uint64_t last = 0;
+                for (const std::uint64_t display : marks->drew[*frame]) {
+                  if (words[display % kMarks] != display + 1) {
+                    ++results.unrun;
+                  }
+                  last = std::max(last, display + 1);
+                }
+                // The display frame under way, whose begin waited for its slot.
+                if (!results.teardown && last != 0 &&
+                    marks->display + 1 < last + kFramesInFlight) {
+                  ++results.early;
+                }
+                ++results.released;
+                delete frame;
+              });
+          return core::Status();
+        };
+    hooks.before_draw = [marks](VkCommandBuffer cmd, const FrameStamp& stamp) {
+      std::lock_guard<std::mutex> lock(marks->mutex);
+      const std::uint64_t display = marks->display++;
+      marks->drew[*static_cast<const std::uint64_t*>(stamp.extra.get())]
+          .push_back(display);
+      vkCmdFillBuffer(cmd, marks->buffer.handle(),
+                      (display % kMarks) * sizeof(std::uint32_t),
+                      sizeof(std::uint32_t),
+                      static_cast<std::uint32_t>(display + 1));
+      VkMemoryBarrier read{};
+      read.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+      read.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      read.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+      vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &read, 0, nullptr,
+                           0, nullptr);
+      return core::Result<DrawBinding>(DrawBinding{});
+    };
+    return hooks;
+  };
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([&] {
+    return view_->shown().has_value() && view_->shown()->index >= 4;
+  }));
+  EXPECT_GE(results->released, 3) << "the frames before are released";
+  results->teardown = true;
+  touch_.reset();
+  view_.reset();
+  EXPECT_GE(results->released, 5);
+  EXPECT_EQ(results->early, 0);
+  EXPECT_EQ(results->unrun, 0);
+}
+
+// before_draw's binding reaches the draw: with a 2x2 image's set bound
+// (gfx's HybridMeshTextureSet against the view's pipeline) and
+// kHybridMeshLit cleared, the mesh, whose vertices after_mesh sets to sample
+// the image's middle, draws the image's value within 1 code.
+TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
+  // Every pixel of the image, as sRGB bytes.
+  constexpr std::array<std::uint8_t, 4> kValue{200, 120, 40, 255};
+  struct Bound {
+    core::Image image;
+    std::unique_ptr<gfx::pipelines::HybridMeshTextureSet> set;
+  };
+  make_hooks_ =
+      [kValue](const HookContext& context) -> core::Result<FrameHooks> {
+    std::array<std::uint8_t, 16> pixels{};
+    for (std::size_t i = 0; i < pixels.size(); ++i) {
+      pixels[i] = kValue[i % 4];
+    }
+    gfx::ImageUploadDesc desc;
+    desc.extent = {2, 2};
+    desc.format = VK_FORMAT_R8G8B8A8_SRGB;
+    desc.pixels = pixels.data();
+    desc.size = pixels.size();
+    const auto bound = std::make_shared<Bound>();
+    VKC_ASSIGN(bound->image,
+               gfx::upload_texture(context.commit_device,
+                                   context.commit_allocator, desc));
+    VKC_ASSIGN(bound->set, gfx::pipelines::HybridMeshTextureSet::create(
+                               context.commit_device, *context.pipeline,
+                               bound->image.view()));
+    FrameHooks hooks;
+    core::Device* const device = &context.device;
+    core::Allocator* const allocator = &context.allocator;
+    hooks.after_mesh = [device, allocator](core::CommandBatch& batch,
+                                           const recon::volume::VoxelBlockGrid&,
+                                           const recon::mesh::DeviceMesh& mesh,
+                                           FrameStamp&) -> core::Status {
+      if (mesh.vertex_count == 0) {
+        return {};
+      }
+      // Its vertices read back with a host wait of the test's, each set to
+      // sample the image's middle, and written back in after_mesh's batch.
+      const core::Buffer vertices = vertex_view(mesh, mesh.vertex_count);
+      std::vector<recon::mesh::Vertex> read(mesh.vertex_count);
+      core::CommandBatch readback(*device, *allocator);
+      VKC_TRY(readback.readback(vertices, 0, vertices.size(), read.data()));
+      VKC_TRY(readback.submit());
+      for (recon::mesh::Vertex& vertex : read) {
+        vertex.uv0.x = 0.5f;
+        vertex.uv0.y = 0.5f;
+      }
+      return batch.upload(vertices, 0, read.data(), vertices.size());
+    };
+    hooks.before_draw = [bound](VkCommandBuffer, const FrameStamp&) {
+      return core::Result<DrawBinding>(
+          DrawBinding{bound->set->set(), gfx::pipelines::kHybridMeshLit});
+    };
+    return hooks;
+  };
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  aim_at(view_->shown()->index);
+  ASSERT_TRUE(present());
+  const std::vector<int> pixel = mesh_pixel();
+  ASSERT_EQ(pixel.size(), 4u);
+  for (std::size_t c = 0; c < 3; ++c) {
+    EXPECT_NEAR(pixel[c], kValue[c], 1) << "component " << c;
+  }
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
+
+// Unlit: the view's own binding clears kHybridMeshLit, so a pixel of the
+// mesh is its vertex colour within 1 code; lit, the same pixel is shaded
+// darker, as the level camera faces no surface toward the light, which comes
+// from above. The panel's box flips it, as set_unlit does.
+TEST_F(PlayerViewTest, UnlitShowsTheVertexColourUnshaded) {
+  make_hooks_ = [](const HookContext&) {
+    return core::Result<FrameHooks>(FrameHooks{});
+  };
+  unlit_ = true;
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  EXPECT_TRUE(view_->unlit());
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  aim_at(view_->shown()->index);
+  ASSERT_TRUE(present());
+  // The mesh's vertex colour, one for every vertex.
+  const recon::mesh::DeviceMesh& mesh = view_->mesh();
+  ASSERT_GT(mesh.vertex_count, 0u);
+  std::vector<recon::mesh::Vertex> read(mesh.vertex_count);
+  core::CommandBatch readback(*context_->device, *context_->allocator);
+  const core::Buffer vertices = vertex_view(mesh, mesh.vertex_count);
+  ASSERT_TRUE(
+      readback.readback(vertices, 0, vertices.size(), read.data()).ok());
+  ASSERT_TRUE(readback.submit().ok());
+  const recon::mesh::Vertex& first = read.front();
+  for (const recon::mesh::Vertex& vertex : read) {
+    ASSERT_EQ(vertex.color.x, first.color.x);
+    ASSERT_EQ(vertex.color.y, first.color.y);
+    ASSERT_EQ(vertex.color.z, first.color.z);
+  }
+  const std::array<int, 3> colour{
+      encoded(first.color.x), encoded(first.color.y), encoded(first.color.z)};
+  const std::vector<int> unlit = mesh_pixel();
+  ASSERT_EQ(unlit.size(), 4u);
+  for (std::size_t c = 0; c < 3; ++c) {
+    EXPECT_NEAR(unlit[c], colour[c], 1) << "component " << c;
+  }
+  ImGui::SetCurrentContext(view_->ui_context());
+  const ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
+  ASSERT_NE(panel, nullptr);
+  tap(vp_test::control_middle(*panel, vp_test::kUnlit));
+  EXPECT_FALSE(view_->unlit());
+  ASSERT_TRUE(present());
+  const std::vector<int> lit = mesh_pixel();
+  ASSERT_EQ(lit.size(), 4u);
+  for (std::size_t c = 0; c < 3; ++c) {
+    EXPECT_LT(lit[c], colour[c] - 10) << "component " << c << " unshaded";
+  }
+  view_->set_unlit(true);
+  ASSERT_TRUE(present());
+  const std::vector<int> again = mesh_pixel();
+  ASSERT_EQ(again.size(), 4u);
+  for (std::size_t c = 0; c < 3; ++c) {
+    EXPECT_NEAR(again[c], colour[c], 1) << "component " << c;
+  }
+  EXPECT_FALSE(view_->player().playing()) << "the tap pressed Unlit alone";
+}
+
+// A commit hook that skips frame 2 and holds frame 3 for five asks, through
+// the view: frame 2 is never shown, frame 3 is after its holds, and the
+// view counts the skip and the hold.
+TEST_F(PlayerViewTest, ACommitHookHoldsAndSkipsFrames) {
+  const auto asked = std::make_shared<std::atomic<int>>(0);  // for frame 3
+  make_hooks_ = [asked](const HookContext&) {
+    FrameHooks hooks;
+    hooks.commit = [asked](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+      if (stamp.index == 2) {
+        return core::Result<FrameCommit>(FrameCommit::kSkip);
+      }
+      if (stamp.index == 3 && ++*asked <= 5) {
+        return core::Result<FrameCommit>(FrameCommit::kHold);
+      }
+      return core::Result<FrameCommit>(FrameCommit::kDraw);
+    };
+    return core::Result<FrameHooks>(std::move(hooks));
+  };
+  ASSERT_TRUE(make_view());
+  std::vector<std::uint64_t> shown;
+  ASSERT_TRUE(tick_until([&] {
+    if (view_->shown() &&
+        (shown.empty() || shown.back() != view_->shown()->index)) {
+      shown.push_back(view_->shown()->index);
+    }
+    return shown.size() >= 4;
+  }));
+  EXPECT_EQ(shown, (std::vector<std::uint64_t>{0, 1, 3, 4}));
+  EXPECT_EQ(view_->frames_skipped(), 1u);
+  EXPECT_GE(view_->frames_held(), 1u);
+  EXPECT_EQ(*asked, 6);
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
+
+// A before_draw failure stops the view with its status: the tick that drew
+// the frame returns it, and every tick after refuses with it, the hook not
+// asked again.
+TEST_F(PlayerViewTest, ABeforeDrawFailureStopsTheView) {
+  const auto asked = std::make_shared<std::atomic<int>>(0);
+  make_hooks_ = [asked](const HookContext&) {
+    FrameHooks hooks;
+    hooks.before_draw = [asked](
+                            VkCommandBuffer,
+                            const FrameStamp&) -> core::Result<DrawBinding> {
+      ++*asked;
+      return core::Status::unsupported("the test's before_draw refuses");
+    };
+    return core::Result<FrameHooks>(std::move(hooks));
+  };
+  ASSERT_TRUE(make_view());
+  core::Status failed;
+  const SteadyClock::time_point deadline = SteadyClock::now() + kArrival;
+  while (failed.ok() && SteadyClock::now() < deadline) {
+    failed = tick().status();
+    std::this_thread::sleep_for(1ms);
+  }
+  ASSERT_FALSE(failed.ok()) << "frame() kept presenting";
+  EXPECT_NE(failed.message().find("before_draw refuses"), std::string::npos)
+      << failed.message();
+  EXPECT_EQ(*asked, 1);
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_EQ(tick().status().message(), failed.message());
+  }
+  EXPECT_EQ(*asked, 1);
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
 
 // Target the small per-frame wait-vector allocation by size and its measured
 // caller. Injection is local to this UI thread, never a worker or the driver.

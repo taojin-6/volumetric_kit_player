@@ -2,10 +2,11 @@
 // Copyright (c) 2026 Tao Jin
 
 // mesh_wiring on the host: the draw's usage on the extractor's buffers, a ring
-// two slots deeper than the frames in flight, vertices shared unless asked
-// not to be, and the families: one family is EXCLUSIVE and read in place, two
-// are CONCURRENT and read across. And drawable on recon's exchange: a refused
-// mesh fails every frame after it.
+// two slots deeper than the frames in flight, one frame counted as two, and
+// one more for a commit hook that may hold or skip a mesh, vertices shared
+// unless asked not to be, and the families: one family is EXCLUSIVE and read
+// in place, two are CONCURRENT and read across. And drawable on recon's
+// exchange: a refused mesh fails every frame after it.
 
 #include "volumetric_kit/player/mesh_wiring.hpp"
 
@@ -95,6 +96,24 @@ TEST(MeshWiring, TwoFamiliesAreReadAcross) {
   EXPECT_EQ(wiring.exchange.frames_in_flight, 3u);
   EXPECT_EQ(wiring.mc.slot_count, 5u);
   expect_bindable(wiring);
+}
+
+// recon's ring rule: the frames in flight, one counted as two, two more for a
+// producer that meshes the next frame before the take, and with `holds` one
+// more for the mesh a commit hook may skip; the rest is as without.
+TEST(MeshWiring, HoldsAddOneMeshAndOneFrameCountsAsTwo) {
+  EXPECT_EQ(mesh_wiring(0, 0, 1).mc.slot_count, 4u);
+  EXPECT_EQ(mesh_wiring(0, 0, 2).mc.slot_count, 4u);
+  for (const std::uint32_t frames : {1u, 2u, 3u}) {
+    const MeshWiring plain = mesh_wiring(0, 1, frames);
+    const MeshWiring holding =
+        mesh_wiring(0, 1, frames, /*share_vertices=*/true, /*holds=*/true);
+    EXPECT_EQ(holding.mc.slot_count, plain.mc.slot_count + 1) << frames;
+    EXPECT_EQ(families(holding), families(plain));
+    EXPECT_EQ(holding.exchange.frames_in_flight, frames);
+    EXPECT_TRUE(holding.exchange.cross_family);
+    expect_bindable(holding);
+  }
 }
 
 // The draw is indexed, so triangles share their vertices by default: about a

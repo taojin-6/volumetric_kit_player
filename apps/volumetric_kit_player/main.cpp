@@ -53,8 +53,8 @@ Input& input_of(GLFWwindow* window) {
 }
 
 // The panel's controls as keys: Space plays or pauses, Right steps, L loops,
-// which a live player ignores, N flips Normals and D the deblock. Esc closes
-// the window.
+// which a live player ignores, N flips Normals, D the deblock and U Unlit.
+// Esc closes the window.
 void on_key(GLFWwindow* window, int key, int /*scancode*/, int action,
             int /*mods*/) {
   if (action != GLFW_PRESS) {
@@ -78,6 +78,8 @@ void on_key(GLFWwindow* window, int key, int /*scancode*/, int action,
     view->set_normals(!view->normals());
   } else if (key == GLFW_KEY_D) {
     player.set_deblock(!player.deblock());
+  } else if (key == GLFW_KEY_U) {
+    view->set_unlit(!view->unlit());
   }
 }
 

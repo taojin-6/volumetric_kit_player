@@ -133,13 +133,13 @@ void draw_normals(bool& normals) {
   }
 }
 
-// Deblock, a box, after the row's last control, or below the row when the
-// row would not fit the work area with it.
-void draw_deblock(StreamPlayer& player) {
+// A box labelled `label` after the line's last control, or below it when the
+// line would not fit the work area with it; whether a press flipped `*on`.
+bool draw_box(const char* label, bool* on) {
   const ImGuiStyle& style = ImGui::GetStyle();
   const float box = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x +
-                    ImGui::CalcTextSize("Deblock").x;
-  // The window's width with it on the row, against the widest ImGui lets an
+                    ImGui::CalcTextSize(label).x;
+  // The window's width with it on the line, against the widest ImGui lets an
   // auto-sized window grow.
   const float row = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x +
                     style.ItemSpacing.x + box + style.WindowPadding.x;
@@ -147,17 +147,24 @@ void draw_deblock(StreamPlayer& player) {
                  2.0f * style.DisplaySafeAreaPadding.x) {
     ImGui::SameLine();
   }
-  bool on = player.deblock();
-  if (ImGui::Checkbox("Deblock", &on)) {
-    player.set_deblock(on);
-  }
+  return ImGui::Checkbox(label, on);
 }
 
-// A file's controls: Play/Pause, Step, Loop, Normals and Deblock; returns its
-// status line.
+// Deblock, then Unlit, each a box after the line's last control, or below it
+// when the line would not fit the work area with it.
+void draw_boxes(StreamPlayer& player, bool& unlit) {
+  bool on = player.deblock();
+  if (draw_box("Deblock", &on)) {
+    player.set_deblock(on);
+  }
+  draw_box("Unlit", &unlit);
+}
+
+// A file's controls: Play/Pause, Step, Loop, Normals, Deblock and Unlit;
+// returns its status line.
 std::string draw_file_controls(StreamPlayer& player,
                                const std::optional<FrameStamp>& shown,
-                               bool& normals) {
+                               bool& normals, bool& unlit) {
   const ImVec2 button = button_size();
   // One ID for both labels, so a press that flips the label completes.
   if (ImGui::Button(player.playing() ? "Pause###play" : "Play###play",
@@ -179,14 +186,14 @@ std::string draw_file_controls(StreamPlayer& player,
   }
   ImGui::SameLine();
   draw_normals(normals);
-  draw_deblock(player);
+  draw_boxes(player, unlit);
   return status_line(shown, player.frame_count(), player.playing(), loop);
 }
 
 }  // namespace
 
 void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
-                   bool& normals) {
+                   bool& normals, bool& unlit) {
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(
       ImVec2(viewport->WorkPos.x + 0.5f * viewport->WorkSize.x,
@@ -197,10 +204,10 @@ void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
     std::string status;
     if (player.live()) {
       draw_normals(normals);
-      draw_deblock(player);
+      draw_boxes(player, unlit);
       status = live_status_line(player.live_status(), Playback::Clock::now());
     } else {
-      status = draw_file_controls(player, shown, normals);
+      status = draw_file_controls(player, shown, normals, unlit);
     }
     draw_parted_line(status, text_room());
   }

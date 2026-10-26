@@ -4,6 +4,59 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-26 — Per-frame hooks for the worker and the draw
+
+`frame_hooks.hpp`: `FrameHooks`, made once by `PlayerViewConfig::make_hooks`
+from a `HookContext`. Why: a caller adds GPU work to a frame and chooses what
+each display frame draws, a readback or a measurement for one, with no copy
+of the worker or the view; the panel's Unlit, `vp_probe --latency` and
+`--save-meshes` are such callers.
+
+- **Where each runs:** `after_mesh` on the worker before every publish, a
+  frame's, one meshed again after a redo, a paused toggle's rebuild and a
+  live frame's, with the grid the mesh was made from (read-only); `commit`
+  inside the take (recon's `begin_frame` commit), on the drawing thread;
+  `before_draw` on that thread before the render pass, each display frame
+  that draws a mesh, with the shown frame's stamp; `on_park` in a park that
+  returns true, once until the unpark, which runs `on_resume`. A failure
+  stops playback, or the view, with its status.
+- **No hooks, one batch a frame, as 2026-10-25's.** `after_mesh` records
+  into a batch of its own, submitted behind the mesh's ready point, whose
+  point the published mesh then carries; the worker finishes it at the next
+  `after_mesh`, when the GPU has run it, so it adds a submit a frame and no
+  blocking host wait. A park and a stop finish it too, so its readbacks are
+  written before they return and nothing runs while parked; so do a stop
+  before a frame's stamp, and its extra, goes unpublished, and a live
+  connection before the next one's grid replaces the grid the batch was
+  given. A park waits for it within its timeout, as for the step under way,
+  and returns false, the hold kept and no `on_park`, if it still runs, so a
+  suspend's park on the main thread stays bounded.
+- **A mesh is committed only once its ready value is reached.** gfx's frame
+  loop waits only for values reached (a present behind an unreached one is
+  invalid), and `after_mesh`'s batch may still run at the take, so the take
+  holds the mesh, as recon's park does, without asking the hook, rather than
+  a host wait on the drawing thread.
+- **Hold and skip are recon's park and drop** (`CommitDecision`, recon #293).
+  The take tells the worker once a frame, held or not (`taken`). At most one
+  frame is skipped between two drawn, as a dropped mesh keeps its slot until
+  the next commit: a second skip holds the frame instead, and with hooks the
+  ring is one mesh deeper (`mesh_wiring`'s `holds`: a vertex arena more). A
+  hold needs none, as the worker waits behind a held mesh.
+- **`FrameStamp::extra` lives until the GPU has drawn its frame for the last
+  time:** each slot keeps the extra of the frame it drew until its next take,
+  which waits for that slot's last frame. `FrameTaker` does this for the view
+  and for `vp_probe --worker` alike, so the commit's handling is tested where
+  no view runs, NVIDIA included.
+- **Unlit is the view's own `DrawBinding`,** clearing `kHybridMeshLit`;
+  Normals takes precedence. A box after Deblock, live too, and the U key.
+- **`PlayerView::record_mesh` records the mesh as the last frame drew it,**
+  and `frame` draws through it: the swapchain's images cannot be read back,
+  so a test draws it into an offscreen target of `target_layout` and reads
+  its pixels.
+- **`mesh_wiring` counts one frame in flight as two,** as recon's ring rule
+  does (the mesh a commit replaces keeps its slot until the committing frame
+  retires): unchanged for the view's two.
+
 ## 2026-10-26 — The frame's set on show and in the log; vertex sharing a switch
 
 - **Each frame carries its record's capture set** (`FrameStamp::set`, from
@@ -101,8 +154,9 @@ everywhere, we do not need the older pipelines".
   for the live room.
 - **The draw waits for the mesh's `ready` value on the GPU**
   (`gfx::windowing::FrameWait` at `VERTEX_INPUT | DRAW_INDIRECT`): reached
-  before the mesh is published, so it stalls nothing; it carries the
-  worker's writes across queues, where the fence alone did not.
+  before the mesh is published (with an `after_mesh` hook, before it is
+  committed: 2026-10-26), so it stalls nothing; it carries the worker's
+  writes across queues, where the fence alone did not.
 - **A park waits out a batch in flight,** submitting nothing, and the frame
   is finished and published at unpark, a grow, retry or refit included: a
   submit from the background loses the device on iOS. A park finds the worker

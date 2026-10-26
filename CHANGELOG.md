@@ -137,15 +137,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`MeasureContext::share_vertices`) and the frame row's `vertices` and
   `set`; the summarizer reads formats 1 to 3 and shows the setting and the
   vertices per frame.
+- Per-frame hooks (`frame_hooks.hpp`): `FrameHooks`' `after_mesh` on the
+  worker before each publish, in a batch of its own whose ready point the
+  published mesh carries, `commit` at the take (`FrameCommit`: draw, hold
+  or skip), `before_draw` before the render pass (`DrawBinding`: a set-0
+  descriptor set and mesh flags cleared), and `on_park` and `on_resume`;
+  `HookContext` and `MakeHooks`. `StreamPlayer::start` takes the hooks;
+  `FrameStamp::extra` carries the caller's from after_mesh to the draw.
+  `FrameTaker` is the take the view and `vp_probe --worker` share;
+  `PlayerViewConfig::make_hooks`; `PlayerView::frames_skipped`,
+  `frames_held`, `record_mesh` and `target_layout`; `mesh_wiring`'s `holds`,
+  one mesh more in the ring.
+- Unlit: a box in the panel and the desktop's U key show the mesh's vertex
+  colours unshaded, through the view's own `DrawBinding`
+  (`PlayerView::unlit`, `set_unlit`, `PlayerViewConfig::unlit`).
+- `vp_probe --latency`, which times each frame from its mesh to its commit
+  and its draws, and `--save-meshes DIR`, which writes each mesh as
+  `DIR/<frame>.ply`, both through the hooks.
 
 ### Changed
 
 - build: the iOS app needs iOS 26 or newer: `cmake --preset ios` targets
   iOS 26.0, the family's iOS floor.
-- build: the player pins core #52's merge (4e16bbc, 0.21.0), gfx main at
-  #156's merge (2d40d1e) and recon main at #280's merge (9fde92e), and
-  requires core 0.21.0. The view presents FIFO as gfx's default (gfx #150),
-  naming no mode.
+- build: the player pins core #57's merge (fa4638c, 0.22.0), gfx main at
+  #156's merge (2d40d1e) and recon #293's head (ef83b8f, MeshExchange's
+  `CommitDecision`), and requires core 0.22.0. The view presents FIFO as
+  gfx's default (gfx #150), naming no mode.
 - The extractor's ring is two slots past the frames in flight
   (`mesh_wiring`); the draw waits on the GPU for the mesh's `ready` value;
   a park waits out a batch in flight and finishes its frame at unpark.
@@ -205,6 +222,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `kLiveRetry`. `LiveAddress`, `parse_live_address`, `to_string` and
   `live_reason` move into that header, which `stream_player.hpp` includes.
   What a live player shows, and when it retries, are unchanged.
+- The view takes its meshes through `FrameTaker`, which commits a mesh only
+  once its ready value is reached and holds it until then.
 
 ### Fixed
 
@@ -222,6 +241,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   start on 3.15, which Homebrew's pre-commit now uses.
 - The stats' `draw` row times the whole render pass on the device, so on
   Apple GPUs it reads the pass rather than about 0.
+- `mesh_wiring` counts one frame in flight as two, as recon's ring rule
+  does, so a renderer of one frame in flight gets a ring of 4, not 3.
 
 ### Migration
 
@@ -238,3 +259,4 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   passes `PlayerView::render_metrics().sections` to `MeasureLog::add`.
 - `MeasureLog::add` takes the frame's mesh, for its triangles and vertices,
   in place of its triangle count: `add(stamp, view->mesh(), render)`.
+- `draw_controls` takes the view's `unlit` after its `normals`.

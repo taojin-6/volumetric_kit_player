@@ -4,12 +4,13 @@
 #pragma once
 
 /// @file controls_layout.hpp
-/// Where draw_controls lays out its row, Deblock on it or below it, and
-/// draw_source its button, for the tests that put a finger on a control; and
-/// the stats' tables, for those that count their rows.
+/// Where draw_controls lays out its row, Deblock and Unlit on it or on lines
+/// below it, and draw_source its button, for the tests that put a finger on a
+/// control; and the stats' tables, for those that count their rows.
 
 #include <cfloat>
 #include <cmath>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -29,65 +30,86 @@ inline float text_width(const ImGuiWindow& panel, const std::string& text) {
       font->CalcTextSizeA(panel.FontRefSize, FLT_MAX, 0.0f, text.c_str()).x);
 }
 
-// The index of Deblock's box, the row's last control (control_top_left).
+// The indices of Deblock's and Unlit's boxes, the row's last controls
+// (control_top_left).
 constexpr int kDeblock = 4;
+constexpr int kUnlit = 5;
+
+// Whether the row's `index`th control is a box: Loop, Deblock or Unlit.
+inline bool is_box(int index) {
+  return index == 2 || index == kDeblock || index == kUnlit;
+}
 
 // The size of the row's `index`th control, in points, as the last frame laid
-// out `panel`: Play/Pause, Step, Loop's box, Normals, then Deblock's box. Each
-// is a frame tall; the buttons are kButtonEms font sizes wide, and the boxes
-// are square. A live player's row is Normals and Deblock, laid out as
-// Play/Pause and Deblock are (live_deblock_top_left). The panel's context is
-// current. The font size is the panel's as of that frame: between frames
-// ImGui's own is the unscaled one.
+// out `panel`: Play/Pause, Step, Loop's box, Normals, then Deblock's and
+// Unlit's boxes. Each is a frame tall; the buttons are kButtonEms font sizes
+// wide, and the boxes are square. A live player's row is Normals, Deblock and
+// Unlit, laid out as Play/Pause, Deblock and Unlit are (live_top_left). The
+// panel's context is current. The font size is the panel's as of that frame:
+// between frames ImGui's own is the unscaled one.
 inline glm::vec2 control_size(const ImGuiWindow& panel, int index) {
   const float font = panel.FontRefSize;
   const float height = font + 2.0f * ImGui::GetStyle().FramePadding.y;
   const float button = volumetric_kit::player::kButtonEms * font;
-  return {index == 2 || index == kDeblock ? height : button, height};
+  return {is_box(index) ? height : button, height};
 }
 
 // The width the row gives its `index`th control: its size's, and for a box
 // its label's after it.
 inline float control_width(const ImGuiWindow& panel, int index) {
-  if (index != 2 && index != kDeblock) {
+  if (!is_box(index)) {
     return control_size(panel, index).x;
   }
+  const char* label =
+      index == 2 ? "Loop" : (index == kDeblock ? "Deblock" : "Unlit");
   return control_size(panel, index).x + ImGui::GetStyle().ItemInnerSpacing.x +
-         text_width(panel, index == 2 ? "Loop" : "Deblock");
+         text_width(panel, label);
 }
 
-// Whether Deblock is on the row, after Normals: when the panel, so widened,
-// fits the widest ImGui lets an auto-sized panel grow, the work area less its
-// safe-area padding on each side; else it is below the row.
-inline bool deblock_on_row(const ImGuiWindow& panel) {
+// The top left, in points, of each of the controls of `indices`, laid out as
+// draw_controls lays them: the first `fixed` in a row, then each box after
+// its line's last control when the panel, so widened, fits the widest ImGui
+// lets an auto-sized panel grow (the work area less its safe-area padding on
+// each side), else at the left of a line below.
+inline std::vector<glm::vec2> lay_out(const ImGuiWindow& panel,
+                                      const std::vector<int>& indices,
+                                      std::size_t fixed) {
   const ImGuiStyle& style = ImGui::GetStyle();
-  float width = 2.0f * style.WindowPadding.x;
-  for (int i = 0; i <= kDeblock; ++i) {
-    width += control_width(panel, i) + (i > 0 ? style.ItemSpacing.x : 0.0f);
+  const float left = panel.Pos.x + style.WindowPadding.x;
+  const float widest = ImGui::GetMainViewport()->WorkSize.x -
+                       2.0f * style.DisplaySafeAreaPadding.x;
+  const float line = control_size(panel, 0).y + style.ItemSpacing.y;
+  std::vector<glm::vec2> places;
+  glm::vec2 at{left, panel.Pos.y + style.WindowPadding.y};
+  for (std::size_t i = 0; i < indices.size(); ++i) {
+    const float width = control_width(panel, indices[i]);
+    if (i >= fixed &&
+        at.x - panel.Pos.x + width + style.WindowPadding.x > widest) {
+      at = {left, at.y + line};
+    }
+    places.push_back(at);
+    at.x += width + style.ItemSpacing.x;
   }
-  return width <= ImGui::GetMainViewport()->WorkSize.x -
-                      2.0f * style.DisplaySafeAreaPadding.x;
+  return places;
 }
 
 // Its top left, in points.
 inline glm::vec2 control_top_left(const ImGuiWindow& panel, int index) {
-  const ImGuiStyle& style = ImGui::GetStyle();
-  const float left = panel.Pos.x + style.WindowPadding.x;
-  const float top = panel.Pos.y + style.WindowPadding.y;
-  if (index == kDeblock && !deblock_on_row(panel)) {
-    return {left, top + control_size(panel, 0).y + style.ItemSpacing.y};
-  }
-  float x = left;
-  for (int i = 0; i < index; ++i) {
-    x += control_width(panel, i) + style.ItemSpacing.x;
-  }
-  return {x, top};
+  return lay_out(panel, {0, 1, 2, 3, kDeblock, kUnlit}, 4)[index];
 }
 
-// A live player's Deblock's top left, in points: after Normals, which is laid
-// out as Play/Pause is.
+// Whether Deblock is on the row, after Normals; else it is below the row.
+inline bool deblock_on_row(const ImGuiWindow& panel) {
+  return control_top_left(panel, kDeblock).y == control_top_left(panel, 0).y;
+}
+
+// A live player's Deblock's (`index` kDeblock) or Unlit's (kUnlit) top left,
+// in points: after Normals, which is laid out as Play/Pause is.
+inline glm::vec2 live_top_left(const ImGuiWindow& panel, int index) {
+  return lay_out(panel, {3, kDeblock, kUnlit}, 1)[index == kDeblock ? 1 : 2];
+}
 inline glm::vec2 live_deblock_top_left(const ImGuiWindow& panel) {
-  return control_top_left(panel, 1);
+  return live_top_left(panel, kDeblock);
 }
 
 // Its middle, in points.
@@ -95,9 +117,12 @@ inline glm::vec2 control_middle(const ImGuiWindow& panel, int index) {
   return control_top_left(panel, index) + 0.5f * control_size(panel, index);
 }
 
-// A live player's Deblock's middle, in points.
+// A live player's Deblock's or Unlit's middle, in points.
+inline glm::vec2 live_middle(const ImGuiWindow& panel, int index) {
+  return live_top_left(panel, index) + 0.5f * control_size(panel, index);
+}
 inline glm::vec2 live_deblock_middle(const ImGuiWindow& panel) {
-  return live_deblock_top_left(panel) + 0.5f * control_size(panel, kDeblock);
+  return live_middle(panel, kDeblock);
 }
 
 // The Source button's top left, in points, as the last frame laid out its

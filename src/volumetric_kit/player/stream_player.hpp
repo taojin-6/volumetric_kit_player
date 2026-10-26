@@ -25,6 +25,7 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/player/live_connection.hpp"
 #include "volumetric_kit/player/playback.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
@@ -36,6 +37,8 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace volumetric_kit::player {
+
+struct FrameHooks;  // frame_hooks.hpp
 
 /// @brief Where a live player's connection stands.
 enum class LiveState {
@@ -156,6 +159,10 @@ struct FrameStamp {
   /// host's clock): set only where `core::Device::calibrate` works and the
   /// batch was timed.
   std::optional<double> queue_ms;
+  /// The caller's, from after_mesh to commit and before_draw
+  /// (frame_hooks.hpp); empty until after_mesh sets it, and a rebuild's
+  /// starts empty.
+  std::shared_ptr<const void> extra;
 };
 
 /// @brief The handoff of the worker's meshes to the thread that draws them.
@@ -199,6 +206,13 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 /// **Timing.** Each frame's stamp has its stages' host and wait times, and
 /// the worker's device counts, always; its device times only as
 /// @ref set_device_timing asks, off until then.
+///
+/// **Hooks** (frame_hooks.hpp), given to @ref start: before each publish the
+/// worker runs after_mesh into a batch of its own, submitted behind the
+/// mesh's ready point, whose point the published mesh then carries, and
+/// finishes that batch at the next after_mesh, so no host wait is added; a
+/// park waits it out too, and runs on_park, and the unpark on_resume. With
+/// no hooks, a file's frame stays one batch.
 ///
 /// **Threads.** The controls (@ref play, @ref pause, @ref step,
 /// @ref set_loop, @ref set_deblock), their reads, @ref park, @ref unpark and
@@ -297,13 +311,17 @@ class StreamPlayer {
   /// @param config     The extractor's: the consumer's usage, queue families
   ///                   and a `slot_count` two more than its frames in flight
   ///                   (mesh_wiring), as a frame is meshed before the one
-  ///                   before it is taken.
+  ///                   before it is taken, and one more for a consumer that
+  ///                   may skip a frame (FrameTaker).
   /// @param exchange   Where the meshes go; it must outlive the worker.
+  /// @param hooks      Whose after_mesh, on_park and on_resume run, or null
+  ///                   for none; it must outlive the worker.
   /// @return OK; `Status::Code::InvalidArgument` once started or stopped; or
   ///         the thread's failure.
   core::Status start(core::Device& device, core::Allocator& allocator,
                      const recon::mesh::MarchingCubesConfig& config,
-                     FrameExchange& exchange);
+                     FrameExchange& exchange,
+                     const FrameHooks* hooks = nullptr);
 
   /// @brief Plays, or resumes; held at the end, restarts from the first
   ///        frame.
@@ -347,14 +365,20 @@ class StreamPlayer {
   /// at @ref unpark. Call it after the consumer stops drawing. Live, a step
   /// never waits: the worker waits out a decode in flight, drops it and the
   /// record in hand, and closes the connection within a slice (about 10 ms).
-  /// @param timeout  The longest wait for the step under way.
+  /// Once the worker is idle, the park finishes after_mesh's batch, its
+  /// readbacks written, and runs on_park, on this thread, the first time
+  /// since an unpark.
+  /// @param timeout  The longest wait, for the step under way and then for
+  ///                 after_mesh's batch.
   /// @return true once the worker is idle with no batch in flight, or when
   ///         stopped or never started; false if @p timeout passed first: the
-  ///         step under way may still submit, and the hold stays in force.
+  ///         step under way may still submit, or after_mesh's batch still
+  ///         run, on_park has not run, and the hold stays in force.
   [[nodiscard]] bool park(std::chrono::milliseconds timeout);
-  /// @brief End a @ref park. The worker carries on from the same frame,
-  ///        playing or paused as before; live, it connects again, with a new
-  ///        grid. A no-op when not parked.
+  /// @brief End a @ref park, running on_resume first after an on_park. The
+  ///        worker carries on from the same frame, playing or paused as
+  ///        before; live, it connects again, with a new grid. A no-op when
+  ///        not parked.
   void unpark();
 
   /// @brief Time the device work of the frames the worker starts from now on
@@ -519,6 +543,22 @@ class StreamPlayer {
   // Under the lock: publish `mesh` with `stamp` now, the device's counts
   // since the last publish into its counters.
   void publish_now(const recon::mesh::DeviceMesh& mesh, FrameStamp stamp);
+  // Before `mesh`'s publish, within its step: after_mesh, when given, into a
+  // batch of its own submitted behind `mesh`'s ready point, which becomes
+  // that batch's; the batch before is finished first. A failure is fatal.
+  core::Status run_after_mesh(recon::mesh::DeviceMesh& mesh, FrameStamp& stamp);
+  // Wait for after_mesh's batch in flight, if any, so its readbacks are
+  // written: the worker's, before the next after_mesh and at its end. The
+  // first failure, kept for every later call.
+  core::Status finish_hook_batch();
+  // An idle park's finish_hook_batch, until `deadline`: false if it passed
+  // first, the batch left in flight for a later park or the worker. A failure
+  // reaches status() at the worker's next after_mesh or its end.
+  bool finish_hook_batch_by(std::chrono::steady_clock::time_point deadline);
+  // Under hook_mutex_: wait up to `timeout_ns` for the batch in flight, if
+  // any; false if it still runs, kept for a later wait. Otherwise it goes,
+  // and its failure, the first, is kept.
+  bool wait_hook_batch(std::uint64_t timeout_ns);
   // At the end of a pass that showed a frame: true to play the track again,
   // false on quit; it rebuilds last_ meanwhile when rebuild_wanted.
   core::Result<bool> wait_at_end();
@@ -539,15 +579,27 @@ class StreamPlayer {
   LiveAddress address_;  // live
 
   // The worker's: start sets what it builds on, and the worker builds the
-  // rest; destroyed extractor first, after the join.
+  // rest; destroyed hook batch first, then the extractor, after the join.
   core::Device* device_ = nullptr;
   core::Allocator* allocator_ = nullptr;
   recon::mesh::MarchingCubesConfig config_;
   FrameExchange* exchange_ = nullptr;
+  const FrameHooks* hooks_ = nullptr;
   std::optional<recon::codec::Decoder> decoder_;
   std::optional<recon::volume::VoxelBlockGrid> grid_;
   std::optional<recon::mesh::MarchingCubes> extractor_;
   std::optional<core::GpuTimer> timer_;  // the worker's timed batches'
+  // after_mesh's batches' timeline, built with after_mesh, and its last
+  // value; the worker's.
+  std::optional<core::TimelineSemaphore> hook_timeline_;
+  std::uint64_t hook_value_ = 0;
+  // after_mesh's batch in flight and the first failure finishing one, under
+  // hook_mutex_: the worker's, and an idle park's, whose wait for the mutex
+  // keeps its deadline too.
+  std::timed_mutex hook_mutex_;
+  std::optional<core::PendingBatch> hook_batch_;
+  core::Status hook_failure_;
+  std::atomic<bool> hooks_parked_{false};  // on_park ran, on_resume not yet
   std::thread worker_;
   std::uint64_t frames_started_ = 0;  // for kSampled
   core::DeviceCounters counted_;      // the device's, at the last publish

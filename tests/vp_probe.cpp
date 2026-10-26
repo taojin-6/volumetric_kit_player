@@ -3,31 +3,41 @@
 
 // vp_probe (--file PATH | --connect HOST[:PORT]) [--frames N] [--passes P]
 //          [--timing off|sampled|all] [--tile-depth 0|1] [--labels on|off]
-//          [--share-vertices on|off] [--csv PATH] [--worker]:
+//          [--share-vertices on|off] [--csv PATH] [--latency]
+//          [--save-meshes DIR] [--worker]:
 // plays a .vrst file or a sender's live stream through PlayerView on gfx's
 // headless surface, with no window, at 60 ticks a second, and prints the
 // status line, the stats lines and the stage tables once a second. With
 // --worker it runs the worker alone, with no view, on the GPU the core picks
-// (a discrete one first), its meshes taken as a renderer takes them: for a
-// GPU with no headless surface, as NVIDIA's has none. With --csv it logs each
-// stream frame taken (measure_log.hpp), the file appearing at PATH once the
-// run ends. A file plays P passes of its track, 1 unless given. It exits 0
-// once N stream frames are taken, or once the last pass ends; 1 on a GPU or
-// log failure; 2 for its usage; and never on a network error, which the
-// status line shows. It validates in Debug and as the core's test policy asks
+// (a discrete one first), its meshes taken as a renderer takes them
+// (FrameTaker): for a GPU with no headless surface, as NVIDIA's has none.
+// With --csv it logs each stream frame taken (measure_log.hpp), the file
+// appearing at PATH once the run ends. With --latency, hooks (frame_hooks.hpp)
+// time each frame from its mesh finished on the worker to its commit and to
+// each draw of it, printed once a second, and the run's last line says how
+// many of their records are left unreleased. With --save-meshes, each mesh
+// is read back in its after_mesh batch and written as DIR/<frame>.ply once
+// that batch has finished, a line each. A file plays P passes of its track,
+// 1 unless given. It exits 0 once N stream frames are taken, or once the
+// last pass ends; 1 on a GPU, log or file failure, or a latency record left;
+// 2 for its usage; and never on a network error, which the status line
+// shows. It validates in Debug and as the core's test policy asks
 // (VKC_TEST_VALIDATION), and then exits 1 on any error the layer reports or
 // on a layer that did not load. The measurement runner's (tools/measure/,
 // DECISIONS.md), and agents'. A tool, not a test.
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -36,6 +46,8 @@
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/testing/vulkan_policy.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
@@ -43,13 +55,17 @@
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/player/command_line.hpp"
 #include "volumetric_kit/player/controls.hpp"
+#include "volumetric_kit/player/frame_hooks.hpp"
 #include "volumetric_kit/player/measure_log.hpp"
 #include "volumetric_kit/player/mesh_wiring.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
 #include "volumetric_kit/player/player_view.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
+#include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
+#include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace {
 
@@ -64,7 +80,8 @@ constexpr const char* kUsage =
     "usage: vp_probe (--file PATH | --connect HOST[:PORT]) [--frames N]\n"
     "                [--passes P] [--timing off|sampled|all]\n"
     "                [--tile-depth 0|1] [--labels on|off]\n"
-    "                [--share-vertices on|off] [--csv PATH] [--worker]\n"
+    "                [--share-vertices on|off] [--csv PATH] [--latency]\n"
+    "                [--save-meshes DIR] [--worker]\n"
     "  --file PATH            play a .vrst file\n"
     "  --connect HOST[:PORT]  play a sender's live stream\n"
     "  --frames N             stop once N stream frames are taken\n"
@@ -74,6 +91,8 @@ constexpr const char* kUsage =
     "  --labels on|off        debug labels on the instance (default on)\n"
     "  --share-vertices on|off  triangles share vertices (default on)\n"
     "  --csv PATH             log each frame taken into PATH\n"
+    "  --latency              time each mesh to its commit and its draws\n"
+    "  --save-meshes DIR      write each mesh as DIR/<frame>.ply\n"
     "  --worker               the worker alone, with no view\n";
 constexpr VkExtent2D kExtent{640, 480};
 constexpr std::chrono::microseconds kTick{16'667};  // a 60 Hz display's
@@ -91,6 +110,8 @@ struct Args {
   bool labels = true;
   bool share_vertices = true;
   std::string csv;
+  bool latency = false;
+  std::string save_meshes;
   bool worker = false;
 };
 
@@ -111,6 +132,10 @@ std::optional<Args> parse(int argc, char** argv) {
     const std::string_view arg = argv[i];
     if (arg == "--worker" && !args.worker) {
       args.worker = true;
+      continue;
+    }
+    if (arg == "--latency" && !args.latency) {
+      args.latency = true;
       continue;
     }
     if (i + 1 == argc) {
@@ -156,6 +181,9 @@ std::optional<Args> parse(int argc, char** argv) {
       (arg == "--labels" ? args.labels : args.share_vertices) = *on;
     } else if (arg == "--csv" && args.csv.empty() && !value.empty()) {
       args.csv = value;
+    } else if (arg == "--save-meshes" && args.save_meshes.empty() &&
+               !value.empty()) {
+      args.save_meshes = value;
     } else {
       return std::nullopt;
     }
@@ -169,11 +197,17 @@ std::optional<Args> parse(int argc, char** argv) {
 
 // How the run drives its frames, for its log's `run`: its options, less the
 // stream, the timing, the tile depth, the labels, the vertex sharing and the
-// log, which the log states apart.
+// log, which the log states apart. The hooks' options add a batch a frame.
 std::string run_text(const Args& args) {
   std::string text = "vp_probe";
   if (args.worker) {
     text += " --worker";
+  }
+  if (args.latency) {
+    text += " --latency";
+  }
+  if (!args.save_meshes.empty()) {
+    text += " --save-meshes";
   }
   if (args.passes) {
     text += " --passes " + std::to_string(*args.passes);
@@ -288,6 +322,237 @@ std::string stream_of(const Args& args, const vkp::StreamPlayer& player) {
          std::to_string(player.track());
 }
 
+// --latency: each frame timed from its mesh finished on the worker
+// (after_mesh) to its commit and to each draw of it (before_draw), through a
+// record its stamp carries (FrameStamp::extra). The worker makes records, the
+// drawing thread reads them, and a park forgets those in flight.
+class LatencyProbe {
+ public:
+  // A frame's record, for its stamp: its mesh finished now. Its release is
+  // counted, even after the probe goes.
+  std::shared_ptr<const void> meshed() {
+    auto record = std::make_unique<Record>();
+    record->meshed = Clock::now();
+    record->epoch = epoch_.load();
+    ++*made_;
+    const std::shared_ptr<std::atomic<std::uint64_t>> released = released_;
+    return std::shared_ptr<const void>(
+        record.release(), [released](const void* record) {
+          delete static_cast<const Record*>(record);
+          ++*released;
+        });
+  }
+  // The frame of `extra`, a record of meshed's, committed now.
+  void committed(const std::shared_ptr<const void>& extra) {
+    const Record* record = counted(extra);
+    if (record != nullptr) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      to_commit_.push_back(ms_since(record->meshed));
+    }
+  }
+  // The frame of `extra` drawn now: its first draw, and its age at each.
+  void drawn(const std::shared_ptr<const void>& extra) {
+    const Record* record = counted(extra);
+    if (record != nullptr) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!record->drawn) {
+        record->drawn = true;
+        to_first_draw_.push_back(ms_since(record->meshed));
+      }
+      ages_.push_back(ms_since(record->meshed));
+    }
+  }
+  // A park: the frames in flight are not counted, so a suspend is not.
+  void forget() { ++epoch_; }
+
+  // The figures since the last report, in ms, and the frames held and
+  // skipped meanwhile; draws only with a view.
+  std::string report(bool draws, std::uint64_t held, std::uint64_t skipped) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string line = "latency (ms): mesh to commit" + figures(&to_commit_);
+    if (draws) {
+      line += " | mesh to first draw" + figures(&to_first_draw_);
+      line += " | age at draw" + figures(&ages_);
+    }
+    char counts[96];
+    std::snprintf(counts, sizeof counts, " | held %llu, skipped %llu",
+                  static_cast<unsigned long long>(held - held_),
+                  static_cast<unsigned long long>(skipped - skipped_));
+    held_ = held;
+    skipped_ = skipped;
+    return line + counts;
+  }
+  std::uint64_t made() const { return made_->load(); }
+  // Records not yet released.
+  std::uint64_t left() const { return made_->load() - released_->load(); }
+
+ private:
+  struct Record {
+    Clock::time_point meshed;
+    std::uint64_t epoch = 0;
+    mutable bool drawn = false;  // under mutex_
+  };
+
+  // `extra`'s record, unless a park forgot it; null for none.
+  const Record* counted(const std::shared_ptr<const void>& extra) const {
+    const auto* record = static_cast<const Record*>(extra.get());
+    return record != nullptr && record->epoch == epoch_.load() ? record
+                                                               : nullptr;
+  }
+  static double ms_since(Clock::time_point at) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - at).count();
+  }
+  // " p50 a, p95 b, max c (n)" of `samples`, which it clears; " -" for none.
+  static std::string figures(std::vector<double>* samples) {
+    if (samples->empty()) {
+      return " -";
+    }
+    std::sort(samples->begin(), samples->end());
+    const auto at = [samples](double q) {
+      return (*samples)[static_cast<std::size_t>(
+          q * static_cast<double>(samples->size() - 1))];
+    };
+    char text[96];
+    std::snprintf(text, sizeof text, " p50 %.2f, p95 %.2f, max %.2f (%zu)",
+                  at(0.5), at(0.95), samples->back(), samples->size());
+    samples->clear();
+    return text;
+  }
+
+  std::atomic<std::uint64_t> epoch_{0};
+  std::shared_ptr<std::atomic<std::uint64_t>> made_ =
+      std::make_shared<std::atomic<std::uint64_t>>(0);
+  std::shared_ptr<std::atomic<std::uint64_t>> released_ =
+      std::make_shared<std::atomic<std::uint64_t>>(0);
+  std::mutex mutex_;
+  std::vector<double> to_commit_;
+  std::vector<double> to_first_draw_;
+  std::vector<double> ages_;
+  std::uint64_t held_ = 0;  // as of the last report
+  std::uint64_t skipped_ = 0;
+};
+
+// --save-meshes DIR: each mesh read back in its after_mesh batch, and written
+// as DIR/<frame>.ply (recon's io::write_ply) once that batch has finished: at
+// the next mesh, as the player finishes the batch before it, or at the end.
+class MeshSaver {
+ public:
+  explicit MeshSaver(std::string dir) : dir_(std::move(dir)) {}
+
+  // The worker's, in after_mesh: write the mesh before, then record this
+  // one's readback into `batch`.
+  core::Status record(core::CommandBatch& batch,
+                      const volumetric_kit::recon::volume::VoxelBlockGrid& grid,
+                      const DeviceMesh& mesh, const vkp::FrameStamp& stamp) {
+    VKC_TRY(finish());
+    Pending& pending = pending_.emplace();
+    pending.index = stamp.index;
+    pending.blocks = grid.map().allocated_blocks();
+    pending.mesh.vertices.resize(mesh.vertex_count);
+    pending.mesh.indices.resize(std::size_t{3} * mesh.triangle_count);
+    const VkDeviceSize vertices = VkDeviceSize{mesh.vertex_count} *
+                                  sizeof(volumetric_kit::recon::mesh::Vertex);
+    const VkDeviceSize indices =
+        VkDeviceSize{3} * mesh.triangle_count * sizeof(std::uint32_t);
+    if (vertices != 0) {
+      VKC_TRY(batch.readback(
+          view(mesh.vertices, vertices, mesh.vertex_usage, mesh.sharing_mode),
+          0, vertices, pending.mesh.vertices.data()));
+    }
+    if (indices != 0) {
+      VKC_TRY(batch.readback(
+          view(mesh.indices, indices, mesh.index_usage, mesh.sharing_mode), 0,
+          indices, pending.mesh.indices.data()));
+    }
+    return {};
+  }
+
+  // Write the mesh recorded last, if any, its batch finished.
+  core::Status finish() {
+    if (!pending_) {
+      return {};
+    }
+    const std::string path = (std::filesystem::path(dir_) /
+                              (std::to_string(pending_->index) + ".ply"))
+                                 .string();
+    VKC_TRY(volumetric_kit::recon::io::write_ply(path, pending_->mesh));
+    std::printf("vp_probe: saved %s: %zu vertices, %zu triangles, %u blocks\n",
+                path.c_str(), pending_->mesh.vertices.size(),
+                pending_->mesh.triangle_count(), pending_->blocks);
+    std::fflush(stdout);
+    pending_.reset();
+    return {};
+  }
+
+ private:
+  struct Pending {
+    std::uint64_t index = 0;
+    std::uint32_t blocks = 0;  // the grid's allocated blocks
+    volumetric_kit::recon::mesh::Mesh mesh;
+  };
+
+  // A view of the extractor's `buffer`: its deleter frees nothing.
+  static core::Buffer view(VkBuffer buffer, VkDeviceSize bytes,
+                           VkBufferUsageFlags usage, VkSharingMode sharing) {
+    return core::Buffer(
+        buffer, bytes, usage, sharing, nullptr, [] {}, std::nullopt);
+  }
+
+  std::string dir_;
+  std::optional<Pending> pending_;
+};
+
+// The hooks --latency and --save-meshes ask for: after_mesh saves the mesh
+// and stamps its record, the commit and before_draw time it, and on_park
+// forgets the frames in flight.
+vkp::FrameHooks probe_hooks(LatencyProbe* latency, MeshSaver* saver) {
+  vkp::FrameHooks hooks;
+  hooks.after_mesh =
+      [latency, saver](
+          core::CommandBatch& batch,
+          const volumetric_kit::recon::volume::VoxelBlockGrid& grid,
+          const DeviceMesh& mesh, vkp::FrameStamp& stamp) {
+        if (saver != nullptr) {
+          VKC_TRY(saver->record(batch, grid, mesh, stamp));
+        }
+        if (latency != nullptr) {
+          stamp.extra = latency->meshed();
+        }
+        return core::Status();
+      };
+  if (latency != nullptr) {
+    hooks.commit = [latency](const DeviceMesh&, vkp::FrameStamp& stamp) {
+      latency->committed(stamp.extra);
+      return core::Result<vkp::FrameCommit>(vkp::FrameCommit::kDraw);
+    };
+    hooks.before_draw = [latency](VkCommandBuffer,
+                                  const vkp::FrameStamp& stamp) {
+      latency->drawn(stamp.extra);
+      return core::Result<vkp::DrawBinding>(vkp::DrawBinding{});
+    };
+    hooks.on_park = [latency] { latency->forget(); };
+  }
+  return hooks;
+}
+
+// What the hooks' options made, for a run: none without them. They outlive
+// the view or the worker, and every stamp.
+struct Probes {
+  std::optional<LatencyProbe> latency;
+  std::optional<MeshSaver> saver;
+
+  bool any() const { return latency || saver; }
+};
+
+// The hooks `probes` asks for, made as PlayerViewConfig::make_hooks makes
+// them, for the view and for the worker alone alike.
+vkp::MakeHooks make_probe_hooks(Probes& probes) {
+  return [&probes](const vkp::HookContext&) -> core::Result<vkp::FrameHooks> {
+    return probe_hooks(probes.latency ? &*probes.latency : nullptr,
+                       probes.saver ? &*probes.saver : nullptr);
+  };
+}
+
 // Ticks at 60 Hz until `tick` says the run is done, reporting once a second.
 template <typename Tick, typename Report>
 core::Status loop(Tick&& tick, Report&& report) {
@@ -308,8 +573,19 @@ core::Status loop(Tick&& tick, Report&& report) {
   }
 }
 
+// A line of the latency's figures, with --latency.
+void report_latency(Probes& probes, bool draws, std::uint64_t held,
+                    std::uint64_t skipped) {
+  if (probes.latency) {
+    std::printf("vp_probe: %s\n",
+                probes.latency->report(draws, held, skipped).c_str());
+    std::fflush(stdout);
+  }
+}
+
 core::Status run_view(const Args& args,
-                      std::unique_ptr<vkp::StreamPlayer> player) {
+                      std::unique_ptr<vkp::StreamPlayer> player,
+                      Probes& probes) {
   Run run(args, player->live());
   const std::string stream = stream_of(args, *player);
   VKC_ASSIGN(const gfx::windowing::SurfaceSource surface,
@@ -320,6 +596,9 @@ core::Status run_view(const Args& args,
   config.tile_depth = args.tile_depth;
   config.debug_labels = args.labels;
   config.share_vertices = args.share_vertices;
+  if (probes.any()) {
+    config.make_hooks = make_probe_hooks(probes);
+  }
   const std::chrono::system_clock::time_point started =
       std::chrono::system_clock::now();
   VKC_ASSIGN(
@@ -359,6 +638,8 @@ core::Status run_view(const Args& args,
         }
         std::printf("%s\n", line.c_str());
         std::fflush(stdout);
+        report_latency(probes, /*draws=*/true, view->frames_held(),
+                       view->frames_skipped());
       }));
   return run.finish();
 }
@@ -376,7 +657,8 @@ struct Teardown {
 };
 
 core::Status run_worker(const Args& args,
-                        std::unique_ptr<vkp::StreamPlayer> player) {
+                        std::unique_ptr<vkp::StreamPlayer> player,
+                        Probes& probes) {
   Run run(args, player->live());
   const std::string stream = stream_of(args, *player);
   core::InstanceConfig instance_config = test::instance_config(validation());
@@ -395,39 +677,45 @@ core::Status run_worker(const Args& args,
              core::Allocator::create(instance.handle(), device));
   const vkp::MeshWiring wiring =
       vkp::mesh_wiring(device.queue_family(), device.queue_family(),
-                       kFramesInFlight, args.share_vertices);
+                       kFramesInFlight, args.share_vertices, probes.any());
   vkp::FrameExchange exchange(wiring.exchange);
   vkp::PlaybackStats stats(player->track_stats(), player->rate());
   std::optional<vkp::FrameStamp> shown;
+  // Made as the view makes them, with no view: the worker's device takes
+  // the meshes.
+  vkp::FrameHooks hooks;
+  if (probes.any()) {
+    const vkp::HookContext context{device,
+                                   allocator,
+                                   device,
+                                   allocator,
+                                   nullptr,
+                                   device.queue_family(),
+                                   device.queue_family()};
+    VKC_ASSIGN(hooks, make_probe_hooks(probes)(context));
+  }
   player->set_device_timing(args.timing);
   player->set_tile_depth(args.tile_depth);
   const std::chrono::system_clock::time_point started =
       std::chrono::system_clock::now();
-  VKC_TRY(player->start(device, allocator, wiring.mc, exchange));
+  VKC_TRY(player->start(device, allocator, wiring.mc, exchange, &hooks));
   const Teardown teardown{player, device};
+  // Each mesh taken as a renderer of kFramesInFlight frames takes it, with
+  // nothing drawn or presented, so every slot's frame has completed.
+  vkp::FrameTaker taker(*player, exchange, kFramesInFlight, &hooks);
   VKC_TRY(run.open_log(device, stream, started));
   std::uint32_t slot = 0;
   VKC_TRY(loop(
       [&](Clock::duration) -> core::Result<bool> {
         VKC_TRY(player->status());
-        // Each mesh taken as a renderer of kFramesInFlight frames takes it,
-        // with nothing drawn or presented, so every slot's frame has
-        // completed.
-        bool took = false;
-        exchange.begin_frame(slot,
-                             [&](const DeviceMesh&, vkp::FrameStamp& stamp) {
-                               stamp.taken = vkp::PlaybackStats::Clock::now();
-                               stats.add_frame(stamp, *stamp.taken);
-                               shown = std::move(stamp);
-                               player->taken();
-                               took = true;
-                               return true;
-                             });
+        VKC_ASSIGN(std::optional<vkp::FrameStamp> taken, taker.take(slot));
         slot = (slot + 1) % kFramesInFlight;
         VKC_TRY(vkp::drawable(exchange));
-        if (!took) {
+        if (!taken) {
           return true;
         }
+        stats.add_frame(*taken, *taken->taken);
+        shown = std::move(taken);
         return run.take(*shown, exchange.live());
       },
       [&] {
@@ -437,19 +725,35 @@ core::Status run_worker(const Args& args,
         }
         std::printf("%s\n", line.c_str());
         std::fflush(stdout);
+        report_latency(probes, /*draws=*/false, taker.frames_held(),
+                       taker.frames_skipped());
       }));
   return run.finish();
 }
 
-core::Status run(const Args& args) {
+core::Status run(const Args& args, Probes& probes) {
   std::unique_ptr<vkp::StreamPlayer> player;
   if (args.address) {
     VKC_ASSIGN(player, vkp::StreamPlayer::connect(*args.address));
   } else {
     VKC_ASSIGN(player, vkp::StreamPlayer::open(args.file));
   }
-  return args.worker ? run_worker(args, std::move(player))
-                     : run_view(args, std::move(player));
+  if (!args.save_meshes.empty()) {
+    std::error_code ec;
+    std::filesystem::create_directories(args.save_meshes, ec);
+    if (ec) {
+      return core::Status::io_error("cannot make " + args.save_meshes + ": " +
+                                    ec.message());
+    }
+    probes.saver.emplace(args.save_meshes);
+  }
+  if (args.latency) {
+    probes.latency.emplace();
+  }
+  // The view, or the worker, is gone on return: its last mesh is saved.
+  VKC_TRY(args.worker ? run_worker(args, std::move(player), probes)
+                      : run_view(args, std::move(player), probes));
+  return probes.saver ? probes.saver->finish() : core::Status();
 }
 
 }  // namespace
@@ -464,7 +768,8 @@ int main(int argc, char** argv) {
   // the device is gone when run returns.
   const test::ValidationSession session(validation());
   const test::LogCapture log;
-  const core::Status status = run(*args);
+  Probes probes;  // outlives every stamp
+  const core::Status status = run(*args, probes);
   int code = 0;
   if (!status.ok()) {
     const std::string_view domain = core::to_string(status.domain());
@@ -472,6 +777,16 @@ int main(int argc, char** argv) {
                  static_cast<int>(domain.size()), domain.data(),
                  status.message().c_str());
     code = 1;
+  }
+  // Every stamp is gone, so every record made is released.
+  if (probes.latency) {
+    const std::uint64_t left = probes.latency->left();
+    std::printf("vp_probe: latency: %llu record(s) made, %llu left\n",
+                static_cast<unsigned long long>(probes.latency->made()),
+                static_cast<unsigned long long>(left));
+    if (left != 0) {
+      code = 1;
+    }
   }
   // A layer the policy asks for that is missing or would not load is the
   // instance's warning: what shows it for the view's instance, which the
