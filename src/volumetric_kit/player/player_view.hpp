@@ -82,9 +82,7 @@ struct PlayerViewConfig {
   MakeHooks make_hooks;
   /// The panel's Unlit, at start (PlayerView::unlit).
   bool unlit = false;
-  /// The panel's Texture, at start (PlayerView::textured): off, so the mesh
-  /// starts in its own shading; a program whose before_draw binds a texture
-  /// sets it to start with that texture shown.
+  /// The panel's Texture, at start (PlayerView::textured).
   bool textured = false;
 };
 
@@ -207,12 +205,10 @@ class PlayerView {
   ///         before_draw binds (DrawBinding::descriptor_set). Off, a binding
   ///         that names a set is left out whole, its flags' clears too, so
   ///         the frame draws as with no binding: lit, unless Unlit; Normals
-  ///         as ever. before_draw still runs each frame, so the program keeps
-  ///         its state, and turning it on shows the texture bound at once. A
-  ///         binding that names no set applies either way, so with no
-  ///         texture it changes nothing; the panel shows its Texture box once
-  ///         a before_draw has bound one. PlayerViewConfig::textured at
-  ///         first; the box flips it.
+  ///         as ever. before_draw still runs each frame. A binding that names
+  ///         no set applies either way. The panel shows the Texture box once
+  ///         a before_draw has bound a set, and keeps it.
+  ///         PlayerViewConfig::textured at first; the box flips it.
   bool textured() const noexcept { return textured_; }
   /// @brief Draw the mesh with its binding's texture set, or without it, from
   ///        the next frame (the desktop's T key).

@@ -31,7 +31,8 @@
 // frame has run on the GPU; a bound image's set drawn with kHybridMeshLit
 // cleared shows the image's value in an offscreen pixel (record_mesh), with
 // Texture on, and with it off, as at first, the pixel a binding of no set
-// draws, its Texture box shown once a set is bound and flipping it; Unlit,
+// draws, its Texture box shown once a set is bound, flipping it and staying;
+// a binding of no set applies with Texture off as on; Unlit,
 // from the panel's box or set_unlit, shows the vertex colour unshaded, and
 // off it is shaded; a commit hook holds and skips frames; and a before_draw
 // failure stops the view. A live view
@@ -289,6 +290,31 @@ class PlayerViewTest : public core::test::VulkanTest {
                       desc.color_format == VK_FORMAT_B8G8R8A8_UNORM;
     return bgra ? std::vector<int>{middle[2], middle[1], middle[0], middle[3]}
                 : std::vector<int>{middle[0], middle[1], middle[2], middle[3]};
+  }
+
+  // Expects the mesh's pixel (mesh_pixel) to be `expected` within 1 code in
+  // each of R, G and B; `what` names the check in a failure.
+  void expect_mesh_pixel(const std::vector<int>& expected, const char* what) {
+    ASSERT_GE(expected.size(), 3u) << what;
+    const std::vector<int> pixel = mesh_pixel();
+    ASSERT_EQ(pixel.size(), 4u) << what;
+    for (std::size_t c = 0; c < 3; ++c) {
+      EXPECT_NEAR(pixel[c], expected[c], 1) << what << ", component " << c;
+    }
+  }
+
+  // Whether pixels `a` and `b` are more than 10 codes apart in R, G or B, so
+  // that expect_mesh_pixel tells them apart; false if either has no R, G, B.
+  static bool differs(const std::vector<int>& a, const std::vector<int>& b) {
+    if (a.size() < 3 || b.size() < 3) {
+      return false;
+    }
+    for (std::size_t c = 0; c < 3; ++c) {
+      if (std::abs(a[c] - b[c]) > 10) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // The camera on frame `index`'s sphere (test_stream.hpp: 0.08 m along x a
@@ -1444,11 +1470,8 @@ TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
   aim_at(view_->shown()->index);
   ASSERT_TRUE(present());
-  const std::vector<int> pixel = mesh_pixel();
-  ASSERT_EQ(pixel.size(), 4u);
-  for (std::size_t c = 0; c < 3; ++c) {
-    EXPECT_NEAR(pixel[c], kBoundValue[c], 1) << "component " << c;
-  }
+  expect_mesh_pixel(std::vector<int>(kBoundValue.begin(), kBoundValue.end()),
+                    "the image");
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
 }
@@ -1457,8 +1480,10 @@ TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
 // draws as a binding of no set does, lit, the same pixel within 1 code, and
 // before_draw still runs each frame; set_textured(true) draws the image's
 // value at the next frame, and off again as with no set. The panel has no
-// Texture box until a set is bound, then a tap on it flips Texture, as
-// set_textured does.
+// Texture box until a set is bound, and has it then, Texture off; a tap on
+// it flips Texture, as set_textured does, and the box stays once none is
+// bound. Unlit, Texture off, a frame that binds a set draws as one that
+// binds none.
 TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
   const auto bind = std::make_shared<std::atomic<bool>>(false);
   const auto drawn = std::make_shared<std::atomic<int>>(0);
@@ -1472,12 +1497,8 @@ TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
   // The pixel a binding of no set draws: lit, and not the image's value, or
   // the comparisons below would show nothing.
   const std::vector<int> none = mesh_pixel();
-  ASSERT_EQ(none.size(), 4u);
-  bool differs = false;
-  for (std::size_t c = 0; c < 3; ++c) {
-    differs = differs || std::abs(none[c] - kBoundValue[c]) > 10;
-  }
-  ASSERT_TRUE(differs) << "the mesh's own pixel is the image's value";
+  const std::vector<int> image(kBoundValue.begin(), kBoundValue.end());
+  ASSERT_TRUE(differs(none, image)) << "the mesh's own pixel is the image's";
   ImGui::SetCurrentContext(view_->ui_context());
   ImGuiWindow* const controls = ImGui::FindWindowByName(kControlsWindow);
   ASSERT_NE(controls, nullptr);
@@ -1486,42 +1507,91 @@ TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
             texture_id)
       << "a Texture box with no set bound";
 
-  const auto expect_pixel = [this](const std::vector<int>& expected,
-                                   const char* what) {
-    const std::vector<int> pixel = mesh_pixel();
-    ASSERT_EQ(pixel.size(), 4u);
-    for (std::size_t c = 0; c < 3; ++c) {
-      EXPECT_NEAR(pixel[c], expected[c], 1) << what << ", component " << c;
-    }
-  };
-  const std::vector<int> image{kBoundValue[0], kBoundValue[1], kBoundValue[2],
-                               kBoundValue[3]};
   *bind = true;
   const int before = *drawn;
   ASSERT_TRUE(present());
   ASSERT_TRUE(present());
   EXPECT_GE(*drawn - before, 2) << "before_draw ran each frame, Texture off";
-  expect_pixel(none, "off");
+  expect_mesh_pixel(none, "off");
+  // The box, now that a set is bound, after Unlit, with Texture never on.
+  EXPECT_EQ(item_under(vp_test::control_middle(*controls, vp_test::kTexture)),
+            texture_id)
+      << "no box while Texture is off";
   view_->set_textured(true);
   ASSERT_TRUE(present());
-  expect_pixel(image, "on");
+  expect_mesh_pixel(image, "on");
   view_->set_textured(false);
   ASSERT_TRUE(present());
-  expect_pixel(none, "off again");
+  expect_mesh_pixel(none, "off again");
 
-  // The box, now that a set is bound, after Unlit.
-  EXPECT_EQ(item_under(vp_test::control_middle(*controls, vp_test::kTexture)),
-            texture_id);
   tap(vp_test::control_middle(*controls, vp_test::kTexture));
   EXPECT_TRUE(view_->textured());
   ASSERT_TRUE(present());
-  expect_pixel(image, "on from the box");
+  expect_mesh_pixel(image, "on from the box");
   tap(vp_test::control_middle(*controls, vp_test::kTexture));
   EXPECT_FALSE(view_->textured());
   ASSERT_TRUE(present());
-  expect_pixel(none, "off from the box");
+  expect_mesh_pixel(none, "off from the box");
   EXPECT_FALSE(view_->unlit()) << "the tap pressed Texture alone";
   EXPECT_FALSE(view_->player().playing()) << "the tap pressed Texture alone";
+
+  // The box stays with no set bound since: a frame binds none, and the next,
+  // whose controls follow it, still has the box.
+  *bind = false;
+  ASSERT_TRUE(present());
+  EXPECT_EQ(item_under(vp_test::control_middle(*controls, vp_test::kTexture)),
+            texture_id)
+      << "the box went with the set";
+
+  // Unlit applies with Texture off and a set bound: the frame draws the pixel
+  // Unlit draws with no set, which is not the lit one.
+  view_->set_unlit(true);
+  ASSERT_TRUE(present());
+  const std::vector<int> unlit = mesh_pixel();
+  ASSERT_TRUE(differs(none, unlit)) << "lit and unlit draw the same pixel";
+  *bind = true;
+  ASSERT_TRUE(present());
+  expect_mesh_pixel(unlit, "off, a set bound, Unlit");
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
+
+// A binding that names no set applies with Texture off as on: a before_draw
+// that clears kHybridMeshLit with no set draws the mesh as set_unlit(true)
+// does, the same pixel within 1 code, Texture off and then on; that pixel is
+// not the lit one, or the comparisons would show nothing.
+TEST_F(PlayerViewTest, ABindingOfNoSetAppliesWithTextureOffOrOn) {
+  const auto clear = std::make_shared<std::atomic<bool>>(false);
+  make_hooks_ = [clear](const HookContext&) -> core::Result<FrameHooks> {
+    FrameHooks hooks;
+    hooks.before_draw = [clear](VkCommandBuffer, const FrameStamp&) {
+      DrawBinding binding;
+      if (*clear) {
+        binding.mesh_flags_clear = gfx::pipelines::kHybridMeshLit;
+      }
+      return core::Result<DrawBinding>(binding);
+    };
+    return hooks;
+  };
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  ASSERT_FALSE(view_->textured()) << "off at first";
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  aim_at(view_->shown()->index);
+  ASSERT_TRUE(present());
+  const std::vector<int> lit = mesh_pixel();
+  view_->set_unlit(true);
+  ASSERT_TRUE(present());
+  const std::vector<int> unlit = mesh_pixel();
+  view_->set_unlit(false);
+  ASSERT_TRUE(differs(lit, unlit)) << "lit and unlit draw the same pixel";
+
+  *clear = true;
+  ASSERT_TRUE(present());
+  expect_mesh_pixel(unlit, "Texture off");
+  view_->set_textured(true);
+  ASSERT_TRUE(present());
+  expect_mesh_pixel(unlit, "Texture on");
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
 }
@@ -1556,13 +1626,9 @@ TEST_F(PlayerViewTest, UnlitShowsTheVertexColourUnshaded) {
     ASSERT_EQ(vertex.color.y, first.color.y);
     ASSERT_EQ(vertex.color.z, first.color.z);
   }
-  const std::array<int, 3> colour{
-      encoded(first.color.x), encoded(first.color.y), encoded(first.color.z)};
-  const std::vector<int> unlit = mesh_pixel();
-  ASSERT_EQ(unlit.size(), 4u);
-  for (std::size_t c = 0; c < 3; ++c) {
-    EXPECT_NEAR(unlit[c], colour[c], 1) << "component " << c;
-  }
+  const std::vector<int> colour{encoded(first.color.x), encoded(first.color.y),
+                                encoded(first.color.z)};
+  expect_mesh_pixel(colour, "Unlit");
   ImGui::SetCurrentContext(view_->ui_context());
   const ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
   ASSERT_NE(panel, nullptr);
@@ -1576,11 +1642,7 @@ TEST_F(PlayerViewTest, UnlitShowsTheVertexColourUnshaded) {
   }
   view_->set_unlit(true);
   ASSERT_TRUE(present());
-  const std::vector<int> again = mesh_pixel();
-  ASSERT_EQ(again.size(), 4u);
-  for (std::size_t c = 0; c < 3; ++c) {
-    EXPECT_NEAR(again[c], colour[c], 1) << "component " << c;
-  }
+  expect_mesh_pixel(colour, "Unlit again");
   EXPECT_FALSE(view_->player().playing()) << "the tap pressed Unlit alone";
 }
 
