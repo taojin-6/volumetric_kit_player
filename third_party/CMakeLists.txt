@@ -13,17 +13,18 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first, and the
 # config tier: its Source, which the library's open_source takes on every
 # platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
-# is core PR #61's merge (84dc584, 0.24.0), recon's pin and the floor its
-# library asks for. What the player uses is as at #52's merge (0.21.0):
-# HostRing, whose slots recon's decoder and maps keep, in place where
-# device-mapped memory is cached and copied elsewhere; CommandBatch::input and
-# output; and DeviceCounters::dispatches and barriers, which the stamps and the
-# measure log carry. Under it, 0.20.0's rows with busy, wait and device halves
-# (core::DeviceTime), tiled device time, PendingBatch::device_rows and
-# device_span, GpuTimer::set_max_depth and Device::counters and calibrate. Its
-# iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT)
-# and answers glm. The floor below is the pin's version, so an older
-# FETCHCONTENT_SOURCE_DIR override is refused.
+# is core main at PR #63's merge (c529072, 0.26.0); recon's library asks for
+# 0.25.0 (#62's merge, recon's own pin). #62 and #63 change only profiles the
+# player does not load; the Player profile resolves as before. What the player
+# uses is as at #52's merge (0.21.0): HostRing, whose slots recon's decoder and
+# maps keep, in place where device-mapped memory is cached and copied elsewhere;
+# CommandBatch::input and output; and DeviceCounters::dispatches and barriers,
+# which the stamps and the measure log carry. Under it, 0.20.0's rows with busy,
+# wait and device halves (core::DeviceTime), tiled device time,
+# PendingBatch::device_rows and device_span, GpuTimer::set_max_depth and
+# Device::counters and calibrate. Its iOS module, cmake/vkc_ios.cmake, links
+# MoltenVK's iOS release (MoltenVK_ROOT) and answers glm. The floor below is the
+# pin's version, so an older FETCHCONTENT_SOURCE_DIR override is refused.
 set(VKC_WITH_VULKAN ON)
 set(VKC_WITH_CONFIG ON)
 # The test policy, which vp_probe's library validates by on every desktop, and
@@ -34,16 +35,16 @@ endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 84dc584d905b7b974463d3cd83e3b4dde95c3c49)
+  GIT_TAG c5290721b915c7e3fbc4585c451cb40941aa50ef)
 FetchContent_MakeAvailable(volumetric_kit_core)
-vkc_require_core(0.24.0 VULKAN CONFIG)
+vkc_require_core(0.26.0 VULKAN CONFIG)
 
 # --- volumetric_kit_recon ----------------------------------------------------
 # The stream reader, the codec's decode grid and its deblock, Marching Cubes,
 # the mesh exchange and the live stream's client. Its tests, examples and
 # -Werror stay off in a subproject, so its library's core floor is the one
-# checked; its own core pin is the player's. The pin is recon main at #295's
-# merge (b9bb7d2). The tiers the player links are as at #277's merge (a23f7f5):
+# checked; its own core pin is the player's. The pin is recon main at #299's
+# merge (d8b8bda). The tiers the player links are as at #277's merge (a23f7f5):
 # a frame decoded and meshed in the caller's batch (codec::record_growing,
 # finish_growing; mesh::MarchingCubes::record_extract, finish, abandon),
 # DeviceMesh::ready, Decoder::claim_input and last_rounds, and the reads
@@ -59,11 +60,17 @@ vkc_require_core(0.24.0 VULKAN CONFIG)
 # library asks for core 0.24.0. #295 makes volume::VoxelHashMap's
 # record_compaction const, so an after_mesh hook, handed the grid read-only,
 # records work that reads it; the worker finishes that batch before the grid
-# grows (DECISIONS.md).
+# grows (DECISIONS.md). #296 to #298 change only recon's camera and sensor tiers
+# and its examples, which the player does not link; #298 raises recon's core
+# floor to 0.25.0. #299 makes a Marching Cubes vertex on a corner whose distance
+# is the iso-value exactly that corner, selected rather than interpolated (the
+# division could leave it just short, or up to a voxel away under the
+# near-tangent guard), and rounds each corner before the interpolation
+# (`precise`).
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG b9bb7d2a45d4dc9116e653aea11333e75806d876)
+  GIT_TAG d8b8bda181caf25619b086a36cd587a9c5fa0432)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------
