@@ -152,11 +152,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colours unshaded, through the view's own `DrawBinding`
   (`PlayerView::unlit`, `set_unlit`, `PlayerViewConfig::unlit`).
 - Texture: a box in the panel, shown once a program's `before_draw` binds a
-  texture set, and the desktop's T key draw the mesh with that texture or,
-  off, as at first, as with no binding, `before_draw` still running each
-  frame (`PlayerView::textured`, `set_textured`,
-  `PlayerViewConfig::textured`; `draw_controls` takes the view's `textured`,
-  or null for no box).
+  texture set, and the desktop's T key draw the mesh with or without that
+  set (`PlayerView::textured`, `set_textured`, `PlayerViewConfig::textured`).
 - A program's line in the stats panel (`FrameHooks::stats_line`), its last,
   read at most once a `StatsPanel::kProgramLineRefresh` (1 s) while the
   panel is open; `stats_lines` and `StatsPanel::draw` take it.
@@ -297,7 +294,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   passes `PlayerView::render_metrics().sections` to `MeasureLog::add`.
 - `MeasureLog::add` takes the frame's mesh, for its triangles and vertices,
   in place of its triangle count: `add(stamp, view->mesh(), render)`.
-- `draw_controls` takes the view's `unlit` after its `normals`.
+- `draw_controls` takes the view's `unlit` after its `normals`, then its
+  `textured`, or null for no Texture box.
 - A program whose `before_draw` binds a texture set sets
   `PlayerViewConfig::textured` to show it at start: Texture is off by
   default.

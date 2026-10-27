@@ -45,13 +45,14 @@ inline constexpr float kButtonEms = 4.5f;
 ///        given, Texture in a row, the status line below, at the bottom
 ///        centre of the main viewport's work area, so they stay clear of a
 ///        notch and a home indicator; a live player's (StreamPlayer::live),
-///        Normals, Deblock, Unlit and Texture over its @ref live_status_line.
-///        Deblock, a box that shows and sets StreamPlayer::deblock, then
-///        Unlit and Texture, boxes, each go after the line's last control, or
-///        start a line below when it would not fit the work area with them,
-///        as Deblock does on a phone in portrait; a status line too wide for
-///        it breaks between its parts, as a stats line does. There is no text
-///        field, so touch needs no keyboard.
+///        Normals, Deblock, Unlit and, when given, Texture over its
+///        @ref live_status_line. Deblock, a box that shows and sets
+///        StreamPlayer::deblock, then Unlit and Texture, boxes, each go after
+///        the line's last control, or start a line below when it would not
+///        fit the work area with them, as Deblock does on a phone in
+///        portrait; a status line too wide for it breaks between its parts,
+///        as a stats line does. There is no text field, so touch needs no
+///        keyboard.
 ///
 /// @code
 /// overlay.new_frame();
@@ -68,7 +69,7 @@ inline constexpr float kButtonEms = 4.5f;
 ///                 for a view with no texture bound.
 /// @pre An ImGui frame is open on the view's context.
 void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
-                   bool& normals, bool& unlit, bool* textured = nullptr);
+                   bool& normals, bool& unlit, bool* textured);
 
 /// @brief Draw the Source button, which asks for something else to play, at
 ///        the top right of the main viewport's work area. Its window has no
