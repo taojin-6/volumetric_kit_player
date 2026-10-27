@@ -1480,8 +1480,9 @@ TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
 // draws as a binding of no set does, lit, the same pixel within 1 code, and
 // before_draw still runs each frame; set_textured(true) draws the image's
 // value at the next frame, and off again as with no set. The panel has no
-// Texture box until a set is bound, then a tap on it flips Texture, as
-// set_textured does, and the box stays once none is bound.
+// Texture box until a set is bound, and has it then, Texture off; a tap on
+// it flips Texture, as set_textured does, and the box stays once none is
+// bound.
 TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
   const auto bind = std::make_shared<std::atomic<bool>>(false);
   const auto drawn = std::make_shared<std::atomic<int>>(0);
@@ -1511,6 +1512,10 @@ TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
   ASSERT_TRUE(present());
   EXPECT_GE(*drawn - before, 2) << "before_draw ran each frame, Texture off";
   expect_mesh_pixel(none, "off");
+  // The box, now that a set is bound, after Unlit, with Texture never on.
+  EXPECT_EQ(item_under(vp_test::control_middle(*controls, vp_test::kTexture)),
+            texture_id)
+      << "no box while Texture is off";
   view_->set_textured(true);
   ASSERT_TRUE(present());
   expect_mesh_pixel(image, "on");
@@ -1518,9 +1523,6 @@ TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
   ASSERT_TRUE(present());
   expect_mesh_pixel(none, "off again");
 
-  // The box, now that a set is bound, after Unlit.
-  EXPECT_EQ(item_under(vp_test::control_middle(*controls, vp_test::kTexture)),
-            texture_id);
   tap(vp_test::control_middle(*controls, vp_test::kTexture));
   EXPECT_TRUE(view_->textured());
   ASSERT_TRUE(present());
