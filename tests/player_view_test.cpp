@@ -292,6 +292,31 @@ class PlayerViewTest : public core::test::VulkanTest {
                 : std::vector<int>{middle[0], middle[1], middle[2], middle[3]};
   }
 
+  // Expects the mesh's pixel (mesh_pixel) to be `expected` within 1 code in
+  // each of R, G and B; `what` names the check in a failure.
+  void expect_mesh_pixel(const std::vector<int>& expected, const char* what) {
+    ASSERT_GE(expected.size(), 3u) << what;
+    const std::vector<int> pixel = mesh_pixel();
+    ASSERT_EQ(pixel.size(), 4u) << what;
+    for (std::size_t c = 0; c < 3; ++c) {
+      EXPECT_NEAR(pixel[c], expected[c], 1) << what << ", component " << c;
+    }
+  }
+
+  // Whether pixels `a` and `b` are more than 10 codes apart in R, G or B, so
+  // that expect_mesh_pixel tells them apart; false if either has no R, G, B.
+  static bool differs(const std::vector<int>& a, const std::vector<int>& b) {
+    if (a.size() < 3 || b.size() < 3) {
+      return false;
+    }
+    for (std::size_t c = 0; c < 3; ++c) {
+      if (std::abs(a[c] - b[c]) > 10) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // The camera on frame `index`'s sphere (test_stream.hpp: 0.08 m along x a
   // frame, 0.12 m round), 0.6 m off, level, so the sphere fills the middle.
   void aim_at(std::uint64_t index) {
@@ -1445,11 +1470,8 @@ TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
   aim_at(view_->shown()->index);
   ASSERT_TRUE(present());
-  const std::vector<int> pixel = mesh_pixel();
-  ASSERT_EQ(pixel.size(), 4u);
-  for (std::size_t c = 0; c < 3; ++c) {
-    EXPECT_NEAR(pixel[c], kBoundValue[c], 1) << "component " << c;
-  }
+  expect_mesh_pixel(std::vector<int>(kBoundValue.begin(), kBoundValue.end()),
+                    "the image");
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
 }
@@ -1473,12 +1495,8 @@ TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
   // The pixel a binding of no set draws: lit, and not the image's value, or
   // the comparisons below would show nothing.
   const std::vector<int> none = mesh_pixel();
-  ASSERT_EQ(none.size(), 4u);
-  bool differs = false;
-  for (std::size_t c = 0; c < 3; ++c) {
-    differs = differs || std::abs(none[c] - kBoundValue[c]) > 10;
-  }
-  ASSERT_TRUE(differs) << "the mesh's own pixel is the image's value";
+  const std::vector<int> image(kBoundValue.begin(), kBoundValue.end());
+  ASSERT_TRUE(differs(none, image)) << "the mesh's own pixel is the image's";
   ImGui::SetCurrentContext(view_->ui_context());
   ImGuiWindow* const controls = ImGui::FindWindowByName(kControlsWindow);
   ASSERT_NE(controls, nullptr);
@@ -1487,28 +1505,18 @@ TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
             texture_id)
       << "a Texture box with no set bound";
 
-  const auto expect_pixel = [this](const std::vector<int>& expected,
-                                   const char* what) {
-    const std::vector<int> pixel = mesh_pixel();
-    ASSERT_EQ(pixel.size(), 4u);
-    for (std::size_t c = 0; c < 3; ++c) {
-      EXPECT_NEAR(pixel[c], expected[c], 1) << what << ", component " << c;
-    }
-  };
-  const std::vector<int> image{kBoundValue[0], kBoundValue[1], kBoundValue[2],
-                               kBoundValue[3]};
   *bind = true;
   const int before = *drawn;
   ASSERT_TRUE(present());
   ASSERT_TRUE(present());
   EXPECT_GE(*drawn - before, 2) << "before_draw ran each frame, Texture off";
-  expect_pixel(none, "off");
+  expect_mesh_pixel(none, "off");
   view_->set_textured(true);
   ASSERT_TRUE(present());
-  expect_pixel(image, "on");
+  expect_mesh_pixel(image, "on");
   view_->set_textured(false);
   ASSERT_TRUE(present());
-  expect_pixel(none, "off again");
+  expect_mesh_pixel(none, "off again");
 
   // The box, now that a set is bound, after Unlit.
   EXPECT_EQ(item_under(vp_test::control_middle(*controls, vp_test::kTexture)),
@@ -1516,11 +1524,11 @@ TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
   tap(vp_test::control_middle(*controls, vp_test::kTexture));
   EXPECT_TRUE(view_->textured());
   ASSERT_TRUE(present());
-  expect_pixel(image, "on from the box");
+  expect_mesh_pixel(image, "on from the box");
   tap(vp_test::control_middle(*controls, vp_test::kTexture));
   EXPECT_FALSE(view_->textured());
   ASSERT_TRUE(present());
-  expect_pixel(none, "off from the box");
+  expect_mesh_pixel(none, "off from the box");
   EXPECT_FALSE(view_->unlit()) << "the tap pressed Texture alone";
   EXPECT_FALSE(view_->player().playing()) << "the tap pressed Texture alone";
 
@@ -1563,27 +1571,14 @@ TEST_F(PlayerViewTest, ABindingOfNoSetAppliesWithTextureOffOrOn) {
   ASSERT_TRUE(present());
   const std::vector<int> unlit = mesh_pixel();
   view_->set_unlit(false);
-  ASSERT_EQ(lit.size(), 4u);
-  ASSERT_EQ(unlit.size(), 4u);
-  bool differs = false;
-  for (std::size_t c = 0; c < 3; ++c) {
-    differs = differs || std::abs(lit[c] - unlit[c]) > 10;
-  }
-  ASSERT_TRUE(differs) << "lit and unlit draw the same pixel";
+  ASSERT_TRUE(differs(lit, unlit)) << "lit and unlit draw the same pixel";
 
-  const auto expect_unlit = [&](const char* what) {
-    const std::vector<int> pixel = mesh_pixel();
-    ASSERT_EQ(pixel.size(), 4u);
-    for (std::size_t c = 0; c < 3; ++c) {
-      EXPECT_NEAR(pixel[c], unlit[c], 1) << what << ", component " << c;
-    }
-  };
   *clear = true;
   ASSERT_TRUE(present());
-  expect_unlit("Texture off");
+  expect_mesh_pixel(unlit, "Texture off");
   view_->set_textured(true);
   ASSERT_TRUE(present());
-  expect_unlit("Texture on");
+  expect_mesh_pixel(unlit, "Texture on");
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
 }
@@ -1618,13 +1613,9 @@ TEST_F(PlayerViewTest, UnlitShowsTheVertexColourUnshaded) {
     ASSERT_EQ(vertex.color.y, first.color.y);
     ASSERT_EQ(vertex.color.z, first.color.z);
   }
-  const std::array<int, 3> colour{
-      encoded(first.color.x), encoded(first.color.y), encoded(first.color.z)};
-  const std::vector<int> unlit = mesh_pixel();
-  ASSERT_EQ(unlit.size(), 4u);
-  for (std::size_t c = 0; c < 3; ++c) {
-    EXPECT_NEAR(unlit[c], colour[c], 1) << "component " << c;
-  }
+  const std::vector<int> colour{encoded(first.color.x), encoded(first.color.y),
+                                encoded(first.color.z)};
+  expect_mesh_pixel(colour, "Unlit");
   ImGui::SetCurrentContext(view_->ui_context());
   const ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
   ASSERT_NE(panel, nullptr);
@@ -1638,11 +1629,7 @@ TEST_F(PlayerViewTest, UnlitShowsTheVertexColourUnshaded) {
   }
   view_->set_unlit(true);
   ASSERT_TRUE(present());
-  const std::vector<int> again = mesh_pixel();
-  ASSERT_EQ(again.size(), 4u);
-  for (std::size_t c = 0; c < 3; ++c) {
-    EXPECT_NEAR(again[c], colour[c], 1) << "component " << c;
-  }
+  expect_mesh_pixel(colour, "Unlit again");
   EXPECT_FALSE(view_->player().playing()) << "the tap pressed Unlit alone";
 }
 
