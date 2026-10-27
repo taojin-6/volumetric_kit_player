@@ -13,17 +13,14 @@ thread_local AllocationFailure allocation_failure;
 void* operator new(std::size_t bytes) {
   const void* site = __builtin_return_address(0);
   auto& failure = vp_test::allocation_failure;
-  if (failure.measure &&
-      (failure.measure_bytes == 0 || failure.measure_bytes == bytes)) {
+  if (failure.measure) {
     failure.bytes = bytes;
-    failure.measured_site = site;
     if (bytes > failure.largest) {
       failure.largest = bytes;
       failure.largest_site = site;
     }
   }
-  if (failure.armed && bytes == failure.bytes &&
-      (failure.site == nullptr || failure.site == site)) {
+  if (failure.armed && bytes == failure.bytes) {
     failure.armed = false;  // The error Status can allocate its message.
     failure.injected = true;
     failure.injected_site = site;

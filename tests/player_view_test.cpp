@@ -1386,8 +1386,8 @@ TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
                gfx::upload_texture(context.commit_device,
                                    context.commit_allocator, desc));
     VKC_ASSIGN(bound->set, gfx::pipelines::HybridMeshTextureSet::create(
-                               context.commit_device, *context.pipeline,
-                               bound->image.view()));
+                               context.commit_device, context.commit_allocator,
+                               *context.pipeline, bound->image.view()));
     FrameHooks hooks;
     core::Device* const device = &context.device;
     core::Allocator* const allocator = &context.allocator;
@@ -1558,22 +1558,34 @@ TEST_F(PlayerViewTest, ABeforeDrawFailureStopsTheView) {
       << view_->player().status().message();
 }
 
-// Target the small per-frame wait-vector allocation by size and its measured
-// caller. Injection is local to this UI thread, never a worker or the driver.
+// Target the small per-frame wait-vector allocation, in a begun frame: once
+// asked, before_draw, which the view calls just before it adds the mesh's
+// wait, arms the failure of the next allocation of a FrameWait's size on this
+// UI thread, never a worker's. Armed there rather than at a measured call
+// site, it never fails the validation layer's or the driver's allocations on
+// this thread, which share sizes and call sites, and which the core may
+// contain in a call that fails cleanly.
 TEST_F(PlayerViewTest, AllocationFailureStopsFurtherFrameAcquisition) {
+  const auto arm = std::make_shared<bool>(false);
+  make_hooks_ = [arm](const HookContext&) -> core::Result<FrameHooks> {
+    FrameHooks hooks;
+    hooks.before_draw = [arm](VkCommandBuffer, const FrameStamp&) {
+      if (*arm) {
+        *arm = false;
+        auto& failure = vp_test::allocation_failure;
+        failure.bytes = sizeof(gfx::windowing::FrameWait);
+        failure.armed = true;
+      }
+      return core::Result<DrawBinding>(DrawBinding{});
+    };
+    return hooks;
+  };
   ASSERT_TRUE(make_view());
   ASSERT_TRUE(tick_until([this] { return !view_->frame_waits().empty(); }));
   view_->player().pause();
   auto& failure = vp_test::allocation_failure;
   failure = {};
-  failure.measure_bytes = sizeof(gfx::windowing::FrameWait);
-  failure.measure = true;
-  const auto measured = tick();
-  failure.measure = false;
-  ASSERT_TRUE(measured.ok());
-  ASSERT_NE(failure.measured_site, nullptr);
-  failure.site = failure.measured_site;
-  failure.armed = true;
+  *arm = true;
   core::Result<bool> result = false;
   bool escaped = false;
   try {
