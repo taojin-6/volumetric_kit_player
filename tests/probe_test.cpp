@@ -356,6 +356,7 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
   config.view.source_button = true;
   config.view.compact_stats = true;
   config.view.unlit = true;
+  config.view.textured = true;
   config.view.device_timing = vkp::DeviceTiming::kOff;
   config.view.tile_depth = 1;
   config.view.debug_labels = false;
@@ -373,6 +374,7 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
     EXPECT_TRUE(view.source_button);
     EXPECT_TRUE(view.compact_stats);
     EXPECT_TRUE(view.unlit);
+    EXPECT_TRUE(view.textured);
     EXPECT_TRUE(static_cast<bool>(view.make_hooks)) << "make_hooks dropped";
   };
   const std::optional<vkp::PlayerViewConfig> defaults =

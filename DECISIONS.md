@@ -4,6 +4,15 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-27 — Texture: the mesh with or without its binding's texture
+
+`PlayerView::textured`, the panel's Texture box and the desktop's T key: off,
+by default, the mesh is in its own shading (the owner: "I think default is
+mesh shading"), a binding that names a texture set left out whole so the frame
+draws as with no binding; before_draw still runs each frame, so its program
+keeps its state and on shows the texture at once; the box shows only once a
+set has been bound, so a program that binds none has no box that does nothing.
+
 ## 2026-10-26 — after_mesh's batch finishes before the grid grows
 
 recon #295 makes `VoxelHashMap::record_compaction` const, so an `after_mesh`

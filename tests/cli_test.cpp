@@ -374,6 +374,7 @@ TEST(DesktopViewConfig, KeepsTheProgramsSettingsWithTheScenariosValidation) {
   config.view.debug_labels = false;
   config.view.share_vertices = false;
   config.view.unlit = true;
+  config.view.textured = true;
   config.view.make_hooks = &no_hooks;
   const Scratch scratch;
   const std::string path = scratch.file("play.json");
@@ -396,6 +397,7 @@ TEST(DesktopViewConfig, KeepsTheProgramsSettingsWithTheScenariosValidation) {
     EXPECT_FALSE(view.debug_labels);
     EXPECT_FALSE(view.share_vertices);
     EXPECT_TRUE(view.unlit);
+    EXPECT_TRUE(view.textured);
     const MakeHooksFn* kept = view.make_hooks.target<MakeHooksFn>();
     ASSERT_NE(kept, nullptr) << "make_hooks dropped";
     EXPECT_EQ(*kept, &no_hooks);

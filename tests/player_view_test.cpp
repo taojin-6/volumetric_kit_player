@@ -29,7 +29,9 @@
 // hooks (frame_hooks.hpp): after_mesh's extra reaches the commit and
 // before_draw, and is released only once every display frame that drew its
 // frame has run on the GPU; a bound image's set drawn with kHybridMeshLit
-// cleared shows the image's value in an offscreen pixel (record_mesh); Unlit,
+// cleared shows the image's value in an offscreen pixel (record_mesh), with
+// Texture on, and with it off, as at first, the pixel a binding of no set
+// draws, its Texture box shown once a set is bound and flipping it; Unlit,
 // from the panel's box or set_unlit, shows the vertex colour unshaded, and
 // off it is shaded; a commit hook holds and skips frames; and a before_draw
 // failure stops the view. A live view
@@ -51,6 +53,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -205,7 +208,7 @@ class PlayerViewTest : public core::test::VulkanTest {
 
   // The view's config: at `ui_scale_` and `ui_min_frame_height_`, with
   // Source while `source_button_`, validated as the test policy asks, Unlit
-  // as `unlit_` and with `make_hooks_`'s hooks.
+  // as `unlit_`, Texture as `textured_` and with `make_hooks_`'s hooks.
   PlayerViewConfig config() {
     PlayerViewConfig config;
     config.ui_scale = ui_scale_;
@@ -216,6 +219,7 @@ class PlayerViewTest : public core::test::VulkanTest {
     config.device_timing = device_timing_;
     config.share_vertices = share_vertices_;
     config.unlit = unlit_;
+    config.textured = textured_;
     if (make_hooks_) {
       // The context's devices and pipeline noted, for the test's own work on
       // them; they live as long as the view.
@@ -491,6 +495,7 @@ class PlayerViewTest : public core::test::VulkanTest {
   std::optional<DeviceTiming> device_timing_;
   bool share_vertices_ = PlayerViewConfig{}.share_vertices;
   bool unlit_ = PlayerViewConfig{}.unlit;
+  bool textured_ = PlayerViewConfig{}.textured;
   MakeHooks make_hooks_;  // the view's hooks, with the context noted
   // What the hooks were made with, as the view's create gave it.
   struct Context {
@@ -1359,22 +1364,23 @@ TEST_F(PlayerViewTest, AnExtraIsReleasedOnlyOnceEveryDrawOfItsFrameHasRun) {
   EXPECT_EQ(results->unrun, 0);
 }
 
-// before_draw's binding reaches the draw: with a 2x2 image's set bound
-// (gfx's HybridMeshTextureSet against the view's pipeline) and
-// kHybridMeshLit cleared, the mesh, whose vertices after_mesh sets to sample
-// the image's middle, draws the image's value within 1 code.
-TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
-  // Every pixel of the image, as sRGB bytes.
-  constexpr std::array<std::uint8_t, 4> kValue{200, 120, 40, 255};
+// Every pixel of the tests' bound image, as sRGB bytes.
+constexpr std::array<std::uint8_t, 4> kBoundValue{200, 120, 40, 255};
+
+// Hooks that bind a 2x2 image of kBoundValue (gfx's HybridMeshTextureSet
+// against the view's pipeline) with kHybridMeshLit cleared, while `bind`
+// holds, else a binding of no set; after_mesh sets each mesh's vertices to
+// sample the image's middle, and `drawn` counts before_draw's calls.
+MakeHooks bound_image_hooks(std::shared_ptr<std::atomic<bool>> bind,
+                            std::shared_ptr<std::atomic<int>> drawn) {
   struct Bound {
     core::Image image;
     std::unique_ptr<gfx::pipelines::HybridMeshTextureSet> set;
   };
-  make_hooks_ =
-      [kValue](const HookContext& context) -> core::Result<FrameHooks> {
+  return [bind, drawn](const HookContext& context) -> core::Result<FrameHooks> {
     std::array<std::uint8_t, 16> pixels{};
     for (std::size_t i = 0; i < pixels.size(); ++i) {
-      pixels[i] = kValue[i % 4];
+      pixels[i] = kBoundValue[i % 4];
     }
     gfx::ImageUploadDesc desc;
     desc.extent = {2, 2};
@@ -1411,13 +1417,29 @@ TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
       }
       return batch.upload(vertices, 0, read.data(), vertices.size());
     };
-    hooks.before_draw = [bound](VkCommandBuffer, const FrameStamp&) {
+    hooks.before_draw = [bound, bind, drawn](VkCommandBuffer,
+                                             const FrameStamp&) {
+      ++*drawn;
+      if (!*bind) {
+        return core::Result<DrawBinding>(DrawBinding{});
+      }
       return core::Result<DrawBinding>(
           DrawBinding{bound->set->set(), gfx::pipelines::kHybridMeshLit});
     };
     return hooks;
   };
+}
+
+// before_draw's binding reaches the draw: with a 2x2 image's set bound
+// (bound_image_hooks) and kHybridMeshLit cleared, Texture on at start
+// (PlayerViewConfig::textured), the mesh, whose vertices after_mesh sets to
+// sample the image's middle, draws the image's value within 1 code.
+TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
+  make_hooks_ = bound_image_hooks(std::make_shared<std::atomic<bool>>(true),
+                                  std::make_shared<std::atomic<int>>(0));
+  textured_ = true;
   ASSERT_TRUE(make_view(/*playing=*/false));
+  EXPECT_TRUE(view_->textured());
   view_->player().step();
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
   aim_at(view_->shown()->index);
@@ -1425,8 +1447,81 @@ TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
   const std::vector<int> pixel = mesh_pixel();
   ASSERT_EQ(pixel.size(), 4u);
   for (std::size_t c = 0; c < 3; ++c) {
-    EXPECT_NEAR(pixel[c], kValue[c], 1) << "component " << c;
+    EXPECT_NEAR(pixel[c], kBoundValue[c], 1) << "component " << c;
   }
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
+
+// Texture: off at first, the frame whose before_draw binds the image's set
+// draws as a binding of no set does, lit, the same pixel within 1 code, and
+// before_draw still runs each frame; set_textured(true) draws the image's
+// value at the next frame, and off again as with no set. The panel has no
+// Texture box until a set is bound, then a tap on it flips Texture, as
+// set_textured does.
+TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
+  const auto bind = std::make_shared<std::atomic<bool>>(false);
+  const auto drawn = std::make_shared<std::atomic<int>>(0);
+  make_hooks_ = bound_image_hooks(bind, drawn);
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  ASSERT_FALSE(view_->textured()) << "off at first";
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  aim_at(view_->shown()->index);
+  ASSERT_TRUE(present());
+  // The pixel a binding of no set draws: lit, and not the image's value, or
+  // the comparisons below would show nothing.
+  const std::vector<int> none = mesh_pixel();
+  ASSERT_EQ(none.size(), 4u);
+  bool differs = false;
+  for (std::size_t c = 0; c < 3; ++c) {
+    differs = differs || std::abs(none[c] - kBoundValue[c]) > 10;
+  }
+  ASSERT_TRUE(differs) << "the mesh's own pixel is the image's value";
+  ImGui::SetCurrentContext(view_->ui_context());
+  ImGuiWindow* const controls = ImGui::FindWindowByName(kControlsWindow);
+  ASSERT_NE(controls, nullptr);
+  const ImGuiID texture_id = controls->GetID("Texture");
+  EXPECT_NE(item_under(vp_test::control_middle(*controls, vp_test::kTexture)),
+            texture_id)
+      << "a Texture box with no set bound";
+
+  const auto expect_pixel = [this](const std::vector<int>& expected,
+                                   const char* what) {
+    const std::vector<int> pixel = mesh_pixel();
+    ASSERT_EQ(pixel.size(), 4u);
+    for (std::size_t c = 0; c < 3; ++c) {
+      EXPECT_NEAR(pixel[c], expected[c], 1) << what << ", component " << c;
+    }
+  };
+  const std::vector<int> image{kBoundValue[0], kBoundValue[1], kBoundValue[2],
+                               kBoundValue[3]};
+  *bind = true;
+  const int before = *drawn;
+  ASSERT_TRUE(present());
+  ASSERT_TRUE(present());
+  EXPECT_GE(*drawn - before, 2) << "before_draw ran each frame, Texture off";
+  expect_pixel(none, "off");
+  view_->set_textured(true);
+  ASSERT_TRUE(present());
+  expect_pixel(image, "on");
+  view_->set_textured(false);
+  ASSERT_TRUE(present());
+  expect_pixel(none, "off again");
+
+  // The box, now that a set is bound, after Unlit.
+  EXPECT_EQ(item_under(vp_test::control_middle(*controls, vp_test::kTexture)),
+            texture_id);
+  tap(vp_test::control_middle(*controls, vp_test::kTexture));
+  EXPECT_TRUE(view_->textured());
+  ASSERT_TRUE(present());
+  expect_pixel(image, "on from the box");
+  tap(vp_test::control_middle(*controls, vp_test::kTexture));
+  EXPECT_FALSE(view_->textured());
+  ASSERT_TRUE(present());
+  expect_pixel(none, "off from the box");
+  EXPECT_FALSE(view_->unlit()) << "the tap pressed Texture alone";
+  EXPECT_FALSE(view_->player().playing()) << "the tap pressed Texture alone";
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
 }

@@ -82,6 +82,10 @@ struct PlayerViewConfig {
   MakeHooks make_hooks;
   /// The panel's Unlit, at start (PlayerView::unlit).
   bool unlit = false;
+  /// The panel's Texture, at start (PlayerView::textured): off, so the mesh
+  /// starts in its own shading; a program whose before_draw binds a texture
+  /// sets it to start with that texture shown.
+  bool textured = false;
 };
 
 /// @brief The swapchain @ref PlayerView asks gfx for: gfx's FIFO default and
@@ -137,7 +141,7 @@ class PlayerView {
   /// @param player   An opened player, not started.
   /// @param config   The UI's sizes, the Source button, validation, a
   ///                 measurement's timing, tile depth and labels, vertex
-  ///                 sharing, the hooks and Unlit.
+  ///                 sharing, the hooks, Unlit and Texture.
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
   ///         @p player or an empty @p extent; or the first failure (device,
   ///         swapchain, pipeline, overlay, profiler, make_hooks,
@@ -160,7 +164,8 @@ class PlayerView {
   ///        (FrameTaker, with the commit hook), run before_draw, draw the
   ///        mesh behind a GPU wait on its `ready` value (already reached, so
   ///        it stalls nothing; it carries the worker's writes across queues)
-  ///        with the binding it returned and the view's own (Unlit), and
+  ///        with the binding it returned, unless Texture is off and it names
+  ///        a texture set (@ref textured), and the view's own (Unlit), and
   ///        present. A frame taken is stamped when taken and when presented
   ///        (FrameStamp::taken, presented), and counted in the stats once
   ///        presented; a skipped frame is neither.
@@ -198,6 +203,21 @@ class PlayerView {
   ///        frame (the desktop's U key).
   /// @param unlit  Whether to leave them unshaded.
   void set_unlit(bool unlit) noexcept { unlit_ = unlit; }
+  /// @return Whether the mesh is drawn with the texture set its program's
+  ///         before_draw binds (DrawBinding::descriptor_set). Off, a binding
+  ///         that names a set is left out whole, its flags' clears too, so
+  ///         the frame draws as with no binding: lit, unless Unlit; Normals
+  ///         as ever. before_draw still runs each frame, so the program keeps
+  ///         its state, and turning it on shows the texture bound at once. A
+  ///         binding that names no set applies either way, so with no
+  ///         texture it changes nothing; the panel shows its Texture box once
+  ///         a before_draw has bound one. PlayerViewConfig::textured at
+  ///         first; the box flips it.
+  bool textured() const noexcept { return textured_; }
+  /// @brief Draw the mesh with its binding's texture set, or without it, from
+  ///        the next frame (the desktop's T key).
+  /// @param textured  Whether to draw it with the texture.
+  void set_textured(bool textured) noexcept { textured_ = textured; }
   /// @return The flags the mesh draws with (gfx::pipelines::HybridMeshFlags)
   ///         before a DrawBinding clears any: kHybridMeshNormals while
   ///         @ref normals, else kHybridMeshLit.
@@ -297,6 +317,8 @@ class PlayerView {
   gfx::camera::OrbitCamera camera_;
   bool normals_ = false;         // the mesh's shading (mesh_flags)
   bool unlit_ = false;           // its vertex colours unshaded
+  bool textured_ = false;        // drawn with before_draw's texture set
+  bool texture_bound_ = false;   // a before_draw has bound one: Texture shows
   bool source_button_ = false;   // frame() draws Source
   bool source_request_ = false;  // pressed since take_source_request
   std::optional<DeviceTiming> device_timing_;  // fixed; else the panel's
