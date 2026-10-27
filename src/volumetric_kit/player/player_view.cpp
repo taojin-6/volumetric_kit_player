@@ -108,6 +108,7 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   view->camera_.set_distance(3.0f);
   view->source_button_ = config.source_button;
   view->unlit_ = config.unlit;
+  view->textured_ = config.textured;
   view->stats_panel_ = StatsPanel(config.compact_stats);
   // The panel opens at launch, so its frames are timed from the first.
   view->device_timing_ = config.device_timing;
@@ -179,7 +180,10 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   // 2. The controls, Source if asked for, and the stats, as of the last frame
   // drawn.
   overlay_.new_frame();
-  draw_controls(*player_, shown_, normals_, unlit_);
+  // Texture once a before_draw has bound a texture set, so a program that
+  // binds none has no box that does nothing.
+  draw_controls(*player_, shown_, normals_, unlit_,
+                texture_bound_ ? &textured_ : nullptr);
   if (source_button_ && draw_source()) {
     source_request_ = true;
   }
@@ -206,7 +210,10 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
     took = true;
   }
   const core::Status drawn = drawable(exchange_);
-  // 4. The frame's binding: the view's own (Unlit) and before_draw's.
+  // 4. The frame's binding: the view's own (Unlit) and before_draw's, which
+  // runs with Texture off too, so its program keeps its state; off, a binding
+  // that names a texture set is left out whole, so the frame draws as with
+  // none.
   const recon::mesh::DeviceMesh& live = exchange_.live();
   const bool draws = live.valid() && !live.empty();
   binding_ = DrawBinding{};
@@ -216,8 +223,12 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   if (draws && failed.ok() && hooks_.before_draw && shown_) {
     core::Result<DrawBinding> bound = hooks_.before_draw(frame.cmd, *shown_);
     if (bound.ok()) {
-      binding_.descriptor_set = bound->descriptor_set;
-      binding_.mesh_flags_clear |= bound->mesh_flags_clear;
+      const bool texture = bound->descriptor_set != VK_NULL_HANDLE;
+      texture_bound_ = texture_bound_ || texture;
+      if (textured_ || !texture) {
+        binding_.descriptor_set = bound->descriptor_set;
+        binding_.mesh_flags_clear |= bound->mesh_flags_clear;
+      }
     } else {
       failed = bound.status();
     }

@@ -151,6 +151,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Unlit: a box in the panel and the desktop's U key show the mesh's vertex
   colours unshaded, through the view's own `DrawBinding`
   (`PlayerView::unlit`, `set_unlit`, `PlayerViewConfig::unlit`).
+- Texture: a box in the panel, shown once a program's `before_draw` binds a
+  texture set, and the desktop's T key draw the mesh with that texture or,
+  off, as at first, as with no binding, `before_draw` still running each
+  frame (`PlayerView::textured`, `set_textured`,
+  `PlayerViewConfig::textured`; `draw_controls` takes the view's `textured`,
+  or null for no box).
 - `vp_probe --latency`, which times each frame from its mesh to its commit
   and its draws, and `--save-meshes DIR`, which writes each mesh as
   `DIR/<frame>.ply`, both through the hooks.
@@ -289,3 +295,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `MeasureLog::add` takes the frame's mesh, for its triangles and vertices,
   in place of its triangle count: `add(stamp, view->mesh(), render)`.
 - `draw_controls` takes the view's `unlit` after its `normals`.
+- A program whose `before_draw` binds a texture set sets
+  `PlayerViewConfig::textured` to show it at start: Texture is off by
+  default.

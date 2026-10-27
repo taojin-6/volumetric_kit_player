@@ -91,6 +91,9 @@ Normals, shown pressed while on, colours the mesh by its world-space normals
 in place of lighting; and Deblock, on at first, has recon's decoder smooth
 each frame across its block faces, and while paused redoes the frame shown.
 Unlit shows the mesh's vertex colours unshaded; Normals takes precedence.
+Texture, a box shown once a program's `before_draw` binds a texture set,
+draws the mesh with that texture; off, as at first, the mesh is drawn in its
+own shading.
 The stats at the top left show the bitrate, the frame drawn, what the
 deblock did to it (its filter, T and the blocks it kept at their exact
 decode), the frames' GPU time, the worker's queue idle and queue latency, the
@@ -111,6 +114,7 @@ are the panel's shortcuts:
 | N | turns Normals on or off |
 | D | turns Deblock on or off |
 | U | turns Unlit on or off |
+| T | turns Texture on or off |
 | Esc | closes the window |
 
 With `run.frames`, the app prints the frame drawn as it exits, for CI's
@@ -126,9 +130,9 @@ machine; for the lab's, over the VPN, copy it and set `source.host` to
 `taojin-desktop.arena.andrew.cmu.edu` or `192.168.21.217`.
 
 The picture joins at the sender's newest I-frame. The panel at the bottom is
-then Normals, Deblock and Unlit over a status line: connecting, live with the
-newest record's seq and set and how long nothing has come, or reconnecting
-with why, about every second until Esc. The keys that play, pause, step and
+then Normals, Deblock and Unlit, and Texture where shown, over a status
+line: connecting, live with the newest record's seq and set and how long
+nothing has come, or reconnecting with why, about every second until Esc. The keys that play, pause, step and
 loop do nothing. The stats show the bitrate and the records a second over
 the last second.
 

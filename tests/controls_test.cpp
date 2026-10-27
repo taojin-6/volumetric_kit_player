@@ -12,11 +12,12 @@
 // shows pressed while on, hovered or not, Deblock, on at first, toggles the
 // player's deblock, on the row or, where the row would not fit, below it,
 // Unlit, off at first, flips the view's Unlit, after Deblock or below it,
-// "Pause" and "Normals" fit their buttons, a finger on the controls is
-// ImGui's, and they keep clear of the safe area; a status line too wide for
-// the work area breaks between its parts, the rows after the first indented;
-// a live player's, never started, are Normals, Deblock and Unlit over its
-// status line. The Source button is drawn only when asked for, at the work
+// Texture is drawn only when given, after Unlit, and flips the view's Texture,
+// a live player's too, "Pause" and "Normals" fit their buttons, a finger on the
+// controls is ImGui's, and they keep clear of the safe area; a status line too
+// wide for the work area breaks between its parts, the rows after the first
+// indented; a live player's, never started, are Normals, Deblock and Unlit over
+// its status line. The Source button is drawn only when asked for, at the work
 // area's top right clear of the safe area and of the stats' body, leaving the
 // controls where they were, and a tap on it is one press. The stats sit at the
 // work area's top left; a finger on their header is ImGui's and on their body
@@ -439,13 +440,14 @@ class ControlsTest : public ::testing::Test {
   }
 
   // One frame, 1/60 s after the last, with the controls over
-  // `controls_shown_`, Source while `source_shown_`, and the stats in it; a
-  // press on Source is counted.
+  // `controls_shown_`, Texture while `texture_shown_`, Source while
+  // `source_shown_`, and the stats in it; a press on Source is counted.
   void frame() {
     seconds_ += 1.0 / 60.0;
     touch_->new_frame(display(seconds_, safe_area_, width_));
     ImGui::NewFrame();
-    draw_controls(*player_, controls_shown_, normals_, unlit_);
+    draw_controls(*player_, controls_shown_, normals_, unlit_,
+                  texture_shown_ ? &textured_ : nullptr);
     if (source_shown_ && draw_source()) {
       ++source_presses_;
     }
@@ -594,8 +596,10 @@ class ControlsTest : public ::testing::Test {
 
   vp_test::Scratch scratch_;
   std::unique_ptr<StreamPlayer> player_;
-  bool normals_ = false;  // the view's shading, which the controls flip
-  bool unlit_ = false;    // the view's Unlit, which its box flips
+  bool normals_ = false;        // the view's shading, which the controls flip
+  bool unlit_ = false;          // the view's Unlit, which its box flips
+  bool textured_ = false;       // the view's Texture, which its box flips
+  bool texture_shown_ = false;  // Texture's box drawn: a texture is bound
   std::optional<PlaybackStats> stats_;
   StatsPanel panel_;
   std::optional<FrameStamp> shown_;
@@ -722,6 +726,70 @@ TEST_F(ControlsTest, UnlitFlipsTheViewsUnlitAndFollowsDeblock) {
     tap(control(vp_test::kUnlit));
     EXPECT_FALSE(unlit_);
   }
+}
+
+// Texture, a box after Unlit, is drawn only when given (a view with a texture
+// bound): without it, nothing is at its place, and 600 points across the
+// panel is narrower. Given, it is on Unlit's line, after it, 400 points
+// across, where Unlit is below the row, as 600, where both are on it; a tap
+// flips the view's Texture and nothing else, and another flips it back.
+TEST_F(ControlsTest, TextureIsDrawnOnlyWhenGivenAndATapFlipsIt) {
+  const ImGuiID texture_id =
+      ImGui::FindWindowByName(kControlsWindow)->GetID("Texture");
+  width_ = 600;
+  frame();
+  frame();
+  const float without = panel().Size.x;
+  EXPECT_NE(item_under(control(vp_test::kTexture)), texture_id);
+  texture_shown_ = true;
+  for (const std::uint32_t width : {400u, 600u}) {
+    SCOPED_TRACE(width);
+    width_ = width;
+    frame();
+    frame();
+    const ImGuiWindow& window = panel();
+    const glm::vec2 unlit = vp_test::control_top_left(window, vp_test::kUnlit);
+    const glm::vec2 texture =
+        vp_test::control_top_left(window, vp_test::kTexture);
+    EXPECT_EQ(texture.y, unlit.y);
+    EXPECT_GT(texture.x, unlit.x);
+    EXPECT_EQ(unlit.y == vp_test::control_top_left(window, 0).y, width == 600u);
+    if (width == 600u) {
+      EXPECT_GT(window.Size.x, without);
+    }
+    EXPECT_EQ(item_under(control(vp_test::kTexture)), texture_id);
+    ASSERT_FALSE(textured_);
+    tap(control(vp_test::kTexture));
+    EXPECT_TRUE(textured_);
+    EXPECT_FALSE(unlit_);
+    EXPECT_FALSE(normals_);
+    EXPECT_TRUE(player_->deblock());
+    EXPECT_TRUE(player_->playing()) << "the tap pressed Texture alone";
+    tap(control(vp_test::kTexture));
+    EXPECT_FALSE(textured_);
+  }
+}
+
+// A live player's Texture, given, is after its Unlit on the line over the
+// status line, and a tap flips the view's Texture alone.
+TEST_F(ControlsTest, ALivePlayersTextureIsAfterItsUnlit) {
+  core::Result<std::unique_ptr<StreamPlayer>> live =
+      StreamPlayer::connect({"127.0.0.1", 47801});  // never started: no I/O
+  ASSERT_TRUE(live.ok()) << live.status().message();
+  player_ = std::move(live).value();
+  texture_shown_ = true;
+  frame();
+  frame();
+  const ImGuiWindow& window = panel();
+  const glm::vec2 unlit = vp_test::live_top_left(window, vp_test::kUnlit);
+  const glm::vec2 texture = vp_test::live_top_left(window, vp_test::kTexture);
+  EXPECT_EQ(texture.y, unlit.y);
+  EXPECT_GT(texture.x, unlit.x);
+  tap(vp_test::live_middle(panel(), vp_test::kTexture));
+  EXPECT_TRUE(textured_);
+  EXPECT_FALSE(unlit_);
+  EXPECT_FALSE(normals_);
+  EXPECT_TRUE(player_->deblock());
 }
 
 // At the desktop's scale, this context's, as at the iOS shell's
