@@ -4,6 +4,39 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-27 — A program's line in the stats
+
+`FrameHooks::stats_line`, a function that returns a short text the stats
+panel shows as its last line. Why: a program built on the player has figures
+of its own, a rate it counts for one, that belong beside the player's, on the
+desktop and on iOS alike.
+
+- **On `FrameHooks`, not `PlayerViewConfig`.** Why: `make_hooks` makes the
+  program's state, so a line made there reads it; a config field is set
+  before that state exists. A program that sets `make_hooks` for the line
+  alone pays one more mesh in the ring (`mesh_wiring`'s `holds`).
+- **A line of its own, the last; compact, over the renderer's table.** Why:
+  on the view tests' shortest notched phone in landscape, a file's stats end
+  8 pt above the controls, the worker's column (194 pt) the taller, so a text
+  added to its bitrate line took them over the controls once it broke the
+  line, from 20 characters on; the renderer's column (172 pt) has room for
+  one more row, and a live view's stats end 29 pt above the controls.
+- **Up to 44 characters, in parts of up to 35 between its ` · `.** Why: on
+  that phone in landscape, file or live, such a line keeps the stats 7 or
+  8 pt above the controls and within the panel's widest; a longer one widens
+  the renderer's column past it, so its end is cut off, and breaking it would
+  take a row there is no room for. On the narrowest phone in portrait the
+  line breaks at its ` · `, and a part past 35 characters on an indented row
+  is cut off. (Sweeps on the home RTX 5090 at the iOS shell's sizes; the view
+  tests check a line at both lengths.)
+- **Read at a rebuild once a second has passed since its last read**
+  (`StatsPanel::kProgramLineRefresh`), only while the panel is open. Why: a
+  rate the program counts since its last read is then over about a second
+  while the panel stays open, as the live bitrate is, with no history kept;
+  the first read after the panel opens, or after frames stop, covers all the
+  time since the read before. Closed, nothing is rebuilt (2026-10-20).
+- **One line.** A second waits for a program that needs it.
+
 ## 2026-10-27 — Texture: the mesh with or without its binding's texture
 
 `PlayerView::textured`, the panel's Texture box and the desktop's T key:

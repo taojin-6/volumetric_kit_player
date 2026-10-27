@@ -23,15 +23,19 @@
 // work area's top left; a finger on their header is ImGui's and on their body
 // the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
-// refresh; a line too wide for the work area, the deblock's at the block
-// ceiling on a phone in portrait, breaks before its blocks, and takes one row
-// where it fits; and they are the stage means per stream frame, then the
-// renderer's rows per display frame under its rate, each table under the
-// window it covers; they name the frames' device time, queue idle and queue
-// latency, n/t or n/a where unknown, and the latency's legs, as one line when
-// compact. Compact, the worker's table leaves out its breakdowns, submit and
-// finish, the renderer's sits beside it in a work area wider than tall, the
-// rate over it, and a line breaks against the room its column has.
+// refresh; a program's line is their last, read a program-line refresh apart at
+// most, never while they are closed, and at once when given again, and with
+// none, or an empty one, they are the player's alone; a line too wide for the
+// work area, the deblock's at the block ceiling on a phone in portrait, breaks
+// before its blocks, and takes one row where it fits; and they are the stage
+// means per stream frame, then the renderer's rows per display frame under its
+// rate, each table under the window it covers; they name the frames' device
+// time, queue idle and queue latency, n/t or n/a where unknown, and the
+// latency's legs, as one line when compact. Compact, the worker's table leaves
+// out its breakdowns, submit and finish, the renderer's sits beside it in a
+// work area wider than tall, the rate and a program's line over it, the
+// worker's column as tall with the line as without, and a line breaks against
+// the room its column has.
 
 #include "volumetric_kit/player/controls.hpp"
 
@@ -42,6 +46,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -288,6 +293,28 @@ TEST(StatsLines, LiveTheyShowTheLastSecondsBitrateAndRecords) {
              kNoFigures[0], kNoFigures[1], "rate 10.0 fps · 30 rec/s"}));
 }
 
+// A program's line is the last, file and live, full and compact, the
+// player's lines as they were; an empty one adds nothing.
+TEST(StatsLines, AProgramsLineIsTheLast) {
+  constexpr const char* kLine = "saved 30 meshes/s";
+  const PlaybackStats file(a_track(), {30, 1});
+  EXPECT_EQ(stats_lines(file, std::nullopt, 0, t0, false, false, kLine),
+            (Lines{"bitrate 9.8 Mbit/s", "frame - · - kB · - k tris",
+                   "deblock - · T - mm", kNoFigures[0], kNoFigures[1],
+                   "rate 0.0 / 30 fps", kLine}));
+  EXPECT_EQ(
+      stats_lines(file, std::nullopt, 0, t0, false, /*compact=*/true, kLine),
+      (Lines{"bitrate 9.8 Mbit/s", "frame - · - kB · - k tris",
+             "deblock - · T - mm", kNoFiguresCompact, "rate 0.0 / 30 fps",
+             kLine}));
+  const PlaybackStats live({}, {});
+  Lines lines = stats_lines(live, std::nullopt, 0, t0, true, false);
+  lines.emplace_back(kLine);
+  EXPECT_EQ(stats_lines(live, std::nullopt, 0, t0, true, false, kLine), lines);
+  EXPECT_EQ(stats_lines(file, std::nullopt, 0, t0, false, false, ""),
+            stats_lines(file, std::nullopt, 0, t0, false, false));
+}
+
 TEST(LiveStatusLine, SaysConnectingThenWhyItReconnects) {
   LiveStatus status;
   status.address = "lab:47801";
@@ -441,7 +468,8 @@ class ControlsTest : public ::testing::Test {
 
   // One frame, 1/60 s after the last, with the controls over
   // `controls_shown_`, Texture while `texture_shown_`, Source while
-  // `source_shown_`, and the stats in it; a press on Source is counted.
+  // `source_shown_`, and the stats in it, with `program_line_`; a press on
+  // Source is counted.
   void frame() {
     seconds_ += 1.0 / 60.0;
     touch_->new_frame(display(seconds_, safe_area_, width_));
@@ -451,7 +479,8 @@ class ControlsTest : public ::testing::Test {
     if (source_shown_ && draw_source()) {
       ++source_presses_;
     }
-    panel_.draw(*stats_, shown_, triangles_, render_, now(), player_->live());
+    panel_.draw(*stats_, shown_, triangles_, render_, now(), player_->live(),
+                program_line_);
     ImGui::Render();
   }
 
@@ -607,6 +636,7 @@ class ControlsTest : public ::testing::Test {
   // The frame the status line names; none, "loading".
   std::optional<FrameStamp> controls_shown_;
   bool breakdowns_ = false;  // take() adds one, submit and finish
+  std::function<std::string()> program_line_;  // a program's line; none
   gfx::FrameMetrics render_;
   bool source_shown_ = false;
   int source_presses_ = 0;
@@ -1002,6 +1032,112 @@ TEST_F(ControlsTest, TheFiguresHoldUntilTheRefresh) {
   EXPECT_EQ(panel_.lines()[1], "frame P · 2.0 kB · 1 k tris");
 }
 
+// A program's line, each read numbered: the last from the first rebuild it
+// is given at, and read again only at the first rebuild once
+// StatsPanel::kProgramLineRefresh has passed; the rebuilds before keep the
+// text it gave.
+TEST_F(ControlsTest, AProgramsLineIsReadOnceASecond) {
+  const double refresh =
+      std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  const double line_refresh =
+      std::chrono::duration<double>(StatsPanel::kProgramLineRefresh).count();
+  const Lines players = panel_.lines();  // SetUp's, with none
+  int asked = 0;
+  program_line_ = [&asked] { return "read " + std::to_string(++asked); };
+  seconds_ += refresh;
+  frame();
+  ASSERT_EQ(asked, 1);
+  ASSERT_EQ(panel_.lines().size(), players.size() + 1);
+  EXPECT_EQ(panel_.lines().back(), "read 1");
+  const double read_at = seconds_;
+  // A rebuild within the line's refresh shows the frame taken, not a read.
+  take(0);
+  seconds_ += refresh;
+  frame();
+  EXPECT_EQ(panel_.lines()[1], "frame I · 2.0 kB · 1 k tris") << "rebuilt";
+  EXPECT_EQ(panel_.lines().back(), "read 1");
+  EXPECT_EQ(asked, 1);
+  while (asked == 1 && seconds_ - read_at < 2.0 * line_refresh) {
+    frame();
+  }
+  ASSERT_EQ(asked, 2);
+  EXPECT_GT(seconds_ - read_at, line_refresh - 1e-3) << "read too soon";
+  EXPECT_LT(seconds_ - read_at, line_refresh + 0.5 * refresh)
+      << "not read at the first rebuild past its refresh";
+  EXPECT_EQ(panel_.lines().back(), "read 2");
+}
+
+// Closed, the panel reads no program's line; open again a second later, it
+// reads one at once.
+TEST_F(ControlsTest, AClosedPanelReadsNoProgramsLine) {
+  int asked = 0;
+  program_line_ = [&asked] { return "read " + std::to_string(++asked); };
+  seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  frame();
+  ASSERT_EQ(asked, 1);
+  tap(middle(stats_header()));
+  ASSERT_FALSE(panel_.open());
+  for (int tick = 0; tick < 120; ++tick) {  // 2 s
+    frame();
+  }
+  EXPECT_EQ(asked, 1) << "read while closed";
+  touch_->touch_began(1, middle(stats_header()));
+  touch_->touch_ended(1);
+  for (int i = 0; i < 4 && !panel_.open(); ++i) {
+    frame();
+  }
+  ASSERT_TRUE(panel_.open());
+  EXPECT_EQ(asked, 2);
+  EXPECT_EQ(panel_.lines().back(), "read 2");
+}
+
+// With no program's line, or one that says nothing, the lines are the
+// player's alone; a line no longer given is gone from the next rebuild.
+TEST_F(ControlsTest, WithNoProgramsLineTheLinesAreThePlayers) {
+  const double refresh =
+      std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  const Lines players = stats_lines(*stats_, std::nullopt, 0, now(), false);
+  EXPECT_EQ(panel_.lines(), players) << "none given";
+  program_line_ = [] { return std::string(); };
+  seconds_ += refresh;
+  frame();
+  EXPECT_EQ(panel_.lines(), players) << "an empty text";
+  program_line_ = [] { return std::string("note"); };
+  seconds_ +=
+      std::chrono::duration<double>(StatsPanel::kProgramLineRefresh).count();
+  frame();
+  ASSERT_EQ(panel_.lines().back(), "note");
+  program_line_ = nullptr;
+  seconds_ += refresh;
+  frame();
+  EXPECT_EQ(panel_.lines(), players) << "no longer given";
+}
+
+// A program's line withdrawn and given again within a
+// StatsPanel::kProgramLineRefresh of its last read is read again at once, as
+// a line given for the first time is.
+TEST_F(ControlsTest, AProgramsLineGivenAgainIsReadAtOnce) {
+  const double refresh =
+      std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  int asked = 0;
+  const std::function<std::string()> counting = [&asked] {
+    return "read " + std::to_string(++asked);
+  };
+  program_line_ = counting;
+  seconds_ += refresh;
+  frame();
+  ASSERT_EQ(asked, 1);
+  program_line_ = nullptr;
+  seconds_ += refresh;
+  frame();
+  ASSERT_NE(panel_.lines().back(), "read 1");
+  program_line_ = counting;
+  seconds_ += refresh;
+  frame();
+  EXPECT_EQ(asked, 2);
+  EXPECT_EQ(panel_.lines().back(), "read 2");
+}
+
 // The deblock line at the block ceiling, the widest it gets. At this
 // context's scale, 288 points is the narrowest phone's 375 in portrait at the
 // iOS shell's 1.3, and 625 the shortest notched one's 812 in landscape. Full,
@@ -1103,6 +1239,41 @@ TEST_F(ControlsTest, CompactALineBreaksAgainstTheRoomItsColumnHas) {
                     off_height + ImGui::GetTextLineHeightWithSpacing());
     EXPECT_LE(body->ContentSize.x + 2.0f * body->WindowPadding.x,
               work.x - 2.0f * ImGui::GetStyle().DisplaySafeAreaPadding.x);
+  }
+}
+
+// Compact, a program's line sits over the renderer's table, in its column: in
+// portrait (288 points) and beside the worker's (560), the worker's column is
+// as tall with the line as without, and the renderer's one row taller.
+TEST_F(ControlsTest, CompactAProgramsLineIsInTheRenderersColumn) {
+  panel_ = StatsPanel(/*compact=*/true);
+  take(0);
+  // Each column's height at `width` with `line`, past the line's refresh.
+  // Columns take their sizes on their second frame.
+  const auto heights_at = [&](std::uint32_t width, const char* line) {
+    program_line_ = [line] { return std::string(line); };
+    width_ = width;
+    seconds_ +=
+        std::chrono::duration<double>(StatsPanel::kProgramLineRefresh).count();
+    for (int i = 0; i < 3; ++i) {
+      frame();
+    }
+    const ImGuiWindow* const worker = stats_column("##worker");
+    const ImGuiWindow* const render = stats_column("##render");
+    EXPECT_NE(worker, nullptr);
+    EXPECT_NE(render, nullptr);
+    return std::make_pair(worker->ContentSize.y, render->ContentSize.y);
+  };
+  for (const std::uint32_t width : {288u, 560u}) {
+    SCOPED_TRACE(width);
+    const std::pair<float, float> none = heights_at(width, "");
+    const std::pair<float, float> with =
+        heights_at(width, "saved 1,234 meshes · 61.2 MB/s");
+    ASSERT_EQ(panel_.lines().back(), "saved 1,234 meshes · 61.2 MB/s");
+    EXPECT_FLOAT_EQ(with.first, none.first) << "the worker's column";
+    EXPECT_FLOAT_EQ(with.second,
+                    none.second + ImGui::GetTextLineHeightWithSpacing())
+        << "the renderer's column";
   }
 }
 

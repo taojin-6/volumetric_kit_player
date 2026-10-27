@@ -9,8 +9,10 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "volumetric_kit/core/base/stage_metrics.hpp"
@@ -135,6 +137,7 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 /// //        "rate 29.8 fps · 30 rec/s"}
 /// // compact: the GPU and latency lines as one, "GPU 6.30 ms · latency
 /// //          9.8 ms"
+/// // with a program's line, "saved 30 meshes/s", that line last
 /// @endcode
 /// @param stats      The figures.
 /// @param shown      The newest frame drawn; empty before the first.
@@ -142,6 +145,8 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 /// @param now        The time, for the rates.
 /// @param live       Whether they are a live player's (StreamPlayer::live).
 /// @param compact    Whether for the compact stats (StatsPanel), a phone's.
+/// @param program_line  A program's line (FrameHooks::stats_line); empty,
+///                      none.
 /// @return The track's mean bitrate, or live its bitrate over the last
 ///         second (`-` when unknown); the frame's type (I for a key record,
 ///         else P), payload and triangles (each `-` before the first); what
@@ -160,13 +165,14 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 ///         published, published to taken and taken to presented (each `-`
 ///         while unknown); and the
 ///         rate frames are taken at, over the nominal when it is known, or
-///         live beside the records a second. Compact, the device time and
-///         the latency share one line.
+///         live beside the records a second; and @p program_line, unless
+///         empty. Compact, the device time and the latency share one line.
 std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
                                      Playback::Clock::time_point now, bool live,
-                                     bool compact = false);
+                                     bool compact = false,
+                                     std::string_view program_line = {});
 
 /// @brief The line over the stats' render table.
 ///
@@ -197,27 +203,31 @@ std::string display_line(const gfx::FrameMetrics& render);
 /// While it is open its figures are rebuilt every @ref kRefresh, so the
 /// digits stay readable; while it is closed nothing is rebuilt, but the
 /// @ref PlaybackStats it reads keeps counting, so it reopens with current
-/// figures. Not thread-safe: the drawing thread owns it.
+/// figures. A program's line, given, is read at a rebuild once
+/// @ref kProgramLineRefresh has passed since its last read, and shown until
+/// the next. Not thread-safe: the drawing thread owns it.
 ///
 /// **Compact**, for a phone: the worker's table holds its stages read, decode
 /// and mesh alone (no breakdown, "submit", "wait: GPU" or "finish"), the
 /// renderer's leaves out its loop's "submit" and names @ref kDrawRow "draw",
 /// each table's window is stated
 /// on a shorter line ("per stream frame · 30/30 timed"), the one "GPU ·
-/// latency" line and the rate sit over the renderer's table, and, in a work
-/// area wider than tall, the renderer's table is beside the worker's, whose
-/// lines have the width it leaves them.
+/// latency" line, the rate and a program's line sit over the renderer's
+/// table, and, in a work area wider than tall, the renderer's table is beside
+/// the worker's, whose lines have the width it leaves them.
 ///
 /// @code
 /// StatsPanel panel(/*compact=*/is_phone);
 /// overlay.new_frame();
 /// panel.draw(stats, shown, triangles, profiler.metrics(),
-///            PlaybackStats::Clock::now(), player.live());
+///            PlaybackStats::Clock::now(), player.live(), hooks.stats_line);
 /// @endcode
 class StatsPanel {
  public:
   /// How often the figures are rebuilt while it is open.
   static constexpr std::chrono::milliseconds kRefresh{250};
+  /// The least time between two reads of a program's line.
+  static constexpr std::chrono::milliseconds kProgramLineRefresh{1000};
 
   /// @param compact  Whether it is drawn compact (above), for a phone.
   explicit StatsPanel(bool compact = false) : compact_(compact) {}
@@ -233,10 +243,13 @@ class StatsPanel {
   /// @param now        The time, for the rates and the rebuild.
   /// @param live       Whether they are a live player's, for
   ///                   @ref stats_lines.
+  /// @param program_line  A program's line (FrameHooks::stats_line), for
+  ///                      @ref stats_lines; empty, none.
   /// @pre An ImGui frame is open on the view's context.
   void draw(const PlaybackStats& stats, const std::optional<FrameStamp>& shown,
             std::uint32_t triangles, const gfx::FrameMetrics& render,
-            Playback::Clock::time_point now, bool live);
+            Playback::Clock::time_point now, bool live,
+            const std::function<std::string()>& program_line = {});
 
   /// @return Whether it is open.
   bool open() const noexcept { return open_; }
@@ -274,6 +287,8 @@ class StatsPanel {
   gfx::ui::StageWindow render_window_;
   float render_width_ = 0.0f;  // compact: the renderer's column, last frame
   std::optional<Playback::Clock::time_point> rebuilt_;
+  std::string program_line_;  // a program's line, as last read
+  std::optional<Playback::Clock::time_point> program_line_read_;
 };
 
 }  // namespace volumetric_kit::player

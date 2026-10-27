@@ -9,36 +9,35 @@
 // still presents; 0 x 0 skips without blocking; a step moves one frame; the
 // worker's failure surfaces from frame(); a tap on Normals switches the mesh's
 // flags from lit to normals and back, and frames keep presenting; a tap on
-// Deblock while paused shows the frame shown rebuilt, and the stats say so;
-// the panel
-// draws at a phone's scale; in portrait and in landscape, at the iOS shell's
-// sizes, its controls fit a phone and a fingertip, as does Source, clear of
-// them, and so do the compact stats, clear of both, with the profiler's draw
-// row and its loop's in the renderer's table, the draw's device half timing
-// the whole pass; the worker and the draw are device-timed while the stats
-// are open, not while they are closed, and the worker as a measurement fixes
-// it whatever they show, the draw then only while they are open and the
-// timing is not off, each frame taken counted once; Source is off by
-// default, and a tap on it is one request; ui_wants_pointer() follows a finger
-// on the panel, which controls_test.cpp checks on the stats' header and body;
-// each mesh is drawn behind a GPU wait on its ready value, reached, with no
-// error the layer reports; a frame drawn is stamped from its due time to its
-// present call, and the stats show its latency; the renderer's figures are
-// the profiler's while the draw is timed (render_metrics), and none while it
-// is not; and teardown mid-playback, the profiler attached, is clean. With
-// hooks (frame_hooks.hpp): after_mesh's extra reaches the commit and
-// before_draw, and is released only once every display frame that drew its
-// frame has run on the GPU; a bound image's set drawn with kHybridMeshLit
-// cleared shows the image's value in an offscreen pixel (record_mesh), with
-// Texture on, and with it off, as at first, the pixel a binding of no set
-// draws, its Texture box shown once a set is bound, flipping it and staying;
-// a binding of no set applies with Texture off as on; Unlit,
-// from the panel's box or set_unlit, shows the vertex colour unshaded, and
-// off it is shaded; a commit hook holds and skips frames; and a before_draw
-// failure stops the view. A live view
-// presents, on the two images its swapchain asks for (checked on the host). The
-// view makes its own shared device, validated as the test policy asks, so the
-// layer's errors fail the test. The tests skip where the loader offers no
+// Deblock while paused shows the frame shown rebuilt, and the stats say so; the
+// panel draws at a phone's scale; in portrait and in landscape, at the iOS
+// shell's sizes, its controls fit a phone and a fingertip, as does Source,
+// clear of them, and so do the compact stats, clear of both, with a program's
+// line or none, a live view's too, with the profiler's draw row and its loop's
+// in the renderer's table, the draw's device half timing the whole pass; the
+// worker and the draw are device-timed while the stats are open, not while they
+// are closed, and the worker as a measurement fixes it whatever they show, the
+// draw then only while they are open and the timing is not off, each frame
+// taken counted once; Source is off by default, and a tap on it is one request;
+// ui_wants_pointer() follows a finger on the panel, which controls_test.cpp
+// checks on the stats' header and body; each mesh is drawn behind a GPU wait on
+// its ready value, reached, with no error the layer reports; a frame drawn is
+// stamped from its due time to its present call, and the stats show its
+// latency; the renderer's figures are the profiler's while the draw is timed
+// (render_metrics), and none while it is not; and teardown mid-playback, the
+// profiler attached, is clean. With hooks (frame_hooks.hpp): after_mesh's extra
+// reaches the commit and before_draw, and is released only once every display
+// frame that drew its frame has run on the GPU; a bound image's set drawn with
+// kHybridMeshLit cleared shows the image's value in an offscreen pixel
+// (record_mesh), with Texture on, and with it off, as at first, the pixel a
+// binding of no set draws, its Texture box shown once a set is bound, flipping
+// it and staying; a binding of no set applies with Texture off as on; Unlit,
+// from the panel's box or set_unlit, shows the vertex colour unshaded, and off
+// it is shaded; a commit hook holds and skips frames; the hooks' stats line is
+// the stats' last; and a before_draw failure stops the view. A live view
+// presents, on the two images its swapchain asks for (checked on the host).
+// The view makes its own shared device, validated as the test policy asks, so
+// the layer's errors fail the test. The tests skip where the loader offers no
 // headless surface (NVIDIA's ICD), but fail on Apple, where MoltenVK has one.
 // MoltenVK plans two queue families, so the mesh's buffers are CONCURRENT and
 // read across. One family, EXCLUSIVE and read in place, is tested on the host
@@ -95,6 +94,8 @@
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/recon/networking/stream_server.hpp"
+#include "volumetric_kit/recon/stream/stream_reader.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace {
@@ -112,6 +113,7 @@ using volumetric_kit::player::HookContext;
 using volumetric_kit::player::kControlsWindow;
 using volumetric_kit::player::kSourceWindow;
 using volumetric_kit::player::kStatsWindow;
+using volumetric_kit::player::LiveState;
 using volumetric_kit::player::MakeHooks;
 using volumetric_kit::player::PlayerView;
 using volumetric_kit::player::PlayerViewConfig;
@@ -139,6 +141,10 @@ constexpr Phone kPhones[] = {{kPhone, {}},
 // The iOS shell's sizes (PlayerViewController.mm).
 constexpr float kPhoneScale = 1.3f;
 constexpr float kFingertip = 44.0f;
+// A program's line (FrameHooks::stats_line) as long as DECISIONS.md says fits
+// a phone: 44 characters, its longer part 35.
+constexpr const char* kProgramLine =
+    "saving · 1,234 meshes in 12.3 s at 61.2 MB/s";
 // How long a frame the test let go may take to arrive (the worker builds its
 // kernels first); how long one it did not is waited for; and the longest a
 // call that must not block takes.
@@ -171,6 +177,18 @@ TEST(PlayerViewAllocation, InvalidCreateDiagnosticIsContained) {
   EXPECT_EQ(result.status().domain(), core::Status::Code::OutOfMemory);
   EXPECT_EQ(PlayerView::create({}, kExtent, nullptr).status().domain(),
             core::Status::Code::InvalidArgument);
+}
+
+// Hooks with `line` as their stats line; none for an empty one.
+MakeHooks line_hooks(const std::string& line) {
+  if (line.empty()) {
+    return {};
+  }
+  return [line](const HookContext&) {
+    FrameHooks hooks;
+    hooks.stats_line = [line] { return line; };
+    return core::Result<FrameHooks>(std::move(hooks));
+  };
 }
 
 class PlayerViewTest : public core::test::VulkanTest {
@@ -347,8 +365,53 @@ class PlayerViewTest : public core::test::VulkanTest {
     if (!playing) {
       opened.value()->pause();
     }
-    core::Result<std::unique_ptr<PlayerView>> view = PlayerView::create(
-        surface_, extent_, std::move(opened).value(), config());
+    return view_of(std::move(opened).value());
+  }
+
+  // A live view on an `extent_` drawable of `server`, which serves the tests'
+  // stream from `reader`, with the touch half bound to its controls, shown
+  // each record in turn as `server` publishes it; false with a failure
+  // recorded.
+  bool make_live_view(recon::stream::StreamReader& reader,
+                      recon::networking::StreamServer& server) {
+    core::Result<std::unique_ptr<StreamPlayer>> live =
+        StreamPlayer::connect({"127.0.0.1", server.port()});
+    EXPECT_TRUE(live.ok()) << live.status().message();
+    if (!live.ok() || !view_of(std::move(live).value()) || !tick_until([&] {
+          return view_->player().live_status().state == LiveState::kConnected;
+        })) {
+      return false;
+    }
+    recon::stream::Position pos = reader.begin();
+    recon::stream::Record record;
+    std::vector<std::uint8_t> payload;
+    for (std::uint64_t index = 0;; ++index) {
+      const core::Result<bool> more = reader.next(&pos, &record);
+      EXPECT_TRUE(more.ok()) << more.status().message();
+      if (!more.ok() || !*more) {
+        return more.ok();
+      }
+      const core::Status read = reader.read(record, &payload);
+      EXPECT_TRUE(read.ok()) << read.message();
+      const core::Status published =
+          read.ok()
+              ? server.publish(record.info, payload.data(), payload.size())
+              : read;
+      EXPECT_TRUE(published.ok()) << published.message();
+      if (!published.ok() || !tick_until([&] {
+            return view_->shown().has_value() && view_->shown()->index == index;
+          })) {
+        ADD_FAILURE() << "record " << index << " not shown";
+        return false;
+      }
+    }
+  }
+
+  // The view of `player` on an `extent_` drawable, with the touch half bound
+  // to its controls; false with a failure recorded.
+  bool view_of(std::unique_ptr<StreamPlayer> player) {
+    core::Result<std::unique_ptr<PlayerView>> view =
+        PlayerView::create(surface_, extent_, std::move(player), config());
     EXPECT_TRUE(view.ok()) << view.status().message();
     if (!view.ok()) {
       return false;
@@ -359,6 +422,42 @@ class PlayerViewTest : public core::test::VulkanTest {
     EXPECT_TRUE(touch.ok()) << touch.status().message();
     touch_ = touch.ok() ? std::move(touch).value() : nullptr;
     return touch_ != nullptr;
+  }
+
+  // At the iOS shell's sizes (PlayerViewController.mm), with Source and the
+  // compact stats, as on a phone.
+  void size_as_a_phone() {
+    pixels_per_point_ = kPhonePixelsPerPoint;
+    ui_scale_ = kPhoneScale;
+    ui_min_frame_height_ = kFingertip;
+    source_button_ = true;
+    compact_stats_ = true;
+  }
+
+  // The compact stats on a phone, as the last frame laid them out: the
+  // panel, its GPU and latency line included, fits across, ends above the
+  // controls and starts below Source, and its header is a fingertip tall,
+  // left of Source.
+  void expect_stats_fit() {
+    ImGui::SetCurrentContext(view_->ui_context());
+    const ImGuiWindow* const header = ImGui::FindWindowByName(kStatsWindow);
+    ImGuiWindow* const body = stats_body();
+    const ImGuiWindow* const controls =
+        ImGui::FindWindowByName(kControlsWindow);
+    const ImGuiWindow* const source = ImGui::FindWindowByName(kSourceWindow);
+    ASSERT_NE(header, nullptr);
+    ASSERT_NE(body, nullptr);
+    ASSERT_NE(controls, nullptr);
+    ASSERT_NE(source, nullptr);
+    // The widths ImGui fits the body and the header to.
+    EXPECT_LE(body->ContentSize.x + 2.0f * body->WindowPadding.x,
+              widest_panel());
+    EXPECT_LE(header->ContentSize.x + 2.0f * header->WindowPadding.x,
+              widest_panel());
+    EXPECT_LE(body->Pos.y + body->Size.y, controls->Pos.y);
+    EXPECT_LE(source->Pos.y + source->Size.y, body->Pos.y);
+    EXPECT_LE(header->Pos.x + header->Size.x, source->Pos.x);
+    EXPECT_GE(header->Size.y, kFingertip);
   }
 
   // One tick, as a shell makes it: the touch half's frame, `safe_area_` kept
@@ -930,47 +1029,58 @@ TEST_F(PlayerViewTest, ATapOnSourceIsOneRequest) {
 
 // On the narrowest phone in portrait and the shortest with a notch in
 // landscape, at the iOS shell's sizes, Source and the compact stats included,
-// playing, past a refresh so the stats hold a frame's figures: their tables
-// have the worker's three stages and the renderer's draw row and its loop's
-// frame wait and present, the panel, its GPU and latency line included, fits
-// across, ends above the controls and starts below Source, and its header is
-// a fingertip tall, left of Source.
+// playing, past a refresh so the stats hold a frame's figures, with no
+// program's line and with kProgramLine: their tables have the worker's three
+// stages and the renderer's draw row and its loop's frame wait and present,
+// and they fit the phone (expect_stats_fit).
 TEST_F(PlayerViewTest, TheStatsFitAPhone) {
-  pixels_per_point_ = kPhonePixelsPerPoint;
-  ui_scale_ = kPhoneScale;
-  ui_min_frame_height_ = kFingertip;
-  source_button_ = true;
-  compact_stats_ = true;
-  for (const Phone& phone : kPhones) {
-    SCOPED_TRACE(phone.pixels.width);
-    touch_.reset();
-    view_.reset();
-    extent_ = phone.pixels;
-    safe_area_ = phone.safe_area;
-    ASSERT_TRUE(make_view());
-    ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
-    tick_for(2 * StatsPanel::kRefresh);
-    ImGui::SetCurrentContext(view_->ui_context());
-    const ImGuiWindow* const header = ImGui::FindWindowByName(kStatsWindow);
-    ImGuiWindow* const body = stats_body();
-    const ImGuiWindow* const controls =
-        ImGui::FindWindowByName(kControlsWindow);
-    const ImGuiWindow* const source = ImGui::FindWindowByName(kSourceWindow);
-    ASSERT_NE(header, nullptr);
-    ASSERT_NE(body, nullptr);
-    ASSERT_NE(controls, nullptr);
-    ASSERT_NE(source, nullptr);
-    EXPECT_EQ(stats_rows("stages"), 3);
-    EXPECT_EQ(stats_rows("render"), 3);
-    // The widths ImGui fits the body and the header to.
-    EXPECT_LE(body->ContentSize.x + 2.0f * body->WindowPadding.x,
-              widest_panel());
-    EXPECT_LE(header->ContentSize.x + 2.0f * header->WindowPadding.x,
-              widest_panel());
-    EXPECT_LE(body->Pos.y + body->Size.y, controls->Pos.y);
-    EXPECT_LE(source->Pos.y + source->Size.y, body->Pos.y);
-    EXPECT_LE(header->Pos.x + header->Size.x, source->Pos.x);
-    EXPECT_GE(header->Size.y, kFingertip);
+  size_as_a_phone();
+  for (const std::string line : {"", kProgramLine}) {
+    make_hooks_ = line_hooks(line);
+    for (const Phone& phone : kPhones) {
+      SCOPED_TRACE(std::to_string(phone.pixels.width) + " \"" + line + "\"");
+      touch_.reset();
+      view_.reset();
+      extent_ = phone.pixels;
+      safe_area_ = phone.safe_area;
+      ASSERT_TRUE(make_view());
+      ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+      tick_for(2 * StatsPanel::kRefresh);
+      ImGui::SetCurrentContext(view_->ui_context());
+      EXPECT_EQ(stats_rows("stages"), 3);
+      EXPECT_EQ(stats_rows("render"), 3);
+      expect_stats_fit();
+    }
+  }
+}
+
+// A live view's compact stats on the phones of TheStatsFitAPhone, the tests'
+// stream served from 127.0.0.1 and shown record by record, past a refresh,
+// with no program's line and with kProgramLine: they fit the phone.
+TEST_F(PlayerViewTest, ALiveViewsStatsFitAPhone) {
+  size_as_a_phone();
+  core::Result<std::unique_ptr<recon::stream::StreamReader>> reader =
+      recon::stream::StreamReader::open(path_);
+  ASSERT_TRUE(reader.ok()) << reader.status().message();
+  for (const std::string line : {"", kProgramLine}) {
+    make_hooks_ = line_hooks(line);
+    for (const Phone& phone : kPhones) {
+      SCOPED_TRACE(std::to_string(phone.pixels.width) + " \"" + line + "\"");
+      extent_ = phone.pixels;
+      safe_area_ = phone.safe_area;
+      recon::networking::ServerOptions options;
+      options.host = "127.0.0.1";
+      options.port = 0;  // a free one: other tests serve at the same time
+      core::Result<std::unique_ptr<recon::networking::StreamServer>> server =
+          recon::networking::StreamServer::start((*reader)->session(), options);
+      ASSERT_TRUE(server.ok()) << server.status().message();
+      ASSERT_TRUE(make_live_view(**reader, **server));
+      tick_for(2 * StatsPanel::kRefresh);
+      expect_stats_fit();
+      // The view goes before its sender.
+      touch_.reset();
+      view_.reset();
+    }
   }
 }
 
@@ -1679,6 +1789,22 @@ TEST_F(PlayerViewTest, ACommitHookHoldsAndSkipsFrames) {
   EXPECT_EQ(*asked, 6);
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
+}
+
+// The hooks' stats line, each read numbered, is the stats' last: the view
+// hands it to its panel.
+TEST_F(PlayerViewTest, TheHooksStatsLineIsTheStatsLast) {
+  const auto asked = std::make_shared<int>(0);
+  make_hooks_ = [asked](const HookContext&) {
+    FrameHooks hooks;
+    hooks.stats_line = [asked] { return "read " + std::to_string(++*asked); };
+    return core::Result<FrameHooks>(std::move(hooks));
+  };
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(present());
+  ASSERT_GE(*asked, 1);
+  EXPECT_EQ(view_->stats_panel().lines().back(),
+            "read " + std::to_string(*asked));
 }
 
 // A before_draw failure stops the view with its status: the tick that drew

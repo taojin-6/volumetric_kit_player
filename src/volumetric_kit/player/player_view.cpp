@@ -189,7 +189,8 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   // Detached, the profiler's last figures are old: the renderer's table is
   // empty.
   stats_panel_.draw(stats_, shown_, shown_triangles_, render_metrics(),
-                    PlaybackStats::Clock::now(), player_->live());
+                    PlaybackStats::Clock::now(), player_->live(),
+                    hooks_.stats_line);
   // The worker times its frames' device work while the panel shows it,
   // unless a measurement fixed the timing.
   if (!device_timing_) {

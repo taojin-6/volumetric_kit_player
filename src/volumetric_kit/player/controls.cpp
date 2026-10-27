@@ -279,7 +279,8 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
                                      Playback::Clock::time_point now, bool live,
-                                     bool compact) {
+                                     bool compact,
+                                     std::string_view program_line) {
   const std::optional<double> mbit =
       live ? stats.rolling_mbit_per_s(now) : stats.mean_mbit_per_s();
   std::string frame = "frame - · - kB · - k tris";
@@ -335,6 +336,9 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
                     leg(means.present_ms));
   }
   lines.push_back(std::move(rate));
+  if (!program_line.empty()) {
+    lines.emplace_back(program_line);
+  }
   return lines;
 }
 
@@ -345,7 +349,8 @@ std::string display_line(const gfx::FrameMetrics& render) {
 void StatsPanel::draw(const PlaybackStats& stats,
                       const std::optional<FrameStamp>& shown,
                       std::uint32_t triangles, const gfx::FrameMetrics& render,
-                      Playback::Clock::time_point now, bool live) {
+                      Playback::Clock::time_point now, bool live,
+                      const std::function<std::string()>& program_line) {
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
   if (!gfx::ui::begin_collapsible_panel(kStatsWindow, "Stats",
                                         viewport->WorkPos, &open_)) {
@@ -353,7 +358,17 @@ void StatsPanel::draw(const PlaybackStats& stats,
   }
   // After the header, so the frame a tap opens it on is current.
   if (!rebuilt_ || now - *rebuilt_ >= kRefresh) {
-    lines_ = stats_lines(stats, shown, triangles, now, live, compact_);
+    // A program's line, read a kProgramLineRefresh apart at most.
+    if (!program_line) {
+      program_line_.clear();
+      program_line_read_.reset();
+    } else if (!program_line_read_ ||
+               now - *program_line_read_ >= kProgramLineRefresh) {
+      program_line_ = program_line();
+      program_line_read_ = now;
+    }
+    lines_ = stats_lines(stats, shown, triangles, now, live, compact_,
+                         program_line_);
     rows_ = stats.stage_means();
     window_ = {stats.window_frames(), stats.timed_frames(), "stream frame"};
     display_ = display_line(render);
@@ -383,10 +398,11 @@ void StatsPanel::draw(const PlaybackStats& stats,
   // Compact: the worker's table holds its stages, read, decode and mesh, and
   // the renderer's its rows but its loop's submit, and a work area wider than
   // tall has room for the renderer's beside the worker's, not below. The
-  // device's line and the rate, the last two, sit over the display's rate,
-  // so each column holds as many rows as before they came, and a line that
-  // breaks leaves the worker's column no taller; beside, a line takes the
-  // width the renderer's column left as of the last frame (DECISIONS.md).
+  // worker's column holds the bitrate, frame and deblock lines; the rest, the
+  // device's line, the rate and a program's line, sit over the display's
+  // rate, where a phone in landscape has room for them (DECISIONS.md).
+  // Beside, a worker's line takes the width the renderer's column left as of
+  // the last frame.
   const auto kept = [](const std::vector<core::StageRow>& rows,
                        std::initializer_list<const char*> dropped) {
     std::vector<core::StageRow> kept_rows;
@@ -416,7 +432,7 @@ void StatsPanel::draw(const PlaybackStats& stats,
   const bool beside = viewport->WorkSize.x > viewport->WorkSize.y;
   const float worker_width =
       beside ? width - render_width_ - style.ItemSpacing.x : width;
-  const std::size_t worker_lines = lines_.size() < 2 ? 0 : lines_.size() - 2;
+  const std::size_t worker_lines = std::min<std::size_t>(lines_.size(), 3);
   begin_column("##worker");
   for (std::size_t i = 0; i < worker_lines; ++i) {
     draw_parted_line(lines_[i], worker_width);
