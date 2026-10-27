@@ -150,21 +150,24 @@ bool draw_box(const char* label, bool* on) {
   return ImGui::Checkbox(label, on);
 }
 
-// Deblock, then Unlit, each a box after the line's last control, or below it
-// when the line would not fit the work area with it.
-void draw_boxes(StreamPlayer& player, bool& unlit) {
+// Deblock, Unlit and, given, Texture, each a box after the line's last
+// control, or below it when the line would not fit the work area with it.
+void draw_boxes(StreamPlayer& player, bool& unlit, bool* textured) {
   bool on = player.deblock();
   if (draw_box("Deblock", &on)) {
     player.set_deblock(on);
   }
   draw_box("Unlit", &unlit);
+  if (textured != nullptr) {
+    draw_box("Texture", textured);
+  }
 }
 
-// A file's controls: Play/Pause, Step, Loop, Normals, Deblock and Unlit;
-// returns its status line.
+// A file's controls: Play/Pause, Step, Loop, Normals, Deblock, Unlit and,
+// given, Texture; returns its status line.
 std::string draw_file_controls(StreamPlayer& player,
                                const std::optional<FrameStamp>& shown,
-                               bool& normals, bool& unlit) {
+                               bool& normals, bool& unlit, bool* textured) {
   const ImVec2 button = button_size();
   // One ID for both labels, so a press that flips the label completes.
   if (ImGui::Button(player.playing() ? "Pause###play" : "Play###play",
@@ -186,14 +189,14 @@ std::string draw_file_controls(StreamPlayer& player,
   }
   ImGui::SameLine();
   draw_normals(normals);
-  draw_boxes(player, unlit);
+  draw_boxes(player, unlit, textured);
   return status_line(shown, player.frame_count(), player.playing(), loop);
 }
 
 }  // namespace
 
 void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
-                   bool& normals, bool& unlit) {
+                   bool& normals, bool& unlit, bool* textured) {
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(
       ImVec2(viewport->WorkPos.x + 0.5f * viewport->WorkSize.x,
@@ -204,10 +207,10 @@ void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
     std::string status;
     if (player.live()) {
       draw_normals(normals);
-      draw_boxes(player, unlit);
+      draw_boxes(player, unlit, textured);
       status = live_status_line(player.live_status(), Playback::Clock::now());
     } else {
-      status = draw_file_controls(player, shown, normals, unlit);
+      status = draw_file_controls(player, shown, normals, unlit, textured);
     }
     draw_parted_line(status, text_room());
   }
