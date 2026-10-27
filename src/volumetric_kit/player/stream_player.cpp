@@ -563,6 +563,7 @@ core::Status StreamPlayer::record_frame(Next next, Pass& pass,
   }
   FrameStamp& stamp = next.stamp;
   stamp.timed = time_next_frame();
+  VKC_TRY(finish_hook_batch_before_growing(next.slot, next.size, stamp));
   core::CommandBatch batch = new_batch(stamp.timed);
   core::Result<codec::PendingDecode> decode =
       record_decode(batch, next.slot, next.size, stamp);
@@ -613,6 +614,7 @@ core::Result<bool> StreamPlayer::finish_frame(InFlight frame, Pass& pass) {
     }
   }
   // About 0: the GPU kept up, and its fence signalled before it was due.
+  // after_mesh's batch too, before the finish, which may grow the grid.
   VKC_TRY(wait_batch(frame));
   core::StageMetrics recon;
   core::StageMetrics* const timed = frame.stamp.timed ? &recon : nullptr;
@@ -765,6 +767,8 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
         if (!read.ok()) {
           return end(read);
         }
+        VKC_TRY(finish_hook_batch_before_growing(
+            *slot, static_cast<std::size_t>(record.size), stamp));
         core::CommandBatch batch = new_batch(stamp.timed);
         core::Result<codec::PendingDecode> decode = record_decode(
             batch, *slot, static_cast<std::size_t>(record.size), stamp);
@@ -844,7 +848,7 @@ core::Result<bool> StreamPlayer::finish_decode(InFlight decoding,
                                                FrameStamp* newest,
                                                std::uint32_t* blocks) {
   FrameStamp& stamp = decoding.stamp;
-  VKC_TRY(wait_batch(decoding));
+  VKC_TRY(wait_batch(decoding));  // as at a file's frame's finish
   core::StageMetrics recon;
   const core::Result<codec::Finished> done = [&] {
     const core::StageScope host(stamp.stages, "finish");
@@ -893,6 +897,9 @@ core::Status StreamPlayer::wait_batch(InFlight& frame) {
   {
     const core::WaitScope wait(&frame.stamp.stages, "wait: GPU");
     VKC_TRY(frame.batch.pending.wait());
+    // Before the frame's finish, which may grow the grid: after_mesh's
+    // batch went to the queue before this one, so it has run (DECISIONS.md).
+    VKC_TRY(finish_hook_batch());
   }
   note_batch(frame.batch, frame.stamp);
   return {};
@@ -1160,6 +1167,25 @@ core::Status StreamPlayer::run_after_mesh(mesh::DeviceMesh& mesh,
   }
   mesh.ready = ready;
   return {};
+}
+
+core::Status StreamPlayer::finish_hook_batch_before_growing(
+    const core::HostSlot& slot, std::size_t size, FrameStamp& stamp) {
+  if (hooks_ == nullptr || !hooks_->after_mesh || !grid_.has_value()) {
+    return {};
+  }
+  // codec::record_growing grows the grid, before it records, only for a
+  // frame of more blocks than its heap (FrameInfo::block_count against
+  // num_blocks). A header it cannot read it refuses before any grow.
+  const core::Result<codec::FrameInfo> info =
+      codec::read_frame_info(slot.data(), size);
+  if (!info.ok() || info->block_count <=
+                        static_cast<std::uint32_t>(grid_->grid().num_blocks)) {
+    return {};
+  }
+  // May block, on such a frame alone, whose grow waits for the queue anyway.
+  const core::StageScope host(stamp.stages, "decode");
+  return finish_hook_batch();
 }
 
 core::Status StreamPlayer::finish_hook_batch() {

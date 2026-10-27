@@ -42,8 +42,8 @@ vkc_require_core(0.24.0 VULKAN CONFIG)
 # The stream reader, the codec's decode grid and its deblock, Marching Cubes,
 # the mesh exchange and the live stream's client. Its tests, examples and
 # -Werror stay off in a subproject, so its library's core floor is the one
-# checked; its own core pin is the player's. The pin is recon main at #294's
-# merge (6b390ac). The tiers the player links are as at #277's merge (a23f7f5):
+# checked; its own core pin is the player's. The pin is recon main at #295's
+# merge (b9bb7d2). The tiers the player links are as at #277's merge (a23f7f5):
 # a frame decoded and meshed in the caller's batch (codec::record_growing,
 # finish_growing; mesh::MarchingCubes::record_extract, finish, abandon),
 # DeviceMesh::ready, Decoder::claim_input and last_rounds, and the reads
@@ -56,11 +56,14 @@ vkc_require_core(0.24.0 VULKAN CONFIG)
 #
 # #293 adds MeshExchange's CommitDecision, whose kDrop a commit hook's skip
 # takes (frame_hooks.hpp). #294 changes none of the tiers the player links; its
-# library asks for core 0.24.0.
+# library asks for core 0.24.0. #295 makes volume::VoxelHashMap's
+# record_compaction const, so an after_mesh hook, handed the grid read-only,
+# records work that reads it; the worker finishes that batch before the grid
+# grows (DECISIONS.md).
 FetchContent_Declare(
   volumetric_kit_recon
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG 6b390acc0d077e5ac9f92f64023d5ef83e52969d)
+  GIT_TAG b9bb7d2a45d4dc9116e653aea11333e75806d876)
 FetchContent_MakeAvailable(volumetric_kit_recon)
 
 # --- volumetric_kit_gfx ------------------------------------------------------

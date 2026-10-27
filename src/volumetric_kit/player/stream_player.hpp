@@ -209,10 +209,13 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 ///
 /// **Hooks** (frame_hooks.hpp), given to @ref start: before each publish the
 /// worker runs after_mesh into a batch of its own, submitted behind the
-/// mesh's ready point, whose point the published mesh then carries, and
-/// finishes that batch at the next after_mesh, so no host wait is added; a
-/// park waits it out too, and runs on_park, and the unpark on_resume. With
-/// no hooks, a file's frame stays one batch.
+/// mesh's ready point, whose point the published mesh then carries. It
+/// finishes that batch before anything may grow the grid: at the next
+/// frame's finish, once that frame's batch, queued after it, has resolved,
+/// so no host wait is added; and before recording a frame that outgrows the
+/// grid, whose grow waits for the queue anyway. A park waits it out too, and
+/// runs on_park, and the unpark on_resume. With no hooks, a file's frame
+/// stays one batch.
 ///
 /// **Threads.** The controls (@ref play, @ref pause, @ref step,
 /// @ref set_loop, @ref set_deblock), their reads, @ref park, @ref unpark and
@@ -493,8 +496,8 @@ class StreamPlayer {
   core::Result<recon::codec::PendingDecode> record_decode(
       core::CommandBatch& batch, const core::HostSlot& slot, std::size_t size,
       FrameStamp& stamp);
-  // Wait for `frame`'s batch, as its "wait: GPU" row, then note it
-  // (note_batch).
+  // Wait for `frame`'s batch, then finish after_mesh's (finish_hook_batch),
+  // both as its "wait: GPU" row, then note it (note_batch).
   core::Status wait_batch(InFlight& frame);
   // Build grid_ for the stream of the record of `size` bytes at the start of
   // `slot`, the first frame read.
@@ -548,12 +551,20 @@ class StreamPlayer {
   // that batch's; the batch before is finished first. A failure is fatal.
   core::Status run_after_mesh(recon::mesh::DeviceMesh& mesh, FrameStamp& stamp);
   // Wait for after_mesh's batch in flight, if any, so its readbacks are
-  // written: the worker's, before the next after_mesh and at its end. The
-  // first failure, kept for every later call.
+  // written: the worker's, before anything may grow the grid it was given
+  // (a frame's finish, and below), before the next after_mesh and at its
+  // end. The first failure, kept for every later call.
   core::Status finish_hook_batch();
+  // Before recording the record of `size` bytes at the start of `slot` into
+  // grid_: finish_hook_batch, inside `stamp`'s "decode" row, when its frame
+  // holds more blocks than grid_'s heap, which codec::record_growing grows
+  // first. A failure is fatal.
+  core::Status finish_hook_batch_before_growing(const core::HostSlot& slot,
+                                                std::size_t size,
+                                                FrameStamp& stamp);
   // An idle park's finish_hook_batch, until `deadline`: false if it passed
   // first, the batch left in flight for a later park or the worker. A failure
-  // reaches status() at the worker's next after_mesh or its end.
+  // reaches status() at the worker's next finish_hook_batch or its end.
   bool finish_hook_batch_by(std::chrono::steady_clock::time_point deadline);
   // Under hook_mutex_: wait up to `timeout_ns` for the batch in flight, if
   // any; false if it still runs, kept for a later wait. Otherwise it goes,

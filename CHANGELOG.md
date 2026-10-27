@@ -170,12 +170,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - build: the iOS app needs iOS 26 or newer: `cmake --preset ios` targets
   iOS 26.0, the family's iOS floor.
 - build: the player pins core #61's merge (84dc584, 0.24.0), gfx main at
-  #158's merge (0106609) and recon main at #294's merge (6b390ac), and
+  #158's merge (0106609) and recon main at #295's merge (b9bb7d2), and
   requires core 0.24.0, the floor recon's library asks for. A commit hook's
   skip is recon's `CommitDecision::kDrop` (recon #293). The view presents
   FIFO as gfx's default (gfx #150), naming no mode. A set a program's
   `before_draw` binds is made with `HookContext::commit_allocator` too, as
   gfx's `HybridMeshTextureSet::create` takes an allocator (gfx #158).
+- An `after_mesh` hook may record work that reads the grid it is handed,
+  such as a compaction of its map (recon #295's const
+  `VoxelHashMap::record_compaction`). The worker finishes the hook's batch
+  before anything grows the grid: at the next frame's finish, where it has
+  already run, and before recording a frame that outgrows the grid, rather
+  than only at the next `after_mesh`, after a grow had refused the batch and
+  stopped playback. The tests' streams add `outgrow.vrst`.
 - The extractor's ring is two slots past the frames in flight
   (`mesh_wiring`); the draw waits on the GPU for the mesh's `ready` value;
   a park waits out a batch in flight and finishes its frame at unpark.

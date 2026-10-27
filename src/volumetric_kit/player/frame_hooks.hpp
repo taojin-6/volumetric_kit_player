@@ -73,10 +73,14 @@ struct FrameHooks {
   /// grid that mesh was made from, read-only. `batch` is on the worker's
   /// device; the player submits it after the hook, waiting on the mesh's
   /// ready point, and the published mesh's ready point becomes the batch's.
-  /// The player finishes the batch, its readbacks written, before the next
-  /// after_mesh, before a park returns true or a stop returns, before a
-  /// frame's stamp goes unpublished at a stop, and before a live
-  /// connection's grid gives way to the next's.
+  /// The player finishes the batch, its readbacks written, before anything
+  /// grows the grid or replaces it with a live connection's next, before
+  /// the next after_mesh, before a park returns true or a stop returns, and
+  /// before a frame's stamp goes unpublished at a stop. So the batch may
+  /// record work that reads the grid, such as a compaction of its map
+  /// (recon's volume::VoxelHashMap::record_compaction, which binds the
+  /// map's own kernel sets until the batch has resolved); the next frame's
+  /// batch, queued after it, is ordered after it by the core's barriers.
   /// A host wait inside stalls playback; a failure stops it with its status.
   std::function<core::Status(
       core::CommandBatch& batch, const recon::volume::VoxelBlockGrid& grid,

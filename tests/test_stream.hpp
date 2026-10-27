@@ -15,9 +15,10 @@
 /// at twice the voxel size; and with frame kGrownFrame a sphere so large that
 /// its blocks nearly fill the decode grid the first frame's sizes (recon's
 /// make_decode_grid: 8,192 slots), so the table refuses some on the device,
-/// and recon grows the grid and decodes it again at its finish. A copy of
-/// one of them, and a stream that opens but never decodes, in a scratch
-/// directory of the test's own.
+/// and recon grows the grid and decodes it again at its finish; and with
+/// that frame a sphere of more blocks than those slots, so recon grows the
+/// grid before it records the frame. A copy of one of them, and a stream
+/// that opens but never decodes, in a scratch directory of the test's own.
 
 #include <gtest/gtest.h>
 #include <unistd.h>
@@ -46,13 +47,15 @@ constexpr std::uint64_t kGapNs = 500'000'000;
 
 // The streams' names in vp_write_stream's directory: the sphere; with frame
 // kEmptyFrame holding no block, so meshing nothing; as a true SDF, unmasked;
-// at twice the voxel size; and with frame kGrownFrame, a key after the pause,
-// past what the decode grid's table can place.
+// at twice the voxel size; with frame kGrownFrame, a key after the pause,
+// past what the decode grid's table can place; and with that frame past the
+// decode grid's slots.
 constexpr const char* kStream = "sphere.vrst";
 constexpr const char* kEmptyFrameStream = "empty_frame.vrst";
 constexpr const char* kTrueSdfStream = "true_sdf.vrst";
 constexpr const char* kCoarseStream = "coarse.vrst";
 constexpr const char* kGrowStream = "grow.vrst";
+constexpr const char* kOutgrowStream = "outgrow.vrst";
 constexpr std::uint64_t kEmptyFrame = 1;
 constexpr std::uint64_t kGrownFrame = kGapAt;
 // The decode grid the first frame sizes (recon's make_decode_grid: 1,024
