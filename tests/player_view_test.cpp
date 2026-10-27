@@ -33,8 +33,9 @@
 // Texture on, and with it off, as at first, the pixel a binding of no set
 // draws, its Texture box shown once a set is bound and flipping it; Unlit,
 // from the panel's box or set_unlit, shows the vertex colour unshaded, and
-// off it is shaded; a commit hook holds and skips frames; and a before_draw
-// failure stops the view. A live view
+// off it is shaded; a commit hook holds and skips frames; the hooks' status
+// field follows the stats' bitrate; and a before_draw failure stops the view.
+// A live view
 // presents, on the two images its swapchain asks for (checked on the host). The
 // view makes its own shared device, validated as the test policy asks, so the
 // layer's errors fail the test. The tests skip where the loader offers no
@@ -1617,6 +1618,25 @@ TEST_F(PlayerViewTest, ACommitHookHoldsAndSkipsFrames) {
   EXPECT_EQ(*asked, 6);
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
+}
+
+// The hooks' status field, each read numbered, shows after the stats'
+// bitrate: the view hands it to its panel.
+TEST_F(PlayerViewTest, TheHooksStatusFieldFollowsTheStatsBitrate) {
+  const auto asked = std::make_shared<int>(0);
+  make_hooks_ = [asked](const HookContext&) {
+    FrameHooks hooks;
+    hooks.status_field = [asked] { return "aux " + std::to_string(++*asked); };
+    return core::Result<FrameHooks>(std::move(hooks));
+  };
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(present());
+  ASSERT_GE(*asked, 1);
+  const std::string line = view_->stats_panel().lines().at(0);
+  const std::string field = " · aux " + std::to_string(*asked);
+  ASSERT_GT(line.size(), field.size());
+  EXPECT_EQ(line.compare(0, 8, "bitrate "), 0) << line;
+  EXPECT_EQ(line.substr(line.size() - field.size()), field) << line;
 }
 
 // A before_draw failure stops the view with its status: the tick that drew

@@ -6,13 +6,15 @@
 /// @file frame_hooks.hpp
 /// @brief A caller's per-frame work, which the player runs: on the worker
 ///        after each mesh, as the drawing thread takes a mesh, before the
-///        draw, and at a park; and the take that the view and a consumer with
-///        no view share (@ref FrameTaker).
+///        draw, and at a park; a status field for the view's stats panel;
+///        and the take that the view and a consumer with no view share
+///        (@ref FrameTaker).
 
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
@@ -106,6 +108,13 @@ struct FrameHooks {
   /// In StreamPlayer::unpark, before the worker's next step; only after an
   /// on_park.
   std::function<void()> on_resume;
+  /// Draw thread, at a rebuild of the view's stats panel while it is open,
+  /// at most once a @ref StatsPanel::kFieldRefresh: a program's status
+  /// field, a short text the panel shows after the bitrate, as one more part
+  /// of its line, until the next call ("bitrate 9.7 Mbit/s · last 1 s · aux
+  /// 0.6 Mbit/s"), on the desktop and on iOS alike. Empty, or an empty text,
+  /// shows nothing; with no view it is never called.
+  std::function<std::string()> status_field;
 };
 
 /// @brief What hooks are made with, valid during MakeHooks' call alone: a

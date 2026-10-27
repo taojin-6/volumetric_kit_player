@@ -15,7 +15,7 @@ paced by the stream's timestamps or by the sender.
 > an orbit camera, a controls panel and a stats panel on any window system;
 > the per-frame hooks (`src/volumetric_kit/player/frame_hooks.hpp`), a
 > caller's work on the worker after each mesh, at the take and before the
-> draw; the desktop app (`apps/volumetric_kit_player/`), a GLFW window over
+> draw, and a status field in the stats panel; the desktop app (`apps/volumetric_kit_player/`), a GLFW window over
 > the view; and the iOS app (`apps/ios/`), a UIKit shell over the view.
 
 [AGENTS.md](AGENTS.md) is the working guide for agents, and `CLAUDE.md`

@@ -279,7 +279,7 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
                                      Playback::Clock::time_point now, bool live,
-                                     bool compact) {
+                                     bool compact, std::string_view field) {
   const std::optional<double> mbit =
       live ? stats.rolling_mbit_per_s(now) : stats.mean_mbit_per_s();
   std::string frame = "frame - · - kB · - k tris";
@@ -323,9 +323,14 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
   if (live) {
     rate += " · " + fixed(stats.records_per_s(now), 0) + " rec/s";
   }
-  std::vector<std::string> lines{"bitrate " + (mbit ? fixed(*mbit, 1) : "-") +
-                                     " Mbit/s" + (live ? " · last 1 s" : ""),
-                                 std::move(frame), std::move(deblock)};
+  std::string bitrate = "bitrate " + (mbit ? fixed(*mbit, 1) : "-") +
+                        " Mbit/s" + (live ? " · last 1 s" : "");
+  if (!field.empty()) {
+    bitrate += kSeparator;
+    bitrate += field;
+  }
+  std::vector<std::string> lines{std::move(bitrate), std::move(frame),
+                                 std::move(deblock)};
   if (compact) {
     lines.push_back(gpu + " · " + latency);
   } else {
@@ -345,7 +350,8 @@ std::string display_line(const gfx::FrameMetrics& render) {
 void StatsPanel::draw(const PlaybackStats& stats,
                       const std::optional<FrameStamp>& shown,
                       std::uint32_t triangles, const gfx::FrameMetrics& render,
-                      Playback::Clock::time_point now, bool live) {
+                      Playback::Clock::time_point now, bool live,
+                      const std::function<std::string()>& field) {
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
   if (!gfx::ui::begin_collapsible_panel(kStatsWindow, "Stats",
                                         viewport->WorkPos, &open_)) {
@@ -353,7 +359,15 @@ void StatsPanel::draw(const PlaybackStats& stats,
   }
   // After the header, so the frame a tap opens it on is current.
   if (!rebuilt_ || now - *rebuilt_ >= kRefresh) {
-    lines_ = stats_lines(stats, shown, triangles, now, live, compact_);
+    // A program's field, read a kFieldRefresh apart at most.
+    if (!field) {
+      field_.clear();
+      field_read_.reset();
+    } else if (!field_read_ || now - *field_read_ >= kFieldRefresh) {
+      field_ = field();
+      field_read_ = now;
+    }
+    lines_ = stats_lines(stats, shown, triangles, now, live, compact_, field_);
     rows_ = stats.stage_means();
     window_ = {stats.window_frames(), stats.timed_frames(), "stream frame"};
     display_ = display_line(render);

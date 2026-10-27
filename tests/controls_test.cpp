@@ -23,7 +23,10 @@
 // work area's top left; a finger on their header is ImGui's and on their body
 // the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
-// refresh; a line too wide for the work area, the deblock's at the block
+// refresh; a program's status field is one more part of the bitrate's line,
+// read once a field refresh at most and never while they are closed, and with
+// none, or an empty one, the bitrate is its line alone; a line too wide for
+// the work area, the deblock's at the block
 // ceiling on a phone in portrait, breaks before its blocks, and takes one row
 // where it fits; and they are the stage means per stream frame, then the
 // renderer's rows per display frame under its rate, each table under the
@@ -42,6 +45,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -288,6 +292,27 @@ TEST(StatsLines, LiveTheyShowTheLastSecondsBitrateAndRecords) {
              kNoFigures[0], kNoFigures[1], "rate 10.0 fps · 30 rec/s"}));
 }
 
+// A program's status field is one more part of the bitrate's line, file and
+// live, full and compact, the other lines as they were; an empty one adds
+// nothing.
+TEST(StatsLines, AProgramsFieldIsOneMorePartOfTheBitratesLine) {
+  constexpr const char* kField = "aux 0.6 Mbit/s";
+  const PlaybackStats file(a_track(), {30, 1});
+  EXPECT_EQ(stats_lines(file, std::nullopt, 0, t0, false, false, kField),
+            (Lines{"bitrate 9.8 Mbit/s · aux 0.6 Mbit/s",
+                   "frame - · - kB · - k tris", "deblock - · T - mm",
+                   kNoFigures[0], kNoFigures[1], "rate 0.0 / 30 fps"}));
+  EXPECT_EQ(
+      stats_lines(file, std::nullopt, 0, t0, false, /*compact=*/true, kField),
+      (Lines{"bitrate 9.8 Mbit/s · aux 0.6 Mbit/s", "frame - · - kB · - k tris",
+             "deblock - · T - mm", kNoFiguresCompact, "rate 0.0 / 30 fps"}));
+  const PlaybackStats live({}, {});
+  EXPECT_EQ(stats_lines(live, std::nullopt, 0, t0, true, false, kField)[0],
+            "bitrate - Mbit/s · last 1 s · aux 0.6 Mbit/s");
+  EXPECT_EQ(stats_lines(file, std::nullopt, 0, t0, false, false, "")[0],
+            "bitrate 9.8 Mbit/s");
+}
+
 TEST(LiveStatusLine, SaysConnectingThenWhyItReconnects) {
   LiveStatus status;
   status.address = "lab:47801";
@@ -441,7 +466,8 @@ class ControlsTest : public ::testing::Test {
 
   // One frame, 1/60 s after the last, with the controls over
   // `controls_shown_`, Texture while `texture_shown_`, Source while
-  // `source_shown_`, and the stats in it; a press on Source is counted.
+  // `source_shown_`, and the stats in it, with `field_`; a press on Source is
+  // counted.
   void frame() {
     seconds_ += 1.0 / 60.0;
     touch_->new_frame(display(seconds_, safe_area_, width_));
@@ -451,7 +477,8 @@ class ControlsTest : public ::testing::Test {
     if (source_shown_ && draw_source()) {
       ++source_presses_;
     }
-    panel_.draw(*stats_, shown_, triangles_, render_, now(), player_->live());
+    panel_.draw(*stats_, shown_, triangles_, render_, now(), player_->live(),
+                field_);
     ImGui::Render();
   }
 
@@ -606,7 +633,8 @@ class ControlsTest : public ::testing::Test {
   std::uint32_t triangles_ = 0;
   // The frame the status line names; none, "loading".
   std::optional<FrameStamp> controls_shown_;
-  bool breakdowns_ = false;  // take() adds one, submit and finish
+  bool breakdowns_ = false;             // take() adds one, submit and finish
+  std::function<std::string()> field_;  // a program's status field; none
   gfx::FrameMetrics render_;
   bool source_shown_ = false;
   int source_presses_ = 0;
@@ -1000,6 +1028,87 @@ TEST_F(ControlsTest, TheFiguresHoldUntilTheRefresh) {
   seconds_ += refresh;
   frame();
   EXPECT_EQ(panel_.lines()[1], "frame P · 2.0 kB · 1 k tris");
+}
+
+// A program's status field, each read numbered: shown after the bitrate from
+// the first rebuild it is given at, and read again only at the first rebuild
+// once StatsPanel::kFieldRefresh has passed; the rebuilds before keep the text
+// it gave.
+TEST_F(ControlsTest, AProgramsStatusFieldFollowsTheBitrateReadOnceASecond) {
+  const double refresh =
+      std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  const double field_refresh =
+      std::chrono::duration<double>(StatsPanel::kFieldRefresh).count();
+  const std::string bitrate = panel_.lines()[0];  // SetUp's, with none
+  int asked = 0;
+  field_ = [&asked] { return "aux " + std::to_string(++asked); };
+  seconds_ += refresh;
+  frame();
+  ASSERT_EQ(asked, 1);
+  EXPECT_EQ(panel_.lines()[0], bitrate + " · aux 1");
+  const double read_at = seconds_;
+  // A rebuild within the field's refresh shows the frame taken, not a read.
+  take(0);
+  seconds_ += refresh;
+  frame();
+  EXPECT_EQ(panel_.lines()[1], "frame I · 2.0 kB · 1 k tris") << "rebuilt";
+  EXPECT_EQ(panel_.lines()[0], bitrate + " · aux 1");
+  EXPECT_EQ(asked, 1);
+  while (asked == 1 && seconds_ - read_at < 2.0 * field_refresh) {
+    frame();
+  }
+  ASSERT_EQ(asked, 2);
+  EXPECT_GT(seconds_ - read_at, field_refresh - 1e-3) << "read too soon";
+  EXPECT_LT(seconds_ - read_at, field_refresh + refresh + 2.0 / 60.0)
+      << "not read at the first rebuild past its refresh";
+  EXPECT_EQ(panel_.lines()[0], bitrate + " · aux 2");
+}
+
+// Closed, the panel reads no status field; open again a second later, it
+// reads one at once.
+TEST_F(ControlsTest, AClosedPanelReadsNoStatusField) {
+  const std::string bitrate = panel_.lines()[0];  // SetUp's, with none
+  int asked = 0;
+  field_ = [&asked] { return "aux " + std::to_string(++asked); };
+  seconds_ += std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  frame();
+  ASSERT_EQ(asked, 1);
+  tap(middle(stats_header()));
+  ASSERT_FALSE(panel_.open());
+  for (int tick = 0; tick < 120; ++tick) {  // 2 s
+    frame();
+  }
+  EXPECT_EQ(asked, 1) << "read while closed";
+  touch_->touch_began(1, middle(stats_header()));
+  touch_->touch_ended(1);
+  for (int i = 0; i < 4 && !panel_.open(); ++i) {
+    frame();
+  }
+  ASSERT_TRUE(panel_.open());
+  EXPECT_EQ(asked, 2);
+  EXPECT_EQ(panel_.lines()[0], bitrate + " · aux 2");
+}
+
+// With no status field, or one that says nothing, the bitrate is its line
+// alone; a field no longer given is gone from the next rebuild.
+TEST_F(ControlsTest, WithNoStatusFieldTheBitrateIsItsLineAlone) {
+  const double refresh =
+      std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  const std::string bitrate =
+      stats_lines(*stats_, std::nullopt, 0, now(), false)[0];
+  EXPECT_EQ(panel_.lines()[0], bitrate) << "none given";
+  field_ = [] { return std::string(); };
+  seconds_ += refresh;
+  frame();
+  EXPECT_EQ(panel_.lines()[0], bitrate) << "an empty text";
+  field_ = [] { return std::string("aux"); };
+  seconds_ += std::chrono::duration<double>(StatsPanel::kFieldRefresh).count();
+  frame();
+  ASSERT_EQ(panel_.lines()[0], bitrate + " · aux");
+  field_ = nullptr;
+  seconds_ += refresh;
+  frame();
+  EXPECT_EQ(panel_.lines()[0], bitrate) << "no longer given";
 }
 
 // The deblock line at the block ceiling, the widest it gets. At this

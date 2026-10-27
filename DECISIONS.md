@@ -4,6 +4,26 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-27 — A program's status field after the bitrate
+
+`FrameHooks::status_field`, a function that returns a short text the stats
+panel shows after the bitrate. Why: a program built on the player has
+figures of its own, a rate it counts for one, that belong beside the
+player's, on the desktop and on iOS alike.
+
+- **On `FrameHooks`, not `PlayerViewConfig`.** Why: `make_hooks` makes the
+  program's state, so a field made there reads it; a config field is set
+  before that state exists.
+- **One more part of the bitrate's line,** not a line of its own. Why: it
+  breaks with that line where a phone is too narrow, and the panel's lines,
+  and the compact layout's split of them, stay as they are.
+- **Read at a rebuild once a second has passed since its last read**
+  (`StatsPanel::kFieldRefresh`), only while the panel is open. Why: a rate
+  over the time since its last read then covers a second, as the live
+  bitrate does, with no history kept by the program; and closed, nothing is
+  rebuilt (2026-10-20).
+- **One field.** A second waits for a program that needs it.
+
 ## 2026-10-27 — Texture: the mesh with or without its binding's texture
 
 `PlayerView::textured`, the panel's Texture box and the desktop's T key: off,
