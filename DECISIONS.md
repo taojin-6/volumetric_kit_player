@@ -6,12 +6,16 @@ is implemented.
 
 ## 2026-10-27 — Texture: the mesh with or without its binding's texture
 
-`PlayerView::textured`, the panel's Texture box and the desktop's T key: off,
-by default, the mesh is in its own shading (the owner: "I think default is
-mesh shading"), a binding that names a texture set left out whole so the frame
-draws as with no binding; before_draw still runs each frame, so its program
-keeps its state and on shows the texture at once; the box shows only once a
-set has been bound, so a program that binds none has no box that does nothing.
+`PlayerView::textured`, the panel's Texture box and the desktop's T key:
+
+- Off at start, so the mesh starts in its own shading (the owner: "I think
+  default is mesh shading").
+- Off leaves a binding that names a set out whole, as its clears go with its
+  texture: the frame is the one a program with no binding draws.
+- before_draw still runs while off, so its program keeps its state and
+  Texture on shows the texture at once.
+- The box shows only once a set has been bound, so a program that binds none
+  has no box that does nothing.
 
 ## 2026-10-26 — after_mesh's batch finishes before the grid grows
 

@@ -132,9 +132,9 @@ machine; for the lab's, over the VPN, copy it and set `source.host` to
 The picture joins at the sender's newest I-frame. The panel at the bottom is
 then Normals, Deblock and Unlit, and Texture where shown, over a status
 line: connecting, live with the newest record's seq and set and how long
-nothing has come, or reconnecting with why, about every second until Esc. The keys that play, pause, step and
-loop do nothing. The stats show the bitrate and the records a second over
-the last second.
+nothing has come, or reconnecting with why, about every second until Esc.
+The keys that play, pause, step and loop do nothing. The stats show the
+bitrate and the records a second over the last second.
 
 `"$root/build/tests/vp_probe" --connect host[:port]` plays a live stream
 with no window, and prints the status and stats lines once a second (below).

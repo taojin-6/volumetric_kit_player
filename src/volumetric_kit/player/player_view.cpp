@@ -180,8 +180,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   // 2. The controls, Source if asked for, and the stats, as of the last frame
   // drawn.
   overlay_.new_frame();
-  // Texture once a before_draw has bound a texture set, so a program that
-  // binds none has no box that does nothing.
+  // Texture's box once a before_draw has bound a set.
   draw_controls(*player_, shown_, normals_, unlit_,
                 texture_bound_ ? &textured_ : nullptr);
   if (source_button_ && draw_source()) {
@@ -210,10 +209,8 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
     took = true;
   }
   const core::Status drawn = drawable(exchange_);
-  // 4. The frame's binding: the view's own (Unlit) and before_draw's, which
-  // runs with Texture off too, so its program keeps its state; off, a binding
-  // that names a texture set is left out whole, so the frame draws as with
-  // none.
+  // 4. The frame's binding: the view's own (Unlit) and before_draw's, but
+  // not a set and its clears while Texture is off (textured()).
   const recon::mesh::DeviceMesh& live = exchange_.live();
   const bool draws = live.valid() && !live.empty();
   binding_ = DrawBinding{};
