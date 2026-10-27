@@ -614,10 +614,8 @@ core::Result<bool> StreamPlayer::finish_frame(InFlight frame, Pass& pass) {
     }
   }
   // About 0: the GPU kept up, and its fence signalled before it was due.
+  // after_mesh's batch too, before the finish, which may grow the grid.
   VKC_TRY(wait_batch(frame));
-  // Before the finish, which may grow the grid: after_mesh's batch went to
-  // the queue before this frame's, so it has run (DECISIONS.md).
-  VKC_TRY(finish_hook_batch());
   core::StageMetrics recon;
   core::StageMetrics* const timed = frame.stamp.timed ? &recon : nullptr;
   core::Status refused;
@@ -850,10 +848,7 @@ core::Result<bool> StreamPlayer::finish_decode(InFlight decoding,
                                                FrameStamp* newest,
                                                std::uint32_t* blocks) {
   FrameStamp& stamp = decoding.stamp;
-  VKC_TRY(wait_batch(decoding));
-  // As at a file's frame's finish: after_mesh's batch went to the queue
-  // before this decode's, so it has run.
-  VKC_TRY(finish_hook_batch());
+  VKC_TRY(wait_batch(decoding));  // as at a file's frame's finish
   core::StageMetrics recon;
   const core::Result<codec::Finished> done = [&] {
     const core::StageScope host(stamp.stages, "finish");
@@ -902,6 +897,9 @@ core::Status StreamPlayer::wait_batch(InFlight& frame) {
   {
     const core::WaitScope wait(&frame.stamp.stages, "wait: GPU");
     VKC_TRY(frame.batch.pending.wait());
+    // Before the frame's finish, which may grow the grid: after_mesh's
+    // batch went to the queue before this one, so it has run (DECISIONS.md).
+    VKC_TRY(finish_hook_batch());
   }
   note_batch(frame.batch, frame.stamp);
   return {};

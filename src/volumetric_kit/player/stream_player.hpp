@@ -496,8 +496,8 @@ class StreamPlayer {
   core::Result<recon::codec::PendingDecode> record_decode(
       core::CommandBatch& batch, const core::HostSlot& slot, std::size_t size,
       FrameStamp& stamp);
-  // Wait for `frame`'s batch, as its "wait: GPU" row, then note it
-  // (note_batch).
+  // Wait for `frame`'s batch, then finish after_mesh's (finish_hook_batch),
+  // both as its "wait: GPU" row, then note it (note_batch).
   core::Status wait_batch(InFlight& frame);
   // Build grid_ for the stream of the record of `size` bytes at the start of
   // `slot`, the first frame read.

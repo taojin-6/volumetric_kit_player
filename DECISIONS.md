@@ -20,9 +20,10 @@ record and finish, either of which may grow the grid (`codec::record_growing`,
     before `finish_growing`, which grows the grid when the table cannot place
     the frame; a live record's decode alike. The hook's batch went to the
     same queue before that frame's, so it has run: the wait finds it
-    complete, and the core counts no host wait. On a steady frame this is
-    the finish the next `after_mesh` did, a step earlier: still one submit
-    more a frame and no blocking wait.
+    complete, and the core counts no host wait. It is timed in the frame's
+    "wait: GPU" row, so a wait that did block would show there. On a steady
+    frame this is the finish the next `after_mesh` did, a step earlier:
+    still one submit more a frame and no blocking wait.
   - Before recording a frame of more blocks than the grid's heap
     (`codec::read_frame_info`'s `block_count` against the grid's
     `num_blocks`), the frame `record_growing` grows the grid for before it
@@ -58,10 +59,10 @@ record and finish, either of which may grow the grid (`codec::record_growing`,
   and reads the count back, over the tests' grow stream, which grows the
   grid at a frame's finish, and a new outgrow stream (`outgrow.vrst`), whose
   frame `kGrownFrame` has more blocks than the first grid's slots, so it
-  grows the grid at its record: stepped, played, and live, every frame comes
-  and each count is its frame's blocks, under the validation layer and its
-  synchronization validation. Without the finish at a frame's finish, or at
-  the record, its tests fail with the core's refusal.
+  grows the grid at its record: stepped, played, after a rebuild, and live,
+  every frame comes and each count is its frame's blocks, under the
+  validation layer and its synchronization validation. Without the finish at
+  a frame's finish, or at the record, its tests fail with the core's refusal.
 
 ## 2026-10-26 — The desktop app and vp_probe are library calls
 

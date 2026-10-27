@@ -36,8 +36,9 @@
 // for it no longer than its timeout, returning false with no on_park and the
 // hold kept; an after_mesh failure stops playback; and a batch that reads the
 // grid, a compaction of its map, finishes before a frame grows the grid, at
-// its finish or, outgrowing it, at its record, stepped or played, so
-// playback goes on and each counts its frame's blocks. vp_probe --worker's
+// its finish or, outgrowing it, at its record, stepped, played or after a
+// rebuild, so playback goes on and each counts its frame's blocks.
+// vp_probe --worker's
 // consumer (FrameTaker): a held frame keeps the one before, the file at most
 // two frames ahead; a skipped frame is never drawn and the ring one mesh
 // deeper never runs out; a second skip before a draw holds; a commit failure
@@ -526,6 +527,78 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     EXPECT_LT(stop_time(*player), kPrompt);
     EXPECT_TRUE(player->status().ok()) << player->status().message();
     expect_grew_at_grown_frame(expect_compacted(blocks));
+  }
+
+  // As step_through_compacting, played with loop off: each frame is
+  // recorded as soon as the one before is published, whose after_mesh batch
+  // may still run. Frame kGrownFrame's stamp in `grown`.
+  void play_through_compacting(bool grown_at_record,
+                               std::optional<FrameStamp>* grown) {
+    const std::vector<std::uint32_t> blocks = block_counts();
+    ASSERT_NO_FATAL_FAILURE(expect_grown_at(blocks, grown_at_record));
+    compacting_hooks();
+    StreamPlayer* player = start(/*playing=*/true);
+    ASSERT_NE(player, nullptr);
+    player->set_loop(false);  // one pass, then the last frame holds
+    FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+    for (std::uint64_t i = 0; i < kFrames; ++i) {
+      const std::optional<FrameStamp> frame = take_with(taker);
+      ASSERT_TRUE(frame.has_value())
+          << "no frame " << i << ": " << player->status().message();
+      EXPECT_EQ(frame->index, i);
+      if (i == vp_test::kGrownFrame) {
+        *grown = frame;
+      }
+    }
+    EXPECT_LT(stop_time(*player), kPrompt);
+    EXPECT_TRUE(player->status().ok()) << player->status().message();
+    expect_grew_at_grown_frame(expect_compacted(blocks));
+  }
+
+  // As step_through_compacting, with frame kGrownFrame - 1 rebuilt by a
+  // deblock toggle while paused there, with no frame in flight: the
+  // rebuild's after_mesh batch is the one in flight when frame kGrownFrame,
+  // stepped to next, grows the grid. The rebuilt frame's batch counts its
+  // blocks too, on the first grid.
+  void rebuild_then_grow_compacting(bool grown_at_record) {
+    const std::vector<std::uint32_t> blocks = block_counts();
+    ASSERT_NO_FATAL_FAILURE(expect_grown_at(blocks, grown_at_record));
+    compacting_hooks();
+    StreamPlayer* player = start(/*playing=*/false);
+    ASSERT_NE(player, nullptr);
+    FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+    for (std::uint64_t i = 0; i < vp_test::kGrownFrame; ++i) {
+      player->step();
+      const std::optional<FrameStamp> frame = take_with(taker);
+      ASSERT_TRUE(frame.has_value())
+          << "no frame " << i << ": " << player->status().message();
+      EXPECT_EQ(frame->index, i);
+    }
+    std::this_thread::sleep_for(kQuiet);  // the worker waits for the next due
+    player->set_deblock(!player->deblock());
+    const std::optional<FrameStamp> rebuilt = take_with(taker);
+    ASSERT_TRUE(rebuilt.has_value())
+        << "no rebuild: " << player->status().message();
+    EXPECT_TRUE(rebuilt->rebuild);
+    EXPECT_EQ(rebuilt->index, vp_test::kGrownFrame - 1);
+    for (std::uint64_t i = vp_test::kGrownFrame; i < kFrames; ++i) {
+      player->step();
+      const std::optional<FrameStamp> frame = take_with(taker);
+      ASSERT_TRUE(frame.has_value())
+          << "no frame " << i << ": " << player->status().message();
+      EXPECT_EQ(frame->index, i);
+      EXPECT_FALSE(frame->rebuild);
+    }
+    EXPECT_LT(stop_time(*player), kPrompt);
+    EXPECT_TRUE(player->status().ok()) << player->status().message();
+    std::vector<std::int32_t> heaps = expect_compacted(blocks);
+    ASSERT_EQ(heaps.size(), kFrames + 1);
+    EXPECT_EQ(heaps[vp_test::kGrownFrame], heaps[vp_test::kGrownFrame - 1])
+        << "the rebuild's grid";
+    // The frames' heaps, without the rebuild's.
+    heaps.erase(heaps.begin() +
+                static_cast<std::ptrdiff_t>(vp_test::kGrownFrame));
+    expect_grew_at_grown_frame(heaps);
   }
 
   // The next mesh the worker publishes, taken as a renderer's frame takes
@@ -2417,26 +2490,9 @@ TEST_F(StreamPlayerTest, AfterMeshMayReadTheGridAFrameGrowsAtItsRecord) {
 TEST_F(StreamPlayerTest,
        PlayedAFrameThatOutgrowsTheGridWaitsForAfterMeshFirst) {
   ASSERT_NO_FATAL_FAILURE(use_stream(vp_test::kOutgrowStream));
-  const std::vector<std::uint32_t> blocks = block_counts();
-  ASSERT_NO_FATAL_FAILURE(expect_grown_at(blocks, /*at_record=*/true));
-  compacting_hooks();
-  StreamPlayer* player = start(/*playing=*/true);
-  ASSERT_NE(player, nullptr);
-  player->set_loop(false);  // one pass, then the last frame holds
-  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
   std::optional<FrameStamp> grown;
-  for (std::uint64_t i = 0; i < kFrames; ++i) {
-    const std::optional<FrameStamp> frame = take_with(taker);
-    ASSERT_TRUE(frame.has_value())
-        << "no frame " << i << ": " << player->status().message();
-    EXPECT_EQ(frame->index, i);
-    if (i == vp_test::kGrownFrame) {
-      grown = frame;
-    }
-  }
-  EXPECT_LT(stop_time(*player), kPrompt);
-  EXPECT_TRUE(player->status().ok()) << player->status().message();
-  expect_grew_at_grown_frame(expect_compacted(blocks));
+  ASSERT_NO_FATAL_FAILURE(
+      play_through_compacting(/*grown_at_record=*/true, &grown));
   ASSERT_TRUE(grown.has_value());
   RecordProperty("grown_frame_submits",
                  std::to_string(grown->counters.submits));
@@ -2444,6 +2500,32 @@ TEST_F(StreamPlayerTest,
                  std::to_string(grown->counters.host_waits));
   RecordProperty("grown_frame_blocked_us",
                  std::to_string(grown->counters.blocked_ns / 1000));
+}
+
+// Played, the grow stream's frame kGrownFrame grows the grid at its finish,
+// recorded as soon as the frame before was published: that frame's batch
+// has finished first.
+TEST_F(StreamPlayerTest, AfterMeshMayReadTheGridPlayedAFrameGrowsAtItsFinish) {
+  ASSERT_NO_FATAL_FAILURE(use_stream(vp_test::kGrowStream));
+  std::optional<FrameStamp> grown;
+  ASSERT_NO_FATAL_FAILURE(
+      play_through_compacting(/*grown_at_record=*/false, &grown));
+  EXPECT_TRUE(grown.has_value());
+}
+
+// The batch in flight when the grow stream's frame kGrownFrame grows the
+// grid at its finish is a rebuild's, of the frame before: it has finished
+// first.
+TEST_F(StreamPlayerTest, AfterMeshMayReadTheGridARebuildThenAGrowAtItsFinish) {
+  ASSERT_NO_FATAL_FAILURE(use_stream(vp_test::kGrowStream));
+  rebuild_then_grow_compacting(/*grown_at_record=*/false);
+}
+
+// As above, the outgrow stream's frame kGrownFrame growing the grid before
+// it is recorded.
+TEST_F(StreamPlayerTest, AfterMeshMayReadTheGridARebuildThenAGrowAtItsRecord) {
+  ASSERT_NO_FATAL_FAILURE(use_stream(vp_test::kOutgrowStream));
+  rebuild_then_grow_compacting(/*grown_at_record=*/true);
 }
 
 // The mesh published is ready once after_mesh's batch is: a consumer batch
