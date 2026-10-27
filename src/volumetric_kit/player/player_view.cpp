@@ -209,8 +209,8 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
     took = true;
   }
   const core::Status drawn = drawable(exchange_);
-  // 4. The frame's binding: the view's own (Unlit) and before_draw's, but
-  // not a set and its clears while Texture is off (textured()).
+  // 4. The frame's binding: the view's own (Unlit) and before_draw's, unless
+  // Texture is off and that names a set (textured()).
   const recon::mesh::DeviceMesh& live = exchange_.live();
   const bool draws = live.valid() && !live.empty();
   binding_ = DrawBinding{};

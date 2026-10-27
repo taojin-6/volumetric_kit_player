@@ -10,8 +10,9 @@ is implemented.
 
 - Off at start, so the mesh starts in its own shading (the owner: "I think
   default is mesh shading").
-- Off leaves a binding that names a set out whole, as its clears go with its
-  texture: the frame is the one a program with no binding draws.
+- Off leaves out the whole of a binding that names a set, as its clears go
+  with its texture: the frame is then the one a program with no binding
+  draws.
 - before_draw still runs while off, so its program keeps its state and
   Texture on shows the texture at once.
 - The box shows only once a set has been bound, so a program that binds none

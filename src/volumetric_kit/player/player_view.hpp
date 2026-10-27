@@ -206,9 +206,9 @@ class PlayerView {
   ///         that names a set is left out whole, its flags' clears too, so
   ///         the frame draws as with no binding: lit, unless Unlit; Normals
   ///         as ever. before_draw still runs each frame. A binding that names
-  ///         no set applies either way. The panel shows the Texture box from
-  ///         the first set a before_draw binds on. PlayerViewConfig::textured
-  ///         at first; the box flips it.
+  ///         no set applies either way. The panel shows the Texture box once
+  ///         a before_draw has bound a set, and keeps it.
+  ///         PlayerViewConfig::textured at first; the box flips it.
   bool textured() const noexcept { return textured_; }
   /// @brief Draw the mesh with its binding's texture set, or without it, from
   ///        the next frame (the desktop's T key).
