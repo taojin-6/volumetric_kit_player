@@ -6,8 +6,8 @@
 /// @file frame_hooks.hpp
 /// @brief A caller's per-frame work, which the player runs: on the worker
 ///        after each mesh, as the drawing thread takes a mesh, before the
-///        draw, and at a park; a status field for the view's stats panel;
-///        and the take that the view and a consumer with no view share
+///        draw, and at a park; a line for the view's stats panel; and the
+///        take that the view and a consumer with no view share
 ///        (@ref FrameTaker).
 
 #include <cstdint>
@@ -109,12 +109,12 @@ struct FrameHooks {
   /// on_park.
   std::function<void()> on_resume;
   /// Draw thread, at a rebuild of the view's stats panel while it is open,
-  /// at most once a @ref StatsPanel::kFieldRefresh: a program's status
-  /// field, a short text the panel shows after the bitrate, as one more part
-  /// of its line, until the next call ("bitrate 9.7 Mbit/s · last 1 s · aux
-  /// 0.6 Mbit/s"), on the desktop and on iOS alike. Empty, or an empty text,
-  /// shows nothing; with no view it is never called.
-  std::function<std::string()> status_field;
+  /// at most once a @ref StatsPanel::kProgramLineRefresh: a program's line, a
+  /// short text the panel shows as its last line (@ref stats_lines) until
+  /// the next call. Not called while the panel is closed or no frame is
+  /// drawn, so a call may come long after the one before. Empty, or an empty
+  /// text, shows nothing; with no view it is never called.
+  std::function<std::string()> stats_line;
 };
 
 /// @brief What hooks are made with, valid during MakeHooks' call alone: a

@@ -191,7 +191,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   // empty.
   stats_panel_.draw(stats_, shown_, shown_triangles_, render_metrics(),
                     PlaybackStats::Clock::now(), player_->live(),
-                    hooks_.status_field);
+                    hooks_.stats_line);
   // The worker times its frames' device work while the panel shows it,
   // unless a measurement fixed the timing.
   if (!device_timing_) {

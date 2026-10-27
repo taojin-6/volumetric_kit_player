@@ -157,10 +157,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   frame (`PlayerView::textured`, `set_textured`,
   `PlayerViewConfig::textured`; `draw_controls` takes the view's `textured`,
   or null for no box).
-- A program's status field (`FrameHooks::status_field`): a short text the
-  stats panel shows after the bitrate, as one more part of its line, on the
-  desktop and iOS, read at most once a `StatsPanel::kFieldRefresh` (1 s)
-  while the panel is open; `stats_lines` and `StatsPanel::draw` take it.
+- A program's line in the stats panel (`FrameHooks::stats_line`), its last,
+  read at most once a `StatsPanel::kProgramLineRefresh` (1 s) while the
+  panel is open; `stats_lines` and `StatsPanel::draw` take it.
 - `vp_probe --latency`, which times each frame from its mesh to its commit
   and its draws, and `--save-meshes DIR`, which writes each mesh as
   `DIR/<frame>.ply`, both through the hooks.

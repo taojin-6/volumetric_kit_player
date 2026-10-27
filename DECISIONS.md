@@ -4,25 +4,34 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
-## 2026-10-27 — A program's status field after the bitrate
+## 2026-10-27 — A program's line in the stats
 
-`FrameHooks::status_field`, a function that returns a short text the stats
-panel shows after the bitrate. Why: a program built on the player has
-figures of its own, a rate it counts for one, that belong beside the
-player's, on the desktop and on iOS alike.
+`FrameHooks::stats_line`, a function that returns a short text the stats
+panel shows as its last line. Why: a program built on the player has figures
+of its own, a rate it counts for one, that belong beside the player's, on the
+desktop and on iOS alike.
 
 - **On `FrameHooks`, not `PlayerViewConfig`.** Why: `make_hooks` makes the
-  program's state, so a field made there reads it; a config field is set
-  before that state exists.
-- **One more part of the bitrate's line,** not a line of its own. Why: it
-  breaks with that line where a phone is too narrow, and the panel's lines,
-  and the compact layout's split of them, stay as they are.
+  program's state, so a line made there reads it; a config field is set
+  before that state exists. A program that sets `make_hooks` for the line
+  alone pays one more mesh in the ring (`mesh_wiring`'s `holds`).
+- **A line of its own, the last; compact, over the renderer's table.** Why:
+  on the view tests' shortest notched phone in landscape, a file's stats end
+  8 pt above the controls, the worker's column (194 pt) the taller, so a text
+  added to its bitrate line took them over the controls once it broke the
+  line, from 20 characters on; the renderer's column (172 pt) has room for
+  one more row, and a live view's stats end 29 pt above the controls. With a
+  line of up to 48 characters, file or live, they end 7 or 8 pt above; a
+  longer one widens the renderer's column and breaks the worker's deblock
+  line (a sweep on the home RTX 5090 at the iOS shell's sizes; the view tests
+  check a 30-character line).
 - **Read at a rebuild once a second has passed since its last read**
-  (`StatsPanel::kFieldRefresh`), only while the panel is open. Why: a rate
-  over the time since its last read then covers a second, as the live
-  bitrate does, with no history kept by the program; and closed, nothing is
-  rebuilt (2026-10-20).
-- **One field.** A second waits for a program that needs it.
+  (`StatsPanel::kProgramLineRefresh`), only while the panel is open. Why: a
+  rate the program counts since its last read is then over about a second
+  while the panel stays open, as the live bitrate is, with no history kept;
+  the first read after the panel opens, or after frames stop, covers all the
+  time since the read before. Closed, nothing is rebuilt (2026-10-20).
+- **One line.** A second waits for a program that needs it.
 
 ## 2026-10-27 — Texture: the mesh with or without its binding's texture
 
