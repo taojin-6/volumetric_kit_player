@@ -24,17 +24,18 @@
 // the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
 // refresh; a program's line is their last, read a program-line refresh apart at
-// most and never while they are closed, and with none, or an empty one, they
-// are the player's alone; a line too wide for the work area, the deblock's at
-// the block ceiling on a phone in portrait, breaks before its blocks, and takes
-// one row where it fits; and they are the stage means per stream frame, then
-// the renderer's rows per display frame under its rate, each table under the
-// window it covers; they name the frames' device time, queue idle and queue
-// latency, n/t or n/a where unknown, and the latency's legs, as one line when
-// compact. Compact, the worker's table leaves out its breakdowns, submit and
-// finish, the renderer's sits beside it in a work area wider than tall, the
-// rate and a program's line over it, the worker's column as tall with the line
-// as without, and a line breaks against the room its column has.
+// most, never while they are closed, and at once when given again, and with
+// none, or an empty one, they are the player's alone; a line too wide for the
+// work area, the deblock's at the block ceiling on a phone in portrait, breaks
+// before its blocks, and takes one row where it fits; and they are the stage
+// means per stream frame, then the renderer's rows per display frame under its
+// rate, each table under the window it covers; they name the frames' device
+// time, queue idle and queue latency, n/t or n/a where unknown, and the
+// latency's legs, as one line when compact. Compact, the worker's table leaves
+// out its breakdowns, submit and finish, the renderer's sits beside it in a
+// work area wider than tall, the rate and a program's line over it, the
+// worker's column as tall with the line as without, and a line breaks against
+// the room its column has.
 
 #include "volumetric_kit/player/controls.hpp"
 
@@ -1110,6 +1111,31 @@ TEST_F(ControlsTest, WithNoProgramsLineTheLinesAreThePlayers) {
   seconds_ += refresh;
   frame();
   EXPECT_EQ(panel_.lines(), players) << "no longer given";
+}
+
+// A program's line withdrawn and given again within a
+// StatsPanel::kProgramLineRefresh of its last read is read again at once, as
+// a line given for the first time is.
+TEST_F(ControlsTest, AProgramsLineGivenAgainIsReadAtOnce) {
+  const double refresh =
+      std::chrono::duration<double>(StatsPanel::kRefresh).count();
+  int asked = 0;
+  const std::function<std::string()> counting = [&asked] {
+    return "read " + std::to_string(++asked);
+  };
+  program_line_ = counting;
+  seconds_ += refresh;
+  frame();
+  ASSERT_EQ(asked, 1);
+  program_line_ = nullptr;
+  seconds_ += refresh;
+  frame();
+  ASSERT_NE(panel_.lines().back(), "read 1");
+  program_line_ = counting;
+  seconds_ += refresh;
+  frame();
+  EXPECT_EQ(asked, 2);
+  EXPECT_EQ(panel_.lines().back(), "read 2");
 }
 
 // The deblock line at the block ceiling, the widest it gets. At this
