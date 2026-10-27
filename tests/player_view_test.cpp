@@ -1045,6 +1045,7 @@ TEST_F(PlayerViewTest, ALiveViewsStatsFitAPhone) {
       safe_area_ = phone.safe_area;
       recon::networking::ServerOptions options;
       options.host = "127.0.0.1";
+      options.port = 0;  // a free one: other tests serve at the same time
       core::Result<std::unique_ptr<recon::networking::StreamServer>> server =
           recon::networking::StreamServer::start((*reader)->session(), options);
       ASSERT_TRUE(server.ok()) << server.status().message();
