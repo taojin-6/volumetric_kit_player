@@ -2557,10 +2557,11 @@ TEST_F(StreamPlayerTest, ATakeHoldsAMeshUntilItsReadyValueIsReached) {
 // Played, a steady frame with after_mesh is two submits, its batch and
 // after_mesh's, with no staging buffer and at most one wait that blocked,
 // as with none (OneBatchPerFrame): after_mesh's batch is waited for only at
-// the next after_mesh, when the GPU has run it, so most frames have none, as
-// a frame's own fence has normally signalled by its due time; a wait right
-// after its submit would block each frame. Taken with no device work of the
-// test's.
+// the next frame's finish, once that frame's batch, queued after it, has
+// resolved, when the GPU has run it, so most frames have none, as a frame's
+// own fence has normally signalled by its due time; a wait right after its
+// submit, or before the next frame's record, would block each frame. Taken
+// with no device work of the test's.
 TEST_F(StreamPlayerTest, AfterMeshAddsOneSubmitAndNoBlockingWait) {
   core::BufferDesc desc;
   desc.size = sizeof(std::uint32_t);

@@ -124,13 +124,15 @@ of the worker or the view; the panel's Unlit, `vp_probe --latency` and
   into a batch of its own, submitted behind the mesh's ready point, whose
   point the published mesh then carries; the worker finishes it at the next
   `after_mesh`, when the GPU has run it, so it adds a submit a frame and no
-  blocking host wait. *Since the entry above, before the grid grows too.* A park and a stop finish it too, so its readbacks are
-  written before they return and nothing runs while parked; so do a stop
-  before a frame's stamp, and its extra, goes unpublished, and a live
-  connection before the next one's grid replaces the grid the batch was
-  given. A park waits for it within its timeout, as for the step under way,
-  and returns false, the hold kept and no `on_park`, if it still runs, so a
-  suspend's park on the main thread stays bounded.
+  blocking host wait. *Since 2026-10-26 it finishes it earlier, before the
+  grid may grow ("after_mesh's batch finishes before the grid grows").* A
+  park and a stop finish it too, so its readbacks are written before they
+  return and nothing runs while parked; so do a stop before a frame's stamp,
+  and its extra, goes unpublished, and a live connection before the next
+  one's grid replaces the grid the batch was given. A park waits for it
+  within its timeout, as for the step under way, and returns false, the hold
+  kept and no `on_park`, if it still runs, so a suspend's park on the main
+  thread stays bounded.
 - **A mesh is committed only once its ready value is reached.** gfx's frame
   loop waits only for values reached (a present behind an unreached one is
   invalid), and `after_mesh`'s batch may still run at the take, so the take

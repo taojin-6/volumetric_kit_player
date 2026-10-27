@@ -564,7 +564,7 @@ class StreamPlayer {
                                                 FrameStamp& stamp);
   // An idle park's finish_hook_batch, until `deadline`: false if it passed
   // first, the batch left in flight for a later park or the worker. A failure
-  // reaches status() at the worker's next after_mesh or its end.
+  // reaches status() at the worker's next finish_hook_batch or its end.
   bool finish_hook_batch_by(std::chrono::steady_clock::time_point deadline);
   // Under hook_mutex_: wait up to `timeout_ns` for the batch in flight, if
   // any; false if it still runs, kept for a later wait. Otherwise it goes,
