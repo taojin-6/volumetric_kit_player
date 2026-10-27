@@ -170,12 +170,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - build: the iOS app needs iOS 26 or newer: `cmake --preset ios` targets
   iOS 26.0, the family's iOS floor.
 - build: the player pins core #61's merge (84dc584, 0.24.0), gfx main at
-  #158's merge (0106609) and recon main at #295's merge (b9bb7d2), and
+  #160's merge (17b3192) and recon main at #295's merge (b9bb7d2), and
   requires core 0.24.0, the floor recon's library asks for. A commit hook's
   skip is recon's `CommitDecision::kDrop` (recon #293). The view presents
   FIFO as gfx's default (gfx #150), naming no mode. A set a program's
   `before_draw` binds is made with `HookContext::commit_allocator` too, as
-  gfx's `HybridMeshTextureSet::create` takes an allocator (gfx #158).
+  gfx's `HybridMeshTextureSet::create` takes an allocator (gfx #158). The
+  view draws its meshes without gfx's second view (gfx #160's default), as
+  they carry none, so on Apple GPUs a draw costs what it did before gfx
+  #159.
 - An `after_mesh` hook may record work that reads the grid it is handed,
   such as a compaction of its map (recon #295's const
   `VoxelHashMap::record_compaction`). The worker finishes the hook's batch
