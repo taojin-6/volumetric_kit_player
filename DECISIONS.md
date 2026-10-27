@@ -4,6 +4,65 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-26 — after_mesh's batch finishes before the grid grows
+
+recon #295 makes `VoxelHashMap::record_compaction` const, so an `after_mesh`
+hook, handed the grid read-only, may record work that reads it, such as a
+compaction of its map. That batch binds the map's own kernel sets, which a
+grow (`VoxelBlockGrid::resize`) rewrites, and the core then refuses the batch
+at its wait: recon's rule is no grow until the batch has resolved. The worker
+finished the batch only at the next `after_mesh`, after the next frame's
+record and finish, either of which may grow the grid (`codec::record_growing`,
+`finish_growing`), so the first grow stopped playback with that refusal.
+
+- **The worker finishes the batch before anything may grow the grid:**
+  - At the next frame's finish, once that frame's batch has resolved and
+    before `finish_growing`, which grows the grid when the table cannot place
+    the frame; a live record's decode alike. The hook's batch went to the
+    same queue before that frame's, so it has run: the wait finds it
+    complete, and the core counts no host wait. On a steady frame this is
+    the finish the next `after_mesh` did, a step earlier: still one submit
+    more a frame and no blocking wait.
+  - Before recording a frame of more blocks than the grid's heap
+    (`codec::read_frame_info`'s `block_count` against the grid's
+    `num_blocks`), the frame `record_growing` grows the grid for before it
+    records. This wait can block, on that frame alone, inside its "decode"
+    row: playing, the frame is recorded as soon as the one before is
+    published, whose batch may still run. The grow then waits for the
+    queue anyway, so the frame loses only what of that batch's run had
+    overlapped the host's work before the grow's wait (measured below).
+  - As before, the next `after_mesh`, a park, a stop, a frame's stamp
+    unpublished at a stop, and a live connection's next grid finish it too.
+- **Not before every record:** playing, the next frame is recorded right
+  after the publish, while the hook's batch may still run, so that would be
+  a blocking wait each frame, which the hooks' entry rules out.
+- **The block count is recon's contract:** `record_growing` grows only for a
+  frame of more blocks than the grid's heap, and `FrameInfo::block_count` is
+  what a grid decoding the frame needs; reading it costs a header's parse,
+  where a hook into recon's grow would be API for one caller.
+- **Measured** with `vp_probe --worker` and no validation, main against
+  this change, run by run in turn, on `outgrow.vrst`'s grown frame. The
+  hooks are `--latency`'s, whose batch records nothing, and
+  `--save-meshes`', which reads the mesh back.
+  - Apple M5 Max, 30 timed runs each: with the readback, the new wait
+    blocked in 28 runs, 0.40 ms at the median, and the grow's own wait fell
+    by about 0.15 ms, so the frame blocked 4.01 ms on average, against
+    main's 3.78. With the empty batch it never blocked.
+  - RTX 5090, 40 untimed runs each: the frame blocked 1.04 ms on average,
+    as on main, with the readback, and 1.08 against main's 1.03 with the
+    empty batch. Timed, the new wait blocked in 3 of 60 runs, at most
+    0.74 ms.
+  - Steady frames (`sphere.vrst`, passes 2 to 6, `--latency`): no wait
+    blocked in either build on either device.
+- **Tests:** a hook that records a compaction through the grid it is handed
+  and reads the count back, over the tests' grow stream, which grows the
+  grid at a frame's finish, and a new outgrow stream (`outgrow.vrst`), whose
+  frame `kGrownFrame` has more blocks than the first grid's slots, so it
+  grows the grid at its record: stepped, played, and live, every frame comes
+  and each count is its frame's blocks, under the validation layer and its
+  synchronization validation. Without the finish at a frame's finish, or at
+  the record, its tests fail with the core's refusal.
+
 ## 2026-10-26 — The desktop app and vp_probe are library calls
 
 `desktop.hpp` (`run_desktop`, target `player_desktop`) and `probe.hpp`
@@ -65,7 +124,7 @@ of the worker or the view; the panel's Unlit, `vp_probe --latency` and
   into a batch of its own, submitted behind the mesh's ready point, whose
   point the published mesh then carries; the worker finishes it at the next
   `after_mesh`, when the GPU has run it, so it adds a submit a frame and no
-  blocking host wait. A park and a stop finish it too, so its readbacks are
+  blocking host wait. *Since the entry above, before the grid grows too.* A park and a stop finish it too, so its readbacks are
   written before they return and nothing runs while parked; so do a stop
   before a frame's stamp, and its extra, goes unpublished, and a live
   connection before the next one's grid replaces the grid the batch was
