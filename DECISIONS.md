@@ -20,11 +20,15 @@ desktop and on iOS alike.
   8 pt above the controls, the worker's column (194 pt) the taller, so a text
   added to its bitrate line took them over the controls once it broke the
   line, from 20 characters on; the renderer's column (172 pt) has room for
-  one more row, and a live view's stats end 29 pt above the controls. With a
-  line of up to 48 characters, file or live, they end 7 or 8 pt above; a
-  longer one widens the renderer's column and breaks the worker's deblock
-  line (a sweep on the home RTX 5090 at the iOS shell's sizes; the view tests
-  check a 30-character line).
+  one more row, and a live view's stats end 29 pt above the controls.
+- **Up to 44 characters, in parts of up to 35 between its ` · `.** Why: on
+  that phone in landscape, file or live, such a line keeps the stats 7 or
+  8 pt above the controls and within the panel's widest; a longer one widens
+  the renderer's column past it, so its end is cut off, and breaking it would
+  take a row there is no room for. On the narrowest phone in portrait the
+  line breaks at its ` · `, and a part past 35 characters on an indented row
+  is cut off. (Sweeps on the home RTX 5090 at the iOS shell's sizes; the view
+  tests check a line at both lengths.)
 - **Read at a rebuild once a second has passed since its last read**
   (`StatsPanel::kProgramLineRefresh`), only while the panel is open. Why: a
   rate the program counts since its last read is then over about a second

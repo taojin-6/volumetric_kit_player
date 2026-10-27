@@ -141,8 +141,10 @@ constexpr Phone kPhones[] = {{kPhone, {}},
 // The iOS shell's sizes (PlayerViewController.mm).
 constexpr float kPhoneScale = 1.3f;
 constexpr float kFingertip = 44.0f;
-// A program's line (FrameHooks::stats_line), 30 characters.
-constexpr const char* kProgramLine = "saved 1,234 meshes · 61.2 MB/s";
+// A program's line (FrameHooks::stats_line) as long as DECISIONS.md says fits
+// a phone: 44 characters, its longer part 35.
+constexpr const char* kProgramLine =
+    "saving · 1,234 meshes in 12.3 s at 61.2 MB/s";
 // How long a frame the test let go may take to arrive (the worker builds its
 // kernels first); how long one it did not is waited for; and the longest a
 // call that must not block takes.
