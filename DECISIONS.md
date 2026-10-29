@@ -32,6 +32,20 @@ calls it, so all three light the mesh alike.
   fixes the player first; the gfx task follows (the TODO in
   player_view.cpp).
 
+## 2026-10-29 — A program's stats text of several lines
+
+`FrameHooks::stats_line`'s text may hold several lines, separated by `\n`,
+each shown as its own. It amends "One line" in "A program's line in the
+stats" below.
+
+- **The program breaks its text, not the panel.** Why: a program whose
+  figures do not fit one line groups them as they read best; the panel still
+  breaks a line too wide for its room at its ` · ` (2026-10-26).
+- **Compact, every line over the renderer's table,** as the one was. On the
+  view tests' narrowest phone in portrait three lines fit; on the shortest
+  notched one in landscape three take the stats 36 pt past the controls
+  (MoltenVK on an M5 Max), so a program for that phone keeps to one.
+
 ## 2026-10-29 — A program's device requirements
 
 For the device the worker decodes and meshes on, in the view and in vp_probe
@@ -128,7 +142,8 @@ desktop and on iOS alike.
   while the panel stays open, as the live bitrate is, with no history kept;
   the first read after the panel opens, or after frames stop, covers all the
   time since the read before. Closed, nothing is rebuilt (2026-10-20).
-- **One line.** A second waits for a program that needs it.
+- **One line.** A second waits for a program that needs it. *Several
+  since 2026-10-29.*
 
 ## 2026-10-27 — Texture: the mesh with or without its binding's texture
 

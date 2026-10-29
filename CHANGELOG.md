@@ -154,9 +154,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Texture: a box in the panel, shown once a program's `before_draw` binds a
   texture set, and the desktop's T key draw the mesh with or without that
   set (`PlayerView::textured`, `set_textured`, `PlayerViewConfig::textured`).
-- A program's line in the stats panel (`FrameHooks::stats_line`), its last,
-  read at most once a `StatsPanel::kProgramLineRefresh` (1 s) while the
-  panel is open; `stats_lines` and `StatsPanel::draw` take it.
+- A program's text in the stats panel (`FrameHooks::stats_line`), its last
+  lines, one for each of the text's lines separated by `\n` but the empty
+  ones, read at most once a `StatsPanel::kProgramLineRefresh` (1 s) while
+  the panel is open; `stats_lines` and `StatsPanel::draw` take it.
 - `vp_probe --latency`, which times each frame from its mesh to its commit
   and its draws, and `--save-meshes DIR`, which writes each mesh as
   `DIR/<frame>.ply`, both through the hooks.
