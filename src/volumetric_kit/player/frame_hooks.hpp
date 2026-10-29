@@ -109,11 +109,12 @@ struct FrameHooks {
   /// on_park.
   std::function<void()> on_resume;
   /// Draw thread, at a rebuild of the view's stats panel while it is open,
-  /// at most once a @ref StatsPanel::kProgramLineRefresh: a program's line, a
-  /// short text the panel shows as its last line (@ref stats_lines) until
+  /// at most once a @ref StatsPanel::kProgramLineRefresh: a program's text,
+  /// short lines separated by '\n' that the panel shows as its last lines,
+  /// in order and each its own, but the empty ones (@ref stats_lines), until
   /// the next call. Not called while the panel is closed or no frame is
-  /// drawn, so a call may come long after the one before. Empty, or an empty
-  /// text, shows nothing; with no view it is never called.
+  /// drawn, so a call may come long after the one before. Empty, it shows
+  /// nothing; with no view it is never called.
   std::function<std::string()> stats_line;
 };
 
