@@ -21,9 +21,10 @@ recon.
   `volumetric_kit::grid::<tier>`, targets `volumetric_kit::grid_<tier>`, the
   PLY writer in `mesh_io` and the mesh integrator in `voxelize`. The `.vrst`
   format, the decode and the meshes are unchanged: on the home RTX 5090 the
-  tests' streams that main and this change write are the same bytes, and so
-  are the meshes each decodes from them. Why: a re-pin is then a rename, and
-  a forwarding name would be one more to retire.
+  tests' streams that main and this change write are the same bytes, and the
+  meshes each decodes from them the same triangles, vertex for vertex (their
+  order varies from run to run on either). Why: a re-pin is then a rename,
+  and a forwarding name would be one more to retire.
 - **grid is declared after the core and before gfx, and checked with
   `vkc_require_sibling(volumetric_kit::grid 0.1.0 TARGETS …)`**, its tests
   and examples off. Why: the core comes first so every sibling shares it
