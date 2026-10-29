@@ -4,6 +4,21 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-29 — A program's device requirements
+
+For the device the worker decodes and meshes on, in the view and in vp_probe
+alike. It amends "Built on grid, not recon" below.
+
+- **A program states what its hooks need of the device beyond grid's,** in
+  the config that carries its hooks (`PlayerViewConfig::device_requirements`).
+  Why: the player makes the device, and a device gains no extension once
+  made.
+- **The core's `merge` joins them to grid's** (`worker_requirements`). Why:
+  it is a union, so a program's can only add.
+- **They go on the shared device's compute side,** with grid's. Both sides
+  adopt one `VkDevice`, so the worker's device and the draw's enable the
+  same.
+
 ## 2026-10-29 — CI: no outsider's trigger, no token kept, images by digest
 
 The core's CI does the same since its #68 (its DECISIONS.md, 2026-10-28,

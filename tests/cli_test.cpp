@@ -359,8 +359,8 @@ core::Result<vkp::FrameHooks> no_hooks(const vkp::HookContext& /*context*/) {
 }
 
 // The view's settings the app plays a scenario with: the program's, its
-// make_hooks included, with the scenario's window.validation in place of the
-// program's, which a Debug build turns on.
+// make_hooks and device requirements included, with the scenario's
+// window.validation in place of the program's, which a Debug build turns on.
 TEST(DesktopViewConfig, KeepsTheProgramsSettingsWithTheScenariosValidation) {
   using MakeHooksFn =
       core::Result<vkp::FrameHooks> (*)(const vkp::HookContext&);
@@ -376,6 +376,7 @@ TEST(DesktopViewConfig, KeepsTheProgramsSettingsWithTheScenariosValidation) {
   config.view.unlit = true;
   config.view.textured = true;
   config.view.make_hooks = &no_hooks;
+  config.view.device_requirements.optional_extensions = {"VK_VP_test_kept"};
   const Scratch scratch;
   const std::string path = scratch.file("play.json");
   for (const bool validation : {false, true}) {
@@ -401,6 +402,8 @@ TEST(DesktopViewConfig, KeepsTheProgramsSettingsWithTheScenariosValidation) {
     const MakeHooksFn* kept = view.make_hooks.target<MakeHooksFn>();
     ASSERT_NE(kept, nullptr) << "make_hooks dropped";
     EXPECT_EQ(*kept, &no_hooks);
+    EXPECT_EQ(view.device_requirements.optional_extensions,
+              std::vector<std::string>{"VK_VP_test_kept"});
 #ifdef NDEBUG
     EXPECT_EQ(view.validation, validation);
 #else
