@@ -281,6 +281,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The view lights the mesh with a headlight (`player::headlight`): the light
+  follows the camera, from just above and left of the eye, so what faces the
+  viewer is lit in any world. gfx's default light, fixed in the world for +y
+  up, lit only what faced away from the cameras in a rig's world, its first
+  camera's frame (+y down), and left what faced them flat grey.
 - The measurement runner stops when fetching a revision or launching the
   phone app fails, and retrieves lab logs when `LAB_ROOT` contains spaces.
 - A file's or a sender's frame can no longer make the decode grid gigabytes

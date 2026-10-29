@@ -33,7 +33,9 @@
 // binding of no set draws, its Texture box shown once a set is bound, flipping
 // it and staying; a binding of no set applies with Texture off as on; Unlit,
 // from the panel's box or set_unlit, shows the vertex colour unshaded, and off
-// it is shaded; a commit hook holds and skips frames; the hooks' stats line is
+// it is shaded; the headlight lights what faces the viewer from every side, on
+// the device, and from cameras in worlds of any axes, on the host (headlight);
+// a commit hook holds and skips frames; the hooks' stats line is
 // the stats' last; and a before_draw failure stops the view. A live view
 // presents, on the two images its swapchain asks for (checked on the host).
 // A program's device requirements (PlayerViewConfig::device_requirements),
@@ -73,7 +75,11 @@
 #include <utility>
 #include <vector>
 
+#include <glm/geometric.hpp>
+#include <glm/mat3x3.hpp>
+#include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 
 #include "controls_layout.hpp"
 #include "imgui.h"
@@ -91,6 +97,8 @@
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/gfx/app/shared_device_config.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
+#include "volumetric_kit/gfx/camera/camera.hpp"
+#include "volumetric_kit/gfx/camera/orbit_camera.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
@@ -119,6 +127,7 @@ using volumetric_kit::player::DrawBinding;
 using volumetric_kit::player::FrameCommit;
 using volumetric_kit::player::FrameHooks;
 using volumetric_kit::player::FrameStamp;
+using volumetric_kit::player::headlight;
 using volumetric_kit::player::HookContext;
 using volumetric_kit::player::kControlsWindow;
 using volumetric_kit::player::kSourceWindow;
@@ -156,6 +165,13 @@ constexpr float kFingertip = 44.0f;
 // a phone: 44 characters, its longer part 35.
 constexpr const char* kProgramLine =
     "saving · 1,234 meshes in 12.3 s at 61.2 MB/s";
+// mesh_pixel's probe on the sphere's lower right, under aim_at: 7 pixels right
+// of the middle and 7 below, about 45° round the sphere from the middle. It
+// faces away from the headlight, which comes from above and left of the eye,
+// so lit it is well below unshaded; the middle, which faces the viewer, is lit
+// near full.
+const glm::ivec2 kAwayFromTheLight{7, 7};
+constexpr float kPi = 3.14159265f;
 // How long a frame the test let go may take to arrive (the worker builds its
 // kernels first); how long one it did not is waited for; and the longest a
 // call that must not block takes.
@@ -350,8 +366,8 @@ class PlayerViewTest : public core::test::VulkanTest {
   // The view's mesh, drawn again as its last frame drew it
   // (PlayerView::record_mesh) into a `side` x `side` target laid out as its
   // swapchain, on its drawing device, behind the mesh's ready value: the
-  // middle pixel, as R, G, B, A; empty with a failure recorded. Needs
-  // make_hooks_, for the devices.
+  // pixel `probe_` from the middle, as R, G, B, A; empty with a failure
+  // recorded. Needs make_hooks_, for the devices.
   std::vector<int> mesh_pixel(std::uint32_t side = 64) {
     if (!context_) {
       ADD_FAILURE() << "no hooks' context: set make_hooks_";
@@ -396,12 +412,14 @@ class PlayerViewTest : public core::test::VulkanTest {
       return {};
     }
     const auto* pixels = static_cast<const std::uint8_t*>(target.pixels());
-    const std::uint8_t* middle =
-        pixels + 4 * (static_cast<std::size_t>(side / 2) * side + side / 2);
+    const glm::ivec2 at = glm::ivec2(static_cast<int>(side / 2)) + probe_;
+    const std::uint8_t* probed =
+        pixels + 4 * (static_cast<std::size_t>(at.y) * side +
+                      static_cast<std::size_t>(at.x));
     const bool bgra = desc.color_format == VK_FORMAT_B8G8R8A8_SRGB ||
                       desc.color_format == VK_FORMAT_B8G8R8A8_UNORM;
-    return bgra ? std::vector<int>{middle[2], middle[1], middle[0], middle[3]}
-                : std::vector<int>{middle[0], middle[1], middle[2], middle[3]};
+    return bgra ? std::vector<int>{probed[2], probed[1], probed[0], probed[3]}
+                : std::vector<int>{probed[0], probed[1], probed[2], probed[3]};
   }
 
   // Expects the mesh's pixel (mesh_pixel) to be `expected` within 1 code in
@@ -716,6 +734,9 @@ class PlayerViewTest : public core::test::VulkanTest {
   bool unlit_ = PlayerViewConfig{}.unlit;
   bool textured_ = PlayerViewConfig{}.textured;
   MakeHooks make_hooks_;  // the view's hooks, with the context noted
+  // mesh_pixel's pixel, from the middle, in pixels, +y down: the middle
+  // unless a test moves it.
+  glm::ivec2 probe_{0, 0};
   // The program's: as the view's config has them unless a test sets them.
   core::DeviceRequirements device_requirements_ =
       PlayerViewConfig{}.device_requirements;
@@ -1399,6 +1420,73 @@ TEST(ViewSwapchain, LiveAsksForTwoImages) {
   }
 }
 
+// --- The headlight (headlight), on the host ---------------------------------
+
+// A camera's view, and where it stands and looks.
+struct Pose {
+  const char* name;
+  glm::mat4 view;
+  glm::vec3 eye;
+  glm::vec3 target;
+};
+
+// The view's orbit camera round `target` at the given angles.
+Pose orbit_pose(const char* name, const glm::vec3& target, float azimuth,
+                float elevation) {
+  gfx::camera::OrbitCamera orbit;
+  orbit.set_target(target);
+  orbit.set_distance(2.5f);
+  orbit.set_azimuth(azimuth);
+  orbit.set_elevation(elevation);
+  return {name, orbit.view(), orbit.eye(), orbit.target()};
+}
+
+// A camera at `eye` upright in a world whose up is `up`.
+Pose upright_pose(const char* name, const glm::vec3& eye,
+                  const glm::vec3& target, const glm::vec3& up) {
+  const gfx::camera::Camera camera = gfx::camera::Camera::look_at_perspective(
+      eye, target, up, PlayerView::kFovY, 4.0f / 3.0f, 0.05f, 100.0f);
+  return {name, camera.view(), eye, target};
+}
+
+// From each pose, in a world with +y up, one with +z up and a rig's, its
+// first camera's own frame (+y down, +z forward), as the view's orbit camera
+// takes them or upright in that world, the light is a unit direction on the
+// viewer's side (dot(light, eye - target) > 0): a surface that faces the
+// viewer is lit to over 0.85 of full, and its back not at all; and it comes
+// from above, left of and toward the eye (in view space, x < 0, y > 0, z > 0).
+TEST(Headlight, LightsWhatFacesTheViewerWhateverTheWorldsAxes) {
+  const glm::vec3 y_up{0.0f, 0.85f, 0.0f};
+  const glm::vec3 z_up{0.0f, 0.0f, 0.9f};
+  const glm::vec3 rig{0.0f, 0.0f, 2.5f};  // in front of its first camera
+  const Pose poses[] = {
+      orbit_pose("+y up, the view's first", y_up, 0.0f, 0.0f),
+      orbit_pose("+y up, from above and behind", y_up, 2.5f, 1.2f),
+      upright_pose("+z up", {2.5f, -2.0f, 1.6f}, z_up, {0.0f, 0.0f, 1.0f}),
+      upright_pose("+z up, from below", {-1.0f, 1.5f, -1.2f}, z_up,
+                   {0.0f, 0.0f, 1.0f}),
+      upright_pose("a rig's, from its first camera", {0.0f, 0.0f, 0.0f}, rig,
+                   {0.0f, -1.0f, 0.0f}),
+      orbit_pose("a rig's, the orbit from the cameras' side", rig, kPi, -0.3f),
+      // The eye along -(0.5, 0.8, 0.6), opposite gfx's default light.
+      orbit_pose("a rig's, the orbit opposite gfx's default light", rig,
+                 std::atan2(-0.5f, -0.6f), std::asin(-0.8f / std::sqrt(1.25f))),
+  };
+  for (const Pose& pose : poses) {
+    SCOPED_TRACE(pose.name);
+    const glm::vec3 light = headlight(pose.view);
+    EXPECT_NEAR(glm::length(light), 1.0f, 1e-5f);
+    EXPECT_GT(glm::dot(light, pose.eye - pose.target), 0.0f);
+    const glm::vec3 facing = glm::normalize(pose.eye - pose.target);
+    EXPECT_GT(std::max(glm::dot(facing, light), 0.0f), 0.85f);
+    EXPECT_EQ(std::max(glm::dot(-facing, light), 0.0f), 0.0f);
+    const glm::vec3 in_view = glm::mat3(pose.view) * light;
+    EXPECT_LT(in_view.x, 0.0f) << "left of the eye";
+    EXPECT_GT(in_view.y, 0.0f) << "above it";
+    EXPECT_GT(in_view.z, 0.0f) << "toward it";
+  }
+}
+
 #ifdef __APPLE__
 // The device create() makes, on each of MoltenVK's family layouts
 // (CMakeLists.txt): two families, so the tests above cross them.
@@ -1508,6 +1596,38 @@ core::Buffer vertex_view(const grid::mesh::DeviceMesh& mesh,
   return core::Buffer(
       mesh.vertices, VkDeviceSize{count} * sizeof(grid::mesh::Vertex),
       mesh.vertex_usage, mesh.sharing_mode, nullptr, [] {}, std::nullopt);
+}
+
+// The linear R, G, B every vertex of `mesh` has, read back on `device`; empty
+// with a failure recorded for no vertices, a failed read or two that differ.
+std::vector<double> uniform_colour(const grid::mesh::DeviceMesh& mesh,
+                                   core::Device& device,
+                                   core::Allocator& allocator) {
+  if (mesh.vertex_count == 0) {
+    ADD_FAILURE() << "no vertices";
+    return {};
+  }
+  std::vector<grid::mesh::Vertex> read(mesh.vertex_count);
+  core::CommandBatch readback(device, allocator);
+  const core::Buffer vertices = vertex_view(mesh, mesh.vertex_count);
+  core::Status done =
+      readback.readback(vertices, 0, vertices.size(), read.data());
+  if (done.ok()) {
+    done = readback.submit();
+  }
+  if (!done.ok()) {
+    ADD_FAILURE() << done.message();
+    return {};
+  }
+  const grid::mesh::Vertex& first = read.front();
+  for (const grid::mesh::Vertex& vertex : read) {
+    if (vertex.color.x != first.color.x || vertex.color.y != first.color.y ||
+        vertex.color.z != first.color.z) {
+      ADD_FAILURE() << "the vertices' colours differ";
+      return {};
+    }
+  }
+  return {first.color.x, first.color.y, first.color.z};
 }
 
 // The hooks' context names the worker's device, the view's own and its
@@ -1764,11 +1884,13 @@ TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
 // Texture box until a set is bound, and has it then, Texture off; a tap on
 // it flips Texture, as set_textured does, and the box stays once none is
 // bound. Unlit, Texture off, a frame that binds a set draws as one that
-// binds none.
+// binds none. The pixel faces away from the headlight, so lit and unlit
+// differ there.
 TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
   const auto bind = std::make_shared<std::atomic<bool>>(false);
   const auto drawn = std::make_shared<std::atomic<int>>(0);
   make_hooks_ = bound_image_hooks(bind, drawn);
+  probe_ = kAwayFromTheLight;
   ASSERT_TRUE(make_view(/*playing=*/false));
   ASSERT_FALSE(view_->textured()) << "off at first";
   view_->player().step();
@@ -1840,9 +1962,11 @@ TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
 // A binding that names no set applies with Texture off as on: a before_draw
 // that clears kHybridMeshLit with no set draws the mesh as set_unlit(true)
 // does, the same pixel within 1 code, Texture off and then on; that pixel is
-// not the lit one, or the comparisons would show nothing.
+// not the lit one, or the comparisons would show nothing: it faces away from
+// the headlight.
 TEST_F(PlayerViewTest, ABindingOfNoSetAppliesWithTextureOffOrOn) {
   const auto clear = std::make_shared<std::atomic<bool>>(false);
+  probe_ = kAwayFromTheLight;
   make_hooks_ = [clear](const HookContext&) -> core::Result<FrameHooks> {
     FrameHooks hooks;
     hooks.before_draw = [clear](VkCommandBuffer, const FrameStamp&) {
@@ -1879,13 +2003,14 @@ TEST_F(PlayerViewTest, ABindingOfNoSetAppliesWithTextureOffOrOn) {
 
 // Unlit: the view's own binding clears kHybridMeshLit, so a pixel of the
 // mesh is its vertex colour within 1 code; lit, the same pixel is shaded
-// darker, as the level camera faces no surface toward the light, which comes
-// from above. The panel's box flips it, as set_unlit does.
+// darker, as it faces away from the headlight. The panel's box flips it, as
+// set_unlit does.
 TEST_F(PlayerViewTest, UnlitShowsTheVertexColourUnshaded) {
   make_hooks_ = [](const HookContext&) {
     return core::Result<FrameHooks>(FrameHooks{});
   };
   unlit_ = true;
+  probe_ = kAwayFromTheLight;
   ASSERT_TRUE(make_view(/*playing=*/false));
   EXPECT_TRUE(view_->unlit());
   view_->player().step();
@@ -1893,22 +2018,11 @@ TEST_F(PlayerViewTest, UnlitShowsTheVertexColourUnshaded) {
   aim_at(view_->shown()->index);
   ASSERT_TRUE(present());
   // The mesh's vertex colour, one for every vertex.
-  const grid::mesh::DeviceMesh& mesh = view_->mesh();
-  ASSERT_GT(mesh.vertex_count, 0u);
-  std::vector<grid::mesh::Vertex> read(mesh.vertex_count);
-  core::CommandBatch readback(*context_->device, *context_->allocator);
-  const core::Buffer vertices = vertex_view(mesh, mesh.vertex_count);
-  ASSERT_TRUE(
-      readback.readback(vertices, 0, vertices.size(), read.data()).ok());
-  ASSERT_TRUE(readback.submit().ok());
-  const grid::mesh::Vertex& first = read.front();
-  for (const grid::mesh::Vertex& vertex : read) {
-    ASSERT_EQ(vertex.color.x, first.color.x);
-    ASSERT_EQ(vertex.color.y, first.color.y);
-    ASSERT_EQ(vertex.color.z, first.color.z);
-  }
-  const std::vector<int> colour{encoded(first.color.x), encoded(first.color.y),
-                                encoded(first.color.z)};
+  const std::vector<double> linear =
+      uniform_colour(view_->mesh(), *context_->device, *context_->allocator);
+  ASSERT_EQ(linear.size(), 3u);
+  const std::vector<int> colour{encoded(linear[0]), encoded(linear[1]),
+                                encoded(linear[2])};
   expect_mesh_pixel(colour, "Unlit");
   ImGui::SetCurrentContext(view_->ui_context());
   const ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
@@ -1925,6 +2039,62 @@ TEST_F(PlayerViewTest, UnlitShowsTheVertexColourUnshaded) {
   ASSERT_TRUE(present());
   expect_mesh_pixel(colour, "Unlit again");
   EXPECT_FALSE(view_->player().playing()) << "the tap pressed Unlit alone";
+}
+
+// The headlight through the view: from each side the camera takes, the
+// sphere's middle, which faces the viewer, is lit to over three quarters of
+// its vertex colour, where gfx's ambient alone is a quarter, and no brighter
+// than unshaded; kAwayFromTheLight, round the sphere from it, is darker, so
+// relief shows. The sides include the rig's, its cameras looking along +z,
+// and below and behind gfx's fixed default light (0.5, 0.8, 0.6), from where
+// that light left the middle at ambient alone. On the true-SDF stream, which
+// masks no voxel, so no side looks through a hole.
+TEST_F(PlayerViewTest, TheHeadlightLightsWhatFacesTheViewerFromEverySide) {
+  make_hooks_ = [](const HookContext&) {
+    return core::Result<FrameHooks>(FrameHooks{});
+  };
+  const std::string path =
+      scratch_.copy(VP_TEST_STREAMS, vp_test::kTrueSdfStream);
+  ASSERT_FALSE(path.empty());
+  ASSERT_TRUE(make_view(path, /*playing=*/false));
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  aim_at(view_->shown()->index);
+  const std::vector<double> linear =
+      uniform_colour(view_->mesh(), *context_->device, *context_->allocator);
+  ASSERT_EQ(linear.size(), 3u);
+  struct Side {
+    const char* name;
+    float azimuth;  // OrbitCamera's angles
+    float elevation;
+  };
+  const Side sides[] = {
+      {"in front, level", 0.0f, 0.0f},
+      {"from -z, as the rig's cameras look", kPi, -0.3f},
+      // The eye along -(0.5, 0.8, 0.6) (gfx's spherical_direction).
+      {"from below and behind gfx's default light", std::atan2(-0.5f, -0.6f),
+       std::asin(-0.8f / std::sqrt(1.25f))},
+      {"from above", 2.0f, 1.2f},
+  };
+  for (const Side& side : sides) {
+    SCOPED_TRACE(side.name);
+    view_->camera().set_azimuth(side.azimuth);
+    view_->camera().set_elevation(side.elevation);
+    ASSERT_TRUE(present());
+    probe_ = {0, 0};
+    const std::vector<int> facing = mesh_pixel();
+    probe_ = kAwayFromTheLight;
+    const std::vector<int> away = mesh_pixel();
+    ASSERT_EQ(facing.size(), 4u);
+    ASSERT_EQ(away.size(), 4u);
+    for (std::size_t c = 0; c < 3; ++c) {
+      EXPECT_GT(facing[c], encoded(0.75 * linear[c])) << "component " << c;
+      EXPECT_LE(facing[c], encoded(linear[c]) + 1) << "component " << c;
+      EXPECT_LT(away[c], facing[c] - 10) << "component " << c;
+    }
+  }
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
 }
 
 // A commit hook that skips frame 2 and holds frame 3 for five asks, through

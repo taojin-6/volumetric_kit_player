@@ -4,6 +4,34 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-29 — The light follows the viewer
+
+The view lights the mesh with a headlight (`headlight`): each frame,
+`record_mesh` sets gfx's `HybridMeshFrame::light_dir` from the camera's view.
+The desktop app, the iOS app and vp_probe all draw through `frame`, which
+calls it, so all three light the mesh alike.
+
+- **Not gfx's default.** Why: that light, (0.5, 0.8, 0.6), is fixed in the
+  world and takes +y as up. A rig's world is its first camera's own frame (+y
+  down, +z forward), so the light sat below and behind the room: what faced
+  the cameras had gfx's ambient alone, flat grey, and only what faced away
+  showed shading (the owner, 2026-10-29: "the shading seems flipped, only
+  back surface got shaded visibly"). The mesh was right: on the fused room
+  mesh, the vertex normals agree with the winding on 98.5% of faces. A light
+  tied to the view lights what faces the viewer in any world, from any side
+  the orbit takes.
+- **From just above and left of the eye,** (-0.3, 0.4, 1) in view space,
+  about 27° off the line of sight, not on it. Why: a light on the line of
+  sight lights every surface square to it alike; off it, a surface facing
+  the viewer is lit to 0.89 of full, one tilted toward the light to full and
+  one tilted away less, so relief shows. Above and left is where a viewer
+  expects light from.
+- **The player's own for now; gfx's next.** A view-relative light belongs in
+  gfx's mesh pipeline, where recon's rig_viewer, which makes its own, would
+  share it. Why not yet: moving it takes a gfx PR and a re-pin, and this
+  fixes the player first; the gfx task follows (the TODO in
+  player_view.cpp).
+
 ## 2026-10-29 — A program's stats text of several lines
 
 `FrameHooks::stats_line`'s text may hold several lines, separated by `\n`,

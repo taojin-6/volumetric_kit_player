@@ -14,6 +14,9 @@
 #include <utility>
 #include <vector>
 
+#include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
+
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
@@ -122,6 +125,29 @@ core::Result<core::DeviceRequirements> worker_requirements(
 /// @param live    Whether the player plays a live stream.
 /// @return The config; gfx clamps its image count to the surface's range.
 gfx::windowing::SwapchainConfig view_swapchain(VkExtent2D extent, bool live);
+
+/// @brief The view's light, a headlight: the world-space direction to it
+///        (gfx::pipelines::HybridMeshFrame::light_dir) for a camera's view.
+///        It comes from just above and left of the eye, in view space
+///        (-0.3, 0.4, 1) normalized, about 27° off the line of sight, so a
+///        surface that faces the viewer is lit and its relief shows, whatever
+///        axes the stream's world has: one with +y up, one with +z up, or a
+///        rig's that is its first camera's own frame (+y down, +z forward).
+///        @ref PlayerView lights each frame with its camera's.
+///
+/// @code
+/// const gfx::camera::Camera camera = orbit.to_camera(fovy, aspect, 0.05f,
+///                                                    100.0f);
+/// gfx::pipelines::HybridMeshFrame frame;
+/// frame.view_proj = camera.view_proj();
+/// frame.light_dir = headlight(camera.view());
+/// @endcode
+/// @pre @p view is a rotation and a translation, as a look-at's is
+///      (gfx::camera::OrbitCamera::view).
+/// @param view  The camera's world-to-view matrix: it looks down view -z,
+///              with view +y up on screen and +x to the right.
+/// @return The unit world-space direction toward the light.
+glm::vec3 headlight(const glm::mat4& view);
 
 /// @brief The window side of playback. It holds one device that the worker
 ///        and the renderer share, a FIFO swapchain, and the newest mesh drawn
@@ -255,10 +281,11 @@ class PlayerView {
   ///         (FrameTaker::frames_held).
   std::uint64_t frames_held() const noexcept { return taker_.frames_held(); }
   /// @brief Record the mesh as the last frame drew it: the live mesh under
-  ///        the camera, with its flags less the frame's DrawBinding clears
-  ///        and that binding's set. @ref frame records its draw through
-  ///        this; with @ref target_layout's target, a caller can read back
-  ///        what it drew, as the swapchain's images cannot be (the tests).
+  ///        the camera, lit by its @ref headlight, with its flags less the
+  ///        frame's DrawBinding clears and that binding's set. @ref frame
+  ///        records its draw through this; with @ref target_layout's target,
+  ///        a caller can read back what it drew, as the swapchain's images
+  ///        cannot be (the tests).
   /// @param cmd     A command buffer of the drawing device's, inside a pass
   ///                of a target laid out as @ref target_layout; whatever
   ///                submits it waits for the mesh's `ready` value.
