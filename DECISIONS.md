@@ -7,8 +7,9 @@ is implemented.
 ## 2026-10-29 — The light follows the viewer
 
 The view lights the mesh with a headlight (`headlight`): each frame,
-`record_mesh` sets gfx's `HybridMeshFrame::light_dir` from the camera's view,
-so `frame` lights it so on the desktop and iOS alike.
+`record_mesh` sets gfx's `HybridMeshFrame::light_dir` from the camera's view.
+The desktop app, the iOS app and vp_probe all draw through `frame`, which
+calls it, so all three light the mesh alike.
 
 - **Not gfx's default.** Why: that light, (0.5, 0.8, 0.6), is fixed in the
   world and takes +y as up. A rig's world is its first camera's own frame (+y
@@ -25,9 +26,11 @@ so `frame` lights it so on the desktop and iOS alike.
   the viewer is lit to 0.89 of full, one tilted toward the light to full and
   one tilted away less, so relief shows. Above and left is where a viewer
   expects light from.
-- **The player's own until a second program needs it in gfx.** recon's
-  rig_viewer makes its own view-relative light; a light gfx's mesh pipeline
-  derives from the view would serve both (a gfx task).
+- **The player's own for now; gfx's next.** A view-relative light belongs in
+  gfx's mesh pipeline, where recon's rig_viewer, which makes its own, would
+  share it. Why not yet: moving it takes a gfx PR and a re-pin, and this
+  fixes the player first; the gfx task follows (the TODO in
+  player_view.cpp).
 
 ## 2026-10-29 — A program's device requirements
 
