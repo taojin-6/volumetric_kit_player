@@ -38,6 +38,14 @@ pipelines::LiveMesh live_mesh(const grid::mesh::DeviceMesh& mesh) {
 
 }  // namespace
 
+core::Result<core::DeviceRequirements> worker_requirements(
+    const core::DeviceRequirements& program) try {
+  return core::merge(grid::device_requirements(), program);
+} catch (...) {
+  return core::exception_status("worker_requirements",
+                                core::Status::Code::InvalidArgument);
+}
+
 gfx::windowing::SwapchainConfig view_swapchain(VkExtent2D extent, bool live) {
   gfx::windowing::SwapchainConfig config;
   config.extent = extent;
@@ -66,9 +74,10 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   device_config.instance.enable_validation = config.validation;
   device_config.instance.request_debug_utils = config.debug_labels;
   device_config.graphics = app_config.device;
+  VKC_ASSIGN(const core::DeviceRequirements requirements,
+             worker_requirements(config.device_requirements));
   VKC_ASSIGN(std::unique_ptr<core::SharedDevice> shared,
-             app::make_shared_device(surface, grid::device_requirements(),
-                                     device_config));
+             app::make_shared_device(surface, requirements, device_config));
   VKC_ASSIGN(app::WindowedApp windowed,
              app::WindowedApp::adopt(*shared, app_config));
   gfx::ProfilerConfig profiler_config;
@@ -76,8 +85,7 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   VKC_ASSIGN(gfx::Profiler profiler,
              gfx::Profiler::create(windowed.device(), profiler_config));
   VKC_ASSIGN(core::Device grid_device,
-             core::Device::adopt(shared->compute_payload(),
-                                 grid::device_requirements()));
+             core::Device::adopt(shared->compute_payload(), requirements));
   VKC_ASSIGN(core::Allocator grid_allocator,
              core::Allocator::create(shared->instance().handle(), grid_device));
   VKC_ASSIGN(pipelines::HybridMeshPipeline mesh_pipeline,

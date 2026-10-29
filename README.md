@@ -48,7 +48,9 @@ everything but the desktop app, with no GLFW.
 
 Two targets make the desktop programs library calls, so a program of its own
 runs one with the view's settings it chooses (`AppConfig`, `app_config.hpp`,
-its `make_hooks` included), as the app's and vp_probe's mains do:
+its `make_hooks` included, and the `device_requirements` its hooks need
+beyond grid's, such as importing external memory), as the app's and
+vp_probe's mains do:
 
 - `volumetric_kit::player_desktop`: `run_desktop(argc, argv, config)`, the
   desktop app (`desktop.hpp`). It is built with `VP_DESKTOP_APP`, which a

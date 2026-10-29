@@ -23,8 +23,9 @@ namespace volumetric_kit::player {
 /// @endcode
 struct AppConfig {
   /// The view's settings before the command line's or the scenario's:
-  /// make_hooks and the rest. Each entry point says which of them its
-  /// command line or scenario sets.
+  /// make_hooks, the device_requirements its hooks need beyond grid's, and
+  /// the rest. Each entry point says which of them its command line or
+  /// scenario sets.
   PlayerViewConfig view;
 };
 

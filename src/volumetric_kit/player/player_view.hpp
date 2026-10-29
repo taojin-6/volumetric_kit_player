@@ -17,6 +17,7 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/device_requirements.hpp"
 #include "volumetric_kit/core/vulkan/shared_device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
@@ -80,11 +81,40 @@ struct PlayerViewConfig {
   /// starts (frame_hooks.hpp). Given, the ring holds one mesh more
   /// (mesh_wiring's `holds`); what the hooks capture must outlive the view.
   MakeHooks make_hooks;
+  /// What a program's hooks need of the worker's device beyond grid's, such
+  /// as importing external memory: merged with grid's, which stay required
+  /// (@ref worker_requirements). The device is made with them, so the hooks'
+  /// devices (HookContext::device and commit_device, one `VkDevice`) enable
+  /// them: each optional extension where the device offers it
+  /// (core::Device::extension_enabled says which), and a required extension
+  /// or feature the device lacks refuses it. The worker's queue never
+  /// presents, so `needs_present` is refused. The default, the core's floor,
+  /// which grid's include, asks for nothing more.
+  core::DeviceRequirements device_requirements;
   /// The panel's Unlit, at start (PlayerView::unlit).
   bool unlit = false;
   /// The panel's Texture, at start (PlayerView::textured).
   bool textured = false;
 };
+
+/// @brief The requirements of the device the worker decodes and meshes on, as
+///        @ref PlayerView and vp_probe (probe.hpp) make it: grid's
+///        (grid::device_requirements) merged with a program's (core::merge),
+///        so grid's stay required.
+///
+/// @code
+/// PlayerViewConfig config;
+/// config.device_requirements.optional_extensions.push_back(
+///     VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+/// VKC_ASSIGN(const core::DeviceRequirements requirements,
+///            worker_requirements(config.device_requirements));
+/// @endcode
+/// @param program  A program's (PlayerViewConfig::device_requirements).
+/// @return The merged requirements: grid's alone for the default; or
+///         core::merge's failure. Host allocation failures return
+///         `OutOfMemory`.
+core::Result<core::DeviceRequirements> worker_requirements(
+    const core::DeviceRequirements& program);
 
 /// @brief The swapchain @ref PlayerView asks gfx for: gfx's FIFO default and
 ///        D32 depth; live, two images, so a mesh taken shows a vsync sooner,
@@ -123,10 +153,12 @@ class PlayerView {
  public:
   static constexpr float kFovY = 0.87f;  ///< Vertical field of view, radians.
 
-  /// @brief Make the shared device on @p surface (gfx::app::make_shared_device)
-  ///        and adopt it for gfx (@ref view_swapchain, 2 frames in flight)
-  ///        and for grid. Build the mesh pipeline, the overlay (no imgui.ini)
-  ///        and a gfx::Profiler for the stats' "draw (mesh+UI)" row, which
+  /// @brief Make the shared device on @p surface
+  ///        (gfx::app::make_shared_device), its compute side with
+  ///        @ref worker_requirements of the config's device_requirements, and
+  ///        adopt it for gfx (@ref view_swapchain, 2 frames in flight) and for
+  ///        grid. Build the mesh pipeline, the overlay (no imgui.ini) and a
+  ///        gfx::Profiler for the stats' "draw (mesh+UI)" row, which
   ///        @ref frame attaches to the frame loop while the draw is timed
   ///        (PlayerViewConfig::device_timing). Aim the camera at the first
   ///        view: target (0, 0.85, 0), 3 m. Make the hooks
@@ -139,12 +171,14 @@ class PlayerView {
   /// @param player   An opened player, not started.
   /// @param config   The UI's sizes, the Source button, validation, a
   ///                 measurement's timing, tile depth and labels, vertex
-  ///                 sharing, the hooks, Unlit and Texture.
+  ///                 sharing, the hooks and their device requirements, Unlit
+  ///                 and Texture.
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
   ///         @p player or an empty @p extent; or the first failure (device,
-  ///         swapchain, pipeline, overlay, profiler, make_hooks,
-  ///         StreamPlayer::start). Host allocation failures return
-  ///         `OutOfMemory`.
+  ///         `Unsupported` naming what no GPU offers of a program's required
+  ///         extensions or features among them, swapchain, pipeline, overlay,
+  ///         profiler, make_hooks, StreamPlayer::start). Host allocation
+  ///         failures return `OutOfMemory`.
   static core::Result<std::unique_ptr<PlayerView>> create(
       const gfx::windowing::SurfaceSource& surface, VkExtent2D extent,
       std::unique_ptr<StreamPlayer> player,

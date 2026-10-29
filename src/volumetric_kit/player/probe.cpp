@@ -33,7 +33,6 @@
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
-#include "volumetric_kit/grid/base/device_requirements.hpp"
 #include "volumetric_kit/grid/mesh/device_mesh.hpp"
 #include "volumetric_kit/grid/mesh/mesh.hpp"
 #include "volumetric_kit/grid/mesh_io/ply_writer.hpp"
@@ -644,9 +643,10 @@ struct Teardown {
   }
 };
 
-core::Status run_worker(const Args& args, const vkp::MakeHooks& make_hooks,
+core::Status run_worker(const Args& args, const vkp::PlayerViewConfig& config,
                         std::unique_ptr<vkp::StreamPlayer> player,
                         Probes& probes) {
+  const vkp::MakeHooks& make_hooks = config.make_hooks;
   Run run(args, player->live());
   const std::string stream = stream_of(args, *player);
   core::InstanceConfig instance_config = test::instance_config(validation());
@@ -655,8 +655,9 @@ core::Status run_worker(const Args& args, const vkp::MakeHooks& make_hooks,
   VKC_ASSIGN(const core::Instance instance,
              core::Instance::create(instance_config));
   VKC_TRY(test::check_layer_loaded(instance));
-  const core::DeviceRequirements requirements =
-      volumetric_kit::grid::device_requirements();
+  // The view's: grid's, and the program's (PlayerView::create).
+  VKC_ASSIGN(const core::DeviceRequirements requirements,
+             vkp::worker_requirements(config.device_requirements));
   VKC_ASSIGN(const core::PhysicalDeviceInfo physical,
              instance.select_physical_device(requirements));
   VKC_ASSIGN(core::Device device,
@@ -744,9 +745,8 @@ core::Status run(const Args& args, const vkp::AppConfig& app, Probes& probes) {
     config.make_hooks = make_probe_hooks(probes);
   }
   // The view, or the worker, is gone on return: its last mesh is saved.
-  VKC_TRY(args.worker
-              ? run_worker(args, config.make_hooks, std::move(player), probes)
-              : run_view(args, config, std::move(player), probes));
+  VKC_TRY(args.worker ? run_worker(args, config, std::move(player), probes)
+                      : run_view(args, config, std::move(player), probes));
   return probes.saver ? probes.saver->finish() : core::Status();
 }
 

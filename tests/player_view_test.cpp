@@ -36,6 +36,13 @@
 // it is shaded; a commit hook holds and skips frames; the hooks' stats line is
 // the stats' last; and a before_draw failure stops the view. A live view
 // presents, on the two images its swapchain asks for (checked on the host).
+// A program's device requirements (PlayerViewConfig::device_requirements),
+// merged with grid's on the host (worker_requirements): none leave grid's
+// alone, and a program's add to grid's, which stay. On the device, none leave
+// the device as grid's alone makes it; an optional extension is enabled on the
+// hooks' devices where the GPU offers it and skipped where not; grid's stay
+// enabled under requirements that leave them out, and frames play; and a
+// required extension no GPU offers refuses the view, its hooks never made.
 // The view makes its own shared device, validated as the test policy asks, so
 // the layer's errors fail the test. The tests skip where the loader offers no
 // headless surface (NVIDIA's ICD), but fail on Apple, where MoltenVK has one.
@@ -70,12 +77,14 @@
 #include "controls_layout.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"  // FindWindowByName, to find the panel
+#include "program_requirements.hpp"
 #include "test_allocation_failure.hpp"
 #include "test_stream.hpp"
 #include "volumetric_kit/core/testing/vulkan_fixture.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
+#include "volumetric_kit/core/vulkan/device_requirements.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/shared_device.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
@@ -121,6 +130,7 @@ using volumetric_kit::player::StatsPanel;
 using volumetric_kit::player::status_line;
 using volumetric_kit::player::StreamPlayer;
 using volumetric_kit::player::view_swapchain;
+using volumetric_kit::player::worker_requirements;
 using SteadyClock = std::chrono::steady_clock;
 
 constexpr VkExtent2D kExtent{320, 240};
@@ -179,6 +189,58 @@ TEST(PlayerViewAllocation, InvalidCreateDiagnosticIsContained) {
             core::Status::Code::InvalidArgument);
 }
 
+// --- A program's device requirements, merged on the host --------------------
+
+// Expects requirements `got` to be `want`, field by field; `what` names the
+// check in a failure.
+void expect_requirements(const core::DeviceRequirements& got,
+                         const core::DeviceRequirements& want,
+                         const char* what) {
+  SCOPED_TRACE(what);
+  EXPECT_EQ(got.api_version, want.api_version);
+  EXPECT_EQ(got.queue_flags, want.queue_flags);
+  EXPECT_EQ(got.needs_present, want.needs_present);
+  EXPECT_EQ(got.extensions, want.extensions);
+  EXPECT_EQ(got.optional_extensions, want.optional_extensions);
+  EXPECT_EQ(std::memcmp(&got.features, &want.features, sizeof got.features), 0);
+  EXPECT_EQ(got.timeline_semaphore, want.timeline_semaphore);
+  EXPECT_EQ(got.scalar_block_layout, want.scalar_block_layout);
+  EXPECT_EQ(got.dynamic_rendering, want.dynamic_rendering);
+  EXPECT_EQ(got.feature_chain, want.feature_chain);
+}
+
+// A view config's default asks for nothing beyond grid's: the worker's
+// device is made with grid's alone, as before a program could add to them.
+TEST(WorkerRequirements, NoneFromAProgramAreGridsAlone) {
+  const core::Result<core::DeviceRequirements> merged =
+      worker_requirements(PlayerViewConfig{}.device_requirements);
+  ASSERT_TRUE(merged.ok()) << merged.status().message();
+  expect_requirements(*merged, grid::device_requirements(), "the default");
+}
+
+// A program's are added to grid's, which stay, though the program's leave
+// them out.
+TEST(WorkerRequirements, AProgramsAddToGridsWhichStay) {
+  core::DeviceRequirements program;
+  program.api_version = VK_API_VERSION_1_3;
+  program.extensions = {"VK_VP_test_required"};
+  program.optional_extensions = {"VK_VP_test_optional"};
+  program.features.shaderInt64 = VK_TRUE;
+  program.timeline_semaphore = false;
+  program.scalar_block_layout = false;
+  const core::Result<core::DeviceRequirements> merged =
+      worker_requirements(program);
+  ASSERT_TRUE(merged.ok()) << merged.status().message();
+  core::DeviceRequirements want = grid::device_requirements();
+  want.api_version = VK_API_VERSION_1_3;
+  want.extensions = program.extensions;
+  want.optional_extensions = program.optional_extensions;
+  want.features.shaderInt64 = VK_TRUE;
+  expect_requirements(*merged, want, "a program's");
+  EXPECT_TRUE(merged->scalar_block_layout) << "grid's dropped";
+  EXPECT_TRUE(merged->timeline_semaphore) << "grid's dropped";
+}
+
 // Hooks with `line` as their stats line; none for an empty one.
 MakeHooks line_hooks(const std::string& line) {
   if (line.empty()) {
@@ -227,7 +289,8 @@ class PlayerViewTest : public core::test::VulkanTest {
 
   // The view's config: at `ui_scale_` and `ui_min_frame_height_`, with
   // Source while `source_button_`, validated as the test policy asks, Unlit
-  // as `unlit_`, Texture as `textured_` and with `make_hooks_`'s hooks.
+  // as `unlit_`, Texture as `textured_` and with `make_hooks_`'s hooks and
+  // `device_requirements_`.
   PlayerViewConfig config() {
     PlayerViewConfig config;
     config.ui_scale = ui_scale_;
@@ -239,6 +302,7 @@ class PlayerViewTest : public core::test::VulkanTest {
     config.share_vertices = share_vertices_;
     config.unlit = unlit_;
     config.textured = textured_;
+    config.device_requirements = device_requirements_;
     if (make_hooks_) {
       // The context's devices and pipeline noted, for the test's own work on
       // them; they live as long as the view.
@@ -622,6 +686,7 @@ class PlayerViewTest : public core::test::VulkanTest {
   bool unlit_ = PlayerViewConfig{}.unlit;
   bool textured_ = PlayerViewConfig{}.textured;
   MakeHooks make_hooks_;  // the view's hooks, with the context noted
+  core::DeviceRequirements device_requirements_;  // the program's
   // What the hooks were made with, as the view's create gave it.
   struct Context {
     core::Device* device;
@@ -1317,6 +1382,80 @@ TEST_F(PlayerViewTest, MoltenVkPlansTwoFamilies) {
       << core::to_string(shared.value()->plan());
 }
 #endif
+
+// --- A program's device requirements (PlayerViewConfig::device_requirements)
+
+// With none, the device is grid's alone: an extension the GPU offers that
+// nothing the view asks for enables is off, and grid's are on.
+TEST_F(PlayerViewTest, WithNoProgramRequirementsTheDeviceIsGridsAlone) {
+  const std::string offered = vp_test::offered_extension(physical());
+  ASSERT_FALSE(offered.empty()) << "the GPU offers none of the extensions";
+  ASSERT_TRUE(make_view());
+  EXPECT_FALSE(view_->compute_device().extension_enabled(offered.c_str()))
+      << offered;
+  const core::Status grids =
+      view_->compute_device().check_enabled(grid::device_requirements());
+  EXPECT_TRUE(grids.ok()) << grids.message();
+}
+
+// A program's optional extension is enabled where the GPU offers it, on both
+// the hooks' devices (one VkDevice), and skipped where it does not.
+TEST_F(PlayerViewTest, AProgramsOptionalExtensionIsEnabledWhereOffered) {
+  const std::string offered = vp_test::offered_extension(physical());
+  ASSERT_FALSE(offered.empty()) << "the GPU offers none of the extensions";
+  device_requirements_.optional_extensions = {offered,
+                                              vp_test::kAbsentExtension};
+  make_hooks_ = [](const HookContext&) {
+    return core::Result<FrameHooks>(FrameHooks{});
+  };
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(context_.has_value());
+  for (const core::Device* device :
+       {context_->device, context_->commit_device}) {
+    EXPECT_TRUE(device->extension_enabled(offered.c_str())) << offered;
+    EXPECT_FALSE(device->extension_enabled(vp_test::kAbsentExtension));
+  }
+}
+
+// A program's requirements that leave grid's out keep them: the worker's
+// device enables them, and frames play.
+TEST_F(PlayerViewTest, GridsRequirementsHoldUnderAProgramsOwn) {
+  const std::string offered = vp_test::offered_extension(physical());
+  ASSERT_FALSE(offered.empty()) << "the GPU offers none of the extensions";
+  device_requirements_.timeline_semaphore = false;
+  device_requirements_.scalar_block_layout = false;
+  device_requirements_.optional_extensions = {offered};
+  ASSERT_TRUE(make_view());
+  const core::Status grids =
+      view_->compute_device().check_enabled(grid::device_requirements());
+  EXPECT_TRUE(grids.ok()) << grids.message();
+  EXPECT_TRUE(view_->compute_device().extension_enabled(offered.c_str()))
+      << offered;
+  ASSERT_TRUE(tick_until([&] {
+    return view_->shown().has_value() && view_->shown()->index >= 2;
+  }));
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
+
+// A program's required extension no GPU offers refuses the view, naming it,
+// before its hooks are made.
+TEST_F(PlayerViewTest, AProgramsRequiredExtensionTheGpuLacksRefusesTheView) {
+  device_requirements_.extensions = {vp_test::kAbsentExtension};
+  int makes = 0;
+  make_hooks_ = [&makes](const HookContext&) {
+    ++makes;
+    return core::Result<FrameHooks>(FrameHooks{});
+  };
+  const core::Status refused =
+      PlayerView::create(surface_, kExtent, open(), config()).status();
+  EXPECT_EQ(refused.domain(), core::Status::Code::Unsupported)
+      << refused.message();
+  EXPECT_NE(refused.message().find(vp_test::kAbsentExtension),
+            std::string::npos)
+      << refused.message();
+  EXPECT_EQ(makes, 0);
+}
 
 // --- Hooks (frame_hooks.hpp) through the view --------------------------------
 
