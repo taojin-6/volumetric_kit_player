@@ -406,9 +406,9 @@ void StatsPanel::draw(const PlaybackStats& stats,
   // tall has room for the renderer's beside the worker's, not below. The
   // worker's column holds the bitrate, frame and deblock lines; the rest, the
   // device's line, the rate and a program's lines, sit over the display's
-  // rate, where a phone in landscape has room for them (DECISIONS.md).
-  // Beside, a worker's line takes the width the renderer's column left as of
-  // the last frame.
+  // rate, where a phone in landscape has room for them with one program line
+  // (DECISIONS.md). Beside, a worker's line takes the width the renderer's
+  // column left as of the last frame.
   const auto kept = [](const std::vector<core::StageRow>& rows,
                        std::initializer_list<const char*> dropped) {
     std::vector<core::StageRow> kept_rows;

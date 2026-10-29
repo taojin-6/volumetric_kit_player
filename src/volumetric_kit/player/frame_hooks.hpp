@@ -112,9 +112,10 @@ struct FrameHooks {
   /// at most once a @ref StatsPanel::kProgramLineRefresh: a program's text,
   /// short lines separated by '\n' that the panel shows as its last lines,
   /// in order and each its own, but the empty ones (@ref stats_lines), until
-  /// the next call. Not called while the panel is closed or no frame is
-  /// drawn, so a call may come long after the one before. Empty, it shows
-  /// nothing; with no view it is never called.
+  /// the next call; a phone in landscape has room for one (DECISIONS.md).
+  /// Not called while the panel is closed or no frame is drawn, so a call
+  /// may come long after the one before. Empty, it shows nothing; with no
+  /// view it is never called.
   std::function<std::string()> stats_line;
 };
 

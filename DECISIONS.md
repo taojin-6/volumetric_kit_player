@@ -10,14 +10,13 @@ is implemented.
 each shown as its own. It amends "One line" in "A program's line in the
 stats" below.
 
-- **The program breaks its text, not the panel.** Why: a program with more
-  figures than one line holds groups them as it reads best; the panel still
+- **The program breaks its text, not the panel.** Why: a program whose
+  figures do not fit one line groups them as they read best; the panel still
   breaks a line too wide for its room at its ` · ` (2026-10-26).
 - **Compact, every line over the renderer's table,** as the one was. On the
   view tests' narrowest phone in portrait three lines fit; on the shortest
-  notched one in landscape, whose renderer's column has room for one, three
-  take the stats 36 pt past the controls (MoltenVK on an M5 Max), so a
-  program for that phone keeps to one.
+  notched one in landscape three take the stats 36 pt past the controls
+  (MoltenVK on an M5 Max), so a program for that phone keeps to one.
 
 ## 2026-10-29 — A program's device requirements
 
