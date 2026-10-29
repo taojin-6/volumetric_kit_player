@@ -171,10 +171,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the stream through `run_desktop` with a program's hooks
   (`tests/vp_desktop_hooks.cpp`).
 - `PlayerViewConfig::device_requirements`: what a program's hooks need of
-  the worker's device beyond grid's, such as importing external memory.
-  The view's device, and vp_probe's by the worker alone, are made with them
-  merged with grid's, which stay required (`worker_requirements`, the core's
-  `merge`); the default asks for nothing more.
+  the worker's device beyond grid's. The view's device, and vp_probe's by
+  the worker alone, are made with them merged with grid's
+  (`worker_requirements`, the core's `merge`).
 
 ### Changed
 
@@ -323,3 +322,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `after_mesh` hook's `grid::volume::VoxelBlockGrid`, a mesh's
   `grid::mesh::DeviceMesh`), and links `volumetric_kit::grid_<tier>`; the
   player brings grid, not recon. `BuildInfo::recon` is `BuildInfo::grid`.
+- A program whose hooks need more of the worker's device than grid's
+  requirements, such as importing external memory, asks for it in
+  `PlayerViewConfig::device_requirements` (`AppConfig::view` for
+  `run_desktop` and `run_probe`).

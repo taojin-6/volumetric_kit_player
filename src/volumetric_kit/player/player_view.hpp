@@ -82,14 +82,10 @@ struct PlayerViewConfig {
   /// (mesh_wiring's `holds`); what the hooks capture must outlive the view.
   MakeHooks make_hooks;
   /// What a program's hooks need of the worker's device beyond grid's, such
-  /// as importing external memory: merged with grid's, which stay required
-  /// (@ref worker_requirements). The device is made with them, so the hooks'
+  /// as importing external memory (@ref worker_requirements). The hooks'
   /// devices (HookContext::device and commit_device, one `VkDevice`) enable
-  /// them: each optional extension where the device offers it
-  /// (core::Device::extension_enabled says which), and a required extension
-  /// or feature the device lacks refuses it. The worker's queue never
-  /// presents, so `needs_present` is refused. The default, the core's floor,
-  /// which grid's include, asks for nothing more.
+  /// them. The worker's queue never presents, so `needs_present` is refused.
+  /// The default adds nothing.
   core::DeviceRequirements device_requirements;
   /// The panel's Unlit, at start (PlayerView::unlit).
   bool unlit = false;
@@ -110,9 +106,8 @@ struct PlayerViewConfig {
 ///            worker_requirements(config.device_requirements));
 /// @endcode
 /// @param program  A program's (PlayerViewConfig::device_requirements).
-/// @return The merged requirements: grid's alone for the default; or
-///         core::merge's failure. Host allocation failures return
-///         `OutOfMemory`.
+/// @return The merged requirements, or core::merge's failure. Host allocation
+///         failures return `OutOfMemory`.
 core::Result<core::DeviceRequirements> worker_requirements(
     const core::DeviceRequirements& program);
 
