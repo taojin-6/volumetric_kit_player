@@ -4,6 +4,40 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-29 — Built on grid, not recon
+
+recon's `grid/` is now
+[volumetric_kit_grid](https://github.com/taojin-6/volumetric_kit_grid)
+(recon #309), a repository of its own on the core alone: the voxel grid,
+Marching Cubes and the mesh types, mesh files, the codec, the `.vrst`
+container and the live stream's server and client. Everything the player
+took from recon is there, and none of what stayed in recon (its sensors,
+fusion and texturing), so the player fetches core, grid and gfx, and no
+recon.
+
+- **The same code under grid's names, with no aliases.** grid's tiers are
+  recon's at the player's last pin (#299's merge, d8b8bda), moved and
+  renamed: headers `volumetric_kit/grid/<tier>/`, namespaces
+  `volumetric_kit::grid::<tier>`, targets `volumetric_kit::grid_<tier>`, the
+  PLY writer in `mesh_io` and the mesh integrator in `voxelize`. The `.vrst`
+  format, the decode and the meshes are unchanged: on the home RTX 5090 the
+  tests' streams that main and this change write are the same bytes, and so
+  are the meshes each decodes from them. Why: a re-pin is then a rename, and
+  a forwarding name would be one more to retire.
+- **grid is declared after the core and before gfx, and checked with
+  `vkc_require_sibling(volumetric_kit::grid 0.1.0 TARGETS …)`**, its tests
+  and examples off. Why: the core comes first so every sibling shares it
+  (2026-10-18), and the check (core 0.27.0's) refuses, at configure time, an
+  older grid or an override without a tier the player links.
+- **The device asks for grid's requirements:** `scalarBlockLayout`, without
+  the external-memory and Metal-object extensions recon asked for, where
+  offered, for its camera decoders. Why: the player never used them.
+- **The measure log names grid's commit, as format 4.** The build stamp
+  (`vp_build_info`) and the runner's sibling lists name core, grid and gfx;
+  the summarizer still reads formats 1 to 3, which name recon's. Why: a log
+  names the code that ran.
+- Earlier entries say recon for what is now grid's; their decisions stand.
+
 ## 2026-10-27 — A program's line in the stats
 
 `FrameHooks::stats_line`, a function that returns a short text the stats

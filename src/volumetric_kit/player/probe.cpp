@@ -33,6 +33,11 @@
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
+#include "volumetric_kit/grid/base/device_requirements.hpp"
+#include "volumetric_kit/grid/mesh/device_mesh.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
+#include "volumetric_kit/grid/mesh_io/ply_writer.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/player/app_config.hpp"
 #include "volumetric_kit/player/command_line.hpp"
 #include "volumetric_kit/player/controls.hpp"
@@ -42,11 +47,6 @@
 #include "volumetric_kit/player/playback_stats.hpp"
 #include "volumetric_kit/player/player_view.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/io/ply_writer.hpp"
-#include "volumetric_kit/recon/mesh/device_mesh.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace {
 
@@ -55,7 +55,7 @@ namespace gfx = volumetric_kit::gfx;
 namespace test = volumetric_kit::core::test;
 namespace vkp = volumetric_kit::player;
 using Clock = std::chrono::steady_clock;
-using DeviceMesh = volumetric_kit::recon::mesh::DeviceMesh;
+using DeviceMesh = volumetric_kit::grid::mesh::DeviceMesh;
 
 constexpr const char* kUsage =
     "usage: vp_probe (--file PATH | --connect HOST[:PORT]) [--frames N]\n"
@@ -431,8 +431,8 @@ class LatencyProbe {
 };
 
 // --save-meshes DIR: each mesh read back in its after_mesh batch, and written
-// as DIR/<frame>.ply (recon's io::write_ply) once that batch has finished: at
-// the next mesh, as the player finishes the batch before it, or at the end.
+// as DIR/<frame>.ply (grid's mesh_io::write_ply) once that batch has finished:
+// at the next mesh, as the player finishes the batch before it, or at the end.
 class MeshSaver {
  public:
   explicit MeshSaver(std::string dir) : dir_(std::move(dir)) {}
@@ -440,7 +440,7 @@ class MeshSaver {
   // The worker's, in after_mesh: write the mesh before, then record this
   // one's readback into `batch`.
   core::Status record(core::CommandBatch& batch,
-                      const volumetric_kit::recon::volume::VoxelBlockGrid& grid,
+                      const volumetric_kit::grid::volume::VoxelBlockGrid& grid,
                       const DeviceMesh& mesh, const vkp::FrameStamp& stamp) {
     VKC_TRY(finish());
     Pending& pending = pending_.emplace();
@@ -449,7 +449,7 @@ class MeshSaver {
     pending.mesh.vertices.resize(mesh.vertex_count);
     pending.mesh.indices.resize(std::size_t{3} * mesh.triangle_count);
     const VkDeviceSize vertices = VkDeviceSize{mesh.vertex_count} *
-                                  sizeof(volumetric_kit::recon::mesh::Vertex);
+                                  sizeof(volumetric_kit::grid::mesh::Vertex);
     const VkDeviceSize indices =
         VkDeviceSize{3} * mesh.triangle_count * sizeof(std::uint32_t);
     if (vertices != 0) {
@@ -473,7 +473,7 @@ class MeshSaver {
     const std::string path = (std::filesystem::path(dir_) /
                               (std::to_string(pending_->index) + ".ply"))
                                  .string();
-    VKC_TRY(volumetric_kit::recon::io::write_ply(path, pending_->mesh));
+    VKC_TRY(volumetric_kit::grid::mesh_io::write_ply(path, pending_->mesh));
     std::printf("vp_probe: saved %s: %zu vertices, %zu triangles, %u blocks\n",
                 path.c_str(), pending_->mesh.vertices.size(),
                 pending_->mesh.triangle_count(), pending_->blocks);
@@ -486,7 +486,7 @@ class MeshSaver {
   struct Pending {
     std::uint64_t index = 0;
     std::uint32_t blocks = 0;  // the grid's allocated blocks
-    volumetric_kit::recon::mesh::Mesh mesh;
+    volumetric_kit::grid::mesh::Mesh mesh;
   };
 
   // A view of the extractor's `buffer`: its deleter frees nothing.
@@ -506,10 +506,9 @@ class MeshSaver {
 vkp::FrameHooks probe_hooks(LatencyProbe* latency, MeshSaver* saver) {
   vkp::FrameHooks hooks;
   hooks.after_mesh =
-      [latency, saver](
-          core::CommandBatch& batch,
-          const volumetric_kit::recon::volume::VoxelBlockGrid& grid,
-          const DeviceMesh& mesh, vkp::FrameStamp& stamp) {
+      [latency, saver](core::CommandBatch& batch,
+                       const volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+                       const DeviceMesh& mesh, vkp::FrameStamp& stamp) {
         if (saver != nullptr) {
           VKC_TRY(saver->record(batch, grid, mesh, stamp));
         }
@@ -657,7 +656,7 @@ core::Status run_worker(const Args& args, const vkp::MakeHooks& make_hooks,
              core::Instance::create(instance_config));
   VKC_TRY(test::check_layer_loaded(instance));
   const core::DeviceRequirements requirements =
-      volumetric_kit::recon::device_requirements();
+      volumetric_kit::grid::device_requirements();
   VKC_ASSIGN(const core::PhysicalDeviceInfo physical,
              instance.select_physical_device(requirements));
   VKC_ASSIGN(core::Device device,

@@ -39,7 +39,7 @@ import textwrap
 import unittest
 
 MEASURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "measure")
-SIBLINGS = ("core", "recon", "gfx")
+SIBLINGS = ("core", "grid", "gfx")
 
 
 def git(cwd, *args):
@@ -171,10 +171,10 @@ class DryRun(MeasureCase):
     def test_mac_builds_on_the_clean_siblings_at_their_pins(self):
         pins = {name: self.repo(f"volumetric_kit_{name}")
                 for name in SIBLINGS}
-        # recon at its pin with a tracked change; gfx moved on, a worktree of
+        # grid at its pin with a tracked change; gfx moved on, a worktree of
         # it still at its pin.
-        recon = os.path.join(self.root, "volumetric_kit_recon")
-        with open(os.path.join(recon, "file.txt"), "w", encoding="utf-8") as f:
+        grid = os.path.join(self.root, "volumetric_kit_grid")
+        with open(os.path.join(grid, "file.txt"), "w", encoding="utf-8") as f:
             f.write("changed\n")
         gfx = os.path.join(self.root, "volumetric_kit_gfx")
         at_pin = os.path.join(gfx, ".worktrees", "at-pin")
@@ -194,7 +194,7 @@ class DryRun(MeasureCase):
             "cmake", "-S", worktree, "-B", build, "-G", "Unix Makefiles",
             "-DCMAKE_BUILD_TYPE=Release", "-DVP_DESKTOP_APP=OFF",
             f"-D{source}CORE={os.path.join(self.root, 'volumetric_kit_core')}",
-            f"-U{source}RECON", f"-D{source}GFX={at_pin}"])
+            f"-U{source}GRID", f"-D{source}GFX={at_pin}"])
         self.assertEqual(commands[3], ["cmake", "--build", build, "--parallel",
                                        "8", "--target", "vp_probe"])
         self.assertEqual(commands[4][:2], ["mkdir", "-p"])

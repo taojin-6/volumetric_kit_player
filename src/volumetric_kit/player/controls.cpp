@@ -247,7 +247,7 @@ std::string live_status_line(const LiveStatus& status,
       break;
   }
   std::string line = "live · seq " + std::to_string(status.seq);
-  if (status.set != recon::stream::kNoSet) {
+  if (status.set != grid::stream::kNoSet) {
     line += " · set " + std::to_string(status.set);
   }
   const auto quiet = std::chrono::duration_cast<std::chrono::seconds>(
@@ -265,7 +265,7 @@ std::string status_line(const std::optional<FrameStamp>& shown,
   }
   std::string line = "frame " + std::to_string(shown->index + 1) + "/" +
                      std::to_string(frame_count);
-  if (shown->set != recon::stream::kNoSet) {
+  if (shown->set != grid::stream::kNoSet) {
     line += " · set " + std::to_string(shown->set);
   }
   line += playing ? " · playing" : " · paused";
@@ -289,7 +289,7 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
     frame = std::string("frame ") + (shown->key ? "I" : "P") + " · " +
             fixed(static_cast<double>(shown->bytes) / 1e3, 1) + " kB · " +
             fixed(triangles / 1e3, 0) + " k tris";
-    const recon::codec::DeblockInfo& info = shown->deblock;
+    const grid::codec::DeblockInfo& info = shown->deblock;
     const std::string_view filter = shown->deblock_on ? info.filter : "off";
     deblock = "deblock " + std::string(filter) + " · T " +
               fixed(static_cast<double>(info.step) * 1e3, 3) + " mm";

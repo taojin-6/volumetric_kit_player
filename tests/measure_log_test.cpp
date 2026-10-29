@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// The measure log on the host, format 3: its header names the build, the
+// The measure log on the host, format 4: its header names the build, the
 // device, the rings, the stream, how it ran, the timing, the tile depth, the
 // labels, the vertex sharing and the time, and on a phone its thermal state
 // and Low Power Mode, then the columns; each frame is its worker rows, host
@@ -42,10 +42,10 @@
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/testing/vulkan_fixture.hpp"
 #include "volumetric_kit/core/vulkan/host_ring.hpp"
+#include "volumetric_kit/grid/base/device_requirements.hpp"
+#include "volumetric_kit/grid/mesh/device_mesh.hpp"
 #include "volumetric_kit/player/command_line.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/mesh/device_mesh.hpp"
 
 namespace {
 
@@ -80,9 +80,9 @@ MeasureContext context() {
 constexpr std::size_t kHeaderLines = 16;
 
 // A mesh of `triangles` triangles over `vertices` vertices, for its counts.
-volumetric_kit::recon::mesh::DeviceMesh mesh_of(std::uint32_t triangles,
-                                                std::uint32_t vertices) {
-  volumetric_kit::recon::mesh::DeviceMesh mesh;
+volumetric_kit::grid::mesh::DeviceMesh mesh_of(std::uint32_t triangles,
+                                               std::uint32_t vertices) {
+  volumetric_kit::grid::mesh::DeviceMesh mesh;
   mesh.triangle_count = triangles;
   mesh.vertex_count = vertices;
   return mesh;
@@ -157,10 +157,10 @@ TEST(MeasureLog, TheHeaderNamesWhatWasMeasuredThenTheColumns) {
   ASSERT_TRUE((*log)->finish().ok());
   const vkp::BuildInfo& build = vkp::build_info();
   EXPECT_EQ(read_lines(path),
-            (Lines{"# format: volumetric_kit_player measure 3",
+            (Lines{"# format: volumetric_kit_player measure 4",
                    std::string("# player: ") + build.player,
                    std::string("# core: ") + build.core,
-                   std::string("# recon: ") + build.recon,
+                   std::string("# grid: ") + build.grid,
                    std::string("# gfx: ") + build.gfx,
                    std::string("# build: ") + build.build_type,
                    "# device: Test GPU; vendor 0x1234", "# rings: copied",
@@ -412,7 +412,7 @@ TEST(TileDepthAndSwitch, TakeTheirNamesAlone) {
 class DeviceLineTest : public core::test::VulkanDeviceTest {
  protected:
   core::DeviceRequirements requirements() const override {
-    return volumetric_kit::recon::device_requirements();
+    return volumetric_kit::grid::device_requirements();
   }
 };
 
@@ -439,7 +439,7 @@ TEST_F(DeviceLineTest, ItNamesTheDeviceItsDriverMemoryAndTimestamps) {
   EXPECT_EQ(line.find('\n'), std::string::npos);
 }
 
-// recon's rings run in place exactly where the core's HostRing does: a ring
+// grid's rings run in place exactly where the core's HostRing does: a ring
 // made on the device says.
 TEST_F(DeviceLineTest, TheRingsRunInPlaceExactlyWhereAHostRingDoes) {
   core::HostRingDesc desc;

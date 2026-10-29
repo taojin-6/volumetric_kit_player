@@ -61,8 +61,8 @@ FrameFigures frame_figures(const FrameStamp& stamp) {
   return figures;
 }
 
-PlaybackStats::PlaybackStats(const recon::stream::TrackStats& track,
-                             recon::stream::Rate rate)
+PlaybackStats::PlaybackStats(const grid::stream::TrackStats& track,
+                             grid::stream::Rate rate)
     : track_(track) {
   const std::optional<std::chrono::nanoseconds> period =
       nominal_period(rate.num, rate.den);

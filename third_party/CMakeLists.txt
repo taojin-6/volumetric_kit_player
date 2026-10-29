@@ -2,9 +2,9 @@
 # Copyright (c) 2026 Tao Jin
 
 # Third-party dependencies, fetched pinned (FetchContent): volumetric_kit_core,
-# volumetric_kit_recon, volumetric_kit_gfx, and googletest when the tests are
-# built. recon and gfx take Vulkan and GLM from the system, or on iOS as the
-# core sets them up. Work on a sibling's checkout at once with
+# volumetric_kit_grid, volumetric_kit_gfx, and googletest when the tests are
+# built. grid and gfx take Vulkan and GLM from the system, or on iOS as the core
+# sets them up. Work on a sibling's checkout at once with
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_<NAME>=<checkout>.
 
 include(FetchContent)
@@ -13,11 +13,12 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first, and the
 # config tier: its Source, which the library's open_source takes on every
 # platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
-# is core main at PR #63's merge (c529072, 0.26.0); recon's library asks for
-# 0.25.0 (#62's merge, recon's own pin). #62 and #63 change only profiles the
-# player does not load; the Player profile resolves as before. What the player
-# uses is as at #52's merge (0.21.0): HostRing, whose slots recon's decoder and
-# maps keep, in place where device-mapped memory is cached and copied elsewhere;
+# is core main at PR #65's merge (a4a6fff, 0.29.0), grid's own pin and the floor
+# grid's library asks for. #65 to #67 add vulkan/fwd.hpp, test support for tests
+# that are main()s of their own, vkc_export_glsl and vkc_require_sibling, which
+# checks grid below; the player's code uses none of the rest. What it uses is as
+# at #52's merge (0.21.0): HostRing, whose slots grid's decoder and maps keep,
+# in place where device-mapped memory is cached and copied elsewhere;
 # CommandBatch::input and output; and DeviceCounters::dispatches and barriers,
 # which the stamps and the measure log carry. Under it, 0.20.0's rows with busy,
 # wait and device halves (core::DeviceTime), tiled device time,
@@ -35,43 +36,47 @@ endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG c5290721b915c7e3fbc4585c451cb40941aa50ef)
+  GIT_TAG a4a6fff4af65b26b25df27c8ed8c9eecbfbfcd87)
 FetchContent_MakeAvailable(volumetric_kit_core)
-vkc_require_core(0.26.0 VULKAN CONFIG)
+vkc_require_core(0.29.0 VULKAN CONFIG)
 
-# --- volumetric_kit_recon ----------------------------------------------------
+# --- volumetric_kit_grid -----------------------------------------------------
 # The stream reader, the codec's decode grid and its deblock, Marching Cubes,
-# the mesh exchange and the live stream's client. Its tests, examples and
-# -Werror stay off in a subproject, so its library's core floor is the one
-# checked; its own core pin is the player's. The pin is recon main at #299's
-# merge (d8b8bda). The tiers the player links are as at #277's merge (a23f7f5):
-# a frame decoded and meshed in the caller's batch (codec::record_growing,
-# finish_growing; mesh::MarchingCubes::record_extract, finish, abandon),
-# DeviceMesh::ready, Decoder::claim_input and last_rounds, and the reads
-# straight into caller memory (StreamReader::read,
-# networking::StreamClient::read). Under it, #274's per-block deblock fallback,
-# #272's breakdown rows, #266's block ceiling for codec::make_decode_grid,
-# #260's networking::StreamClient and StreamServer, #256's empty mesh payload at
-# MeshExchange's commit and #255's volume::kDefaultBucketSize /
-# kDefaultMaxChain.
-#
-# #293 adds MeshExchange's CommitDecision, whose kDrop a commit hook's skip
-# takes (frame_hooks.hpp). #294 changes none of the tiers the player links; its
-# library asks for core 0.24.0. #295 makes volume::VoxelHashMap's
-# record_compaction const, so an after_mesh hook, handed the grid read-only,
-# records work that reads it; the worker finishes that batch before the grid
-# grows (DECISIONS.md). #296 to #298 change only recon's camera and sensor tiers
-# and its examples, which the player does not link; #298 raises recon's core
-# floor to 0.25.0. #299 makes a Marching Cubes vertex on a corner whose distance
-# is the iso-value exactly that corner, selected rather than interpolated (the
-# division could leave it just short, or up to a voxel away under the
-# near-tangent guard), and rounds each corner before the interpolation
-# (`precise`).
+# the mesh exchange, the live stream's client, and for vp_probe's --save-meshes
+# and the tests' stream writer the PLY writer and the mesh integrator. Its tests
+# and examples are off, as is its -Werror in a subproject, so its library's core
+# floor is the one checked; its own core pin is the player's. The pin is grid
+# main at its first commits as a repository of its own (cbf7a6e), recon #309's
+# grid/ unchanged: the code recon at #299's merge (d8b8bda) built the player's
+# tiers from, under grid's names (DECISIONS.md, 2026-10-29). What the player
+# uses is as at recon #277's merge: a frame decoded and meshed in the caller's
+# batch (codec::record_growing, finish_growing;
+# mesh::MarchingCubes::record_extract, finish, abandon), DeviceMesh::ready,
+# Decoder::claim_input and last_rounds, and the reads straight into caller
+# memory (StreamReader::read, networking::StreamClient::read); and since, recon
+# #293's CommitDecision, whose kDrop a commit hook's skip takes
+# (frame_hooks.hpp), #295's const volume::VoxelHashMap::record_compaction, so an
+# after_mesh hook, handed the grid read-only, records work that reads it, and
+# #299's Marching Cubes vertex on a corner whose distance is the iso-value
+# exactly that corner. vkc_require_sibling refuses an older grid, or one without
+# a tier the player links.
+set(VGRID_BUILD_TESTS OFF)
+set(VGRID_BUILD_EXAMPLES OFF)
 FetchContent_Declare(
-  volumetric_kit_recon
-  GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_recon.git
-  GIT_TAG d8b8bda181caf25619b086a36cd587a9c5fa0432)
-FetchContent_MakeAvailable(volumetric_kit_recon)
+  volumetric_kit_grid
+  GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
+  GIT_TAG cbf7a6ea2b8729645b24503063ff7a076706f698)
+FetchContent_MakeAvailable(volumetric_kit_grid)
+vkc_require_sibling(
+  volumetric_kit::grid
+  0.1.0
+  TARGETS
+  volumetric_kit::grid_codec
+  volumetric_kit::grid_mesh
+  volumetric_kit::grid_mesh_io
+  volumetric_kit::grid_networking
+  volumetric_kit::grid_stream
+  volumetric_kit::grid_voxelize)
 
 # --- volumetric_kit_gfx ------------------------------------------------------
 # The swapchain on a shared device, the mesh pipeline, the orbit camera, the

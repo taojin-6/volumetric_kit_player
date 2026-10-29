@@ -5,7 +5,7 @@
 
 /// @file player_view.hpp
 /// @brief The window side of playback, on any window system: one device that
-///        recon and gfx share, a swapchain, the newest mesh under an orbit
+///        grid and gfx share, a swapchain, the newest mesh under an orbit
 ///        camera, the controls and the stats.
 
 #include <cstdint>
@@ -68,11 +68,11 @@ struct PlayerViewConfig {
   /// 1, "decode" and "mesh" alone. For M4's A/B.
   std::uint32_t tile_depth = 0;
   /// Debug labels on the shared instance
-  /// (`core::InstanceConfig::request_debug_utils`): on, as recon labels its
+  /// (`core::InstanceConfig::request_debug_utils`): on, as grid labels its
   /// dispatches in Release; off for M4's A/B. Validation keeps them on.
   bool debug_labels = true;
   /// Whether the extractor shares vertices between triangles
-  /// (recon::mesh::MarchingCubesConfig::share_vertices, through mesh_wiring):
+  /// (grid::mesh::MarchingCubesConfig::share_vertices, through mesh_wiring):
   /// true, as by default; false, no vertex shared, three a triangle: a
   /// cheaper extraction for about three times the vertices (DECISIONS.md).
   bool share_vertices = true;
@@ -125,7 +125,7 @@ class PlayerView {
 
   /// @brief Make the shared device on @p surface (gfx::app::make_shared_device)
   ///        and adopt it for gfx (@ref view_swapchain, 2 frames in flight)
-  ///        and for recon. Build the mesh pipeline, the overlay (no imgui.ini)
+  ///        and for grid. Build the mesh pipeline, the overlay (no imgui.ini)
   ///        and a gfx::Profiler for the stats' "draw (mesh+UI)" row, which
   ///        @ref frame attaches to the frame loop while the draw is timed
   ///        (PlayerViewConfig::device_timing). Aim the camera at the first
@@ -262,10 +262,10 @@ class PlayerView {
   std::uint64_t frames_taken() const noexcept { return frames_taken_; }
   /// @return The device the worker decodes and meshes on, for a
   ///         measurement's device line (device_line).
-  const core::Device& compute_device() const noexcept { return recon_device_; }
+  const core::Device& compute_device() const noexcept { return grid_device_; }
   /// @return Its mesh, in the extractor's ring, for a read-out of its counts;
   ///         generation 0 before the first.
-  const recon::mesh::DeviceMesh& mesh() const noexcept {
+  const grid::mesh::DeviceMesh& mesh() const noexcept {
     return exchange_.live();
   }
   /// @return The stats panel, for a read-out of its figures (vp_probe).
@@ -292,10 +292,10 @@ class PlayerView {
 
   PlayerView(std::unique_ptr<core::SharedDevice> shared,
              gfx::app::WindowedApp app, gfx::Profiler profiler,
-             core::Device recon_device, core::Allocator recon_allocator,
+             core::Device grid_device, core::Allocator grid_allocator,
              gfx::pipelines::HybridMeshPipeline mesh_pipeline,
              gfx::ui::ImGuiOverlay overlay,
-             const recon::mesh::MeshExchangeConfig& exchange,
+             const grid::mesh::MeshExchangeConfig& exchange,
              std::unique_ptr<StreamPlayer> player);
 
   // Declared in teardown order, reversed: StreamPlayer goes before its
@@ -305,8 +305,8 @@ class PlayerView {
   std::unique_ptr<core::SharedDevice> shared_;
   gfx::app::WindowedApp app_;  // gfx's device and the swapchain
   gfx::Profiler profiler_;     // on app_'s device
-  core::Device recon_device_;
-  core::Allocator recon_allocator_;
+  core::Device grid_device_;
+  core::Allocator grid_allocator_;
   gfx::pipelines::HybridMeshPipeline mesh_pipeline_;
   gfx::ui::ImGuiOverlay overlay_;
   FrameExchange exchange_;

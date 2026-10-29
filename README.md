@@ -2,7 +2,7 @@
 
 Plays a recorded `volumetric_kit` stream (`.vrst`) like a video player, or a
 sender's live stream over TCP: each frame is decoded and meshed on the GPU by
-[volumetric_kit_recon](https://github.com/taojin-6/volumetric_kit_recon) and
+[volumetric_kit_grid](https://github.com/taojin-6/volumetric_kit_grid) and
 drawn by [volumetric_kit_gfx](https://github.com/taojin-6/volumetric_kit_gfx),
 paced by the stream's timestamps or by the sender.
 
@@ -25,10 +25,10 @@ imports it. [DECISIONS.md](DECISIONS.md) records the choices made.
 ## Prerequisites
 
 A C++17 compiler (GCC or Clang, on Linux or macOS), CMake ≥ 3.21, and what
-volumetric_kit_recon and volumetric_kit_gfx build with: a Vulkan SDK
+volumetric_kit_grid and volumetric_kit_gfx build with: a Vulkan SDK
 (MoltenVK on macOS), `glslc` or `glslangValidator`, GLM, and GLFW 3.3 or
 newer (`brew install glfw`, or `libglfw3-dev`) for the app; and Python 3 for
-the tests of the measure tools. The first configure fetches core, recon, gfx
+the tests of the measure tools. The first configure fetches core, grid, gfx
 and googletest, so it needs network access.
 
 ## Build and test
@@ -89,7 +89,7 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib \
 The panel at the bottom plays, pauses, steps and loops, and shows the frame
 and, where its record names one, its capture set ("set N");
 Normals, shown pressed while on, colours the mesh by its world-space normals
-in place of lighting; and Deblock, on at first, has recon's decoder smooth
+in place of lighting; and Deblock, on at first, has grid's decoder smooth
 each frame across its block faces, and while paused redoes the frame shown.
 Unlit shows the mesh's vertex colours unshaded; Normals takes precedence.
 Texture, a box shown once a program's `before_draw` binds a texture set,
@@ -124,8 +124,8 @@ smoke run (DECISIONS.md).
 ### Live
 
 A scenario with `source.host` in place of `source.path` plays what a sender
-serves (recon's `serve_stream`, or its `fuse_orbbec` with `output.serve` in
-a recon whose `fuse_orbbec` serves).
+serves (grid's `serve_stream`, or recon's `fuse_orbbec` with `output.serve`
+in a recon whose `fuse_orbbec` serves).
 [play_live.json](config/examples/play_live.json) plays a sender on this
 machine; for the lab's, over the VPN, copy it and set `source.host` to
 `taojin-desktop.arena.andrew.cmu.edu` or `192.168.21.217`.
@@ -209,8 +209,8 @@ are claimed.
 
 A measurement is one CSV log per run, which the player writes itself
 ([measure_log.hpp](src/volumetric_kit/player/measure_log.hpp) gives the
-format, version 3): a header naming the commits, the build, the device, how
-recon's rings run on it, the stream, how it ran, the timing, the tile depth,
+format, version 4): a header naming the commits, the build, the device, how
+grid's rings run on it, the stream, how it ran, the timing, the tile depth,
 the labels, whether vertices were shared and the time (and on a phone its
 thermal state and Low Power Mode), then each stream frame's stage rows
 (host, wait and GPU ms), the renderer's newest rows as it was taken (gfx's
@@ -284,7 +284,7 @@ the owner's go-ahead. Each log is named `<utc>-<commit>-<mode>-<timing>.csv`.
 For `--share-vertices off`, phone runs require each returned log to confirm
 `share_vertices: off`; a missing or different setting fails the run before
 summarizing it. Default sharing still accepts older logs.
-`summarize` reads formats 1 to 3, and gives the settings, per stage, the
+`summarize` reads formats 1 to 4, and gives the settings, per stage, the
 worker's and the renderer's, the mean, p50 and p95 of host, wait and GPU, the
 counts and vertices per frame, the frames' figures (device time, queue idle
 and latency, the latency to the present, or to taken for frames with none,

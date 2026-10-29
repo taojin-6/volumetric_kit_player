@@ -29,7 +29,7 @@ repos:
 
   # First-party code includes Vulkan through the core's
   # "volumetric_kit/core/vulkan/vulkan.hpp", never <vulkan/...> directly, as in
-  # core, recon and gfx. Anchored to the start of a line, so a path quoted in a
+  # core, grid and gfx. Anchored to the start of a line, so a path quoted in a
   # comment or a Doxygen @code block does not match.
   - repo: local
     hooks:

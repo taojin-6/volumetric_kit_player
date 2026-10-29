@@ -88,8 +88,8 @@ endif()
 add_executable(vp_write_stream vp_write_stream.cpp)
 target_link_libraries(
   vp_write_stream
-  PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_stream
-          volumetric_kit::recon_tsdf volumetric_kit::core_test_policy
+  PRIVATE volumetric_kit::grid_codec volumetric_kit::grid_stream
+          volumetric_kit::grid_voxelize volumetric_kit::core_test_policy
           GTest::gtest)
 vp_target_warnings(vp_write_stream)
 # The measure log, its file name and the iOS app's measure launch arguments, on
@@ -225,9 +225,9 @@ endif()
 
 # The player as another project adds it, and as the top-level project
 # (consumer/check.cmake), each dependency this build fetched, or took from a
-# local source, passed on as a local source, as recon's subproject tests do.
-# They check CMake, not a device, and the first builds the library again, so CI
-# runs them on one leg (label consumer).
+# local source, passed on as a local source, as grid's subproject tests do. They
+# check CMake, not a device, and the first builds the library again, so CI runs
+# them on one leg (label consumer).
 file(
   GLOB fetched
   LIST_DIRECTORIES true

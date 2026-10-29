@@ -18,8 +18,8 @@
 #ifndef VP_COMMIT_CORE
 #define VP_COMMIT_CORE "unknown"
 #endif
-#ifndef VP_COMMIT_RECON
-#define VP_COMMIT_RECON "unknown"
+#ifndef VP_COMMIT_GRID
+#define VP_COMMIT_GRID "unknown"
 #endif
 #ifndef VP_COMMIT_GFX
 #define VP_COMMIT_GFX "unknown"
@@ -32,7 +32,7 @@ namespace volumetric_kit::player {
 namespace {
 
 // The format's version, which a reader checks (tools/measure/summarize.py).
-constexpr int kFormat = 3;
+constexpr int kFormat = 4;
 constexpr const char* kColumns =
     "pass,frame,type,bytes,triangles,table,stage,host_ms,wait_ms,gpu_ms,"
     "device,submits,host_waits,blocked_ns,staging_buffers,dispatches,"
@@ -124,7 +124,7 @@ const char* name_of(core::DeviceTime device) {
 
 const BuildInfo& build_info() noexcept {
   static const BuildInfo info{
-      VP_COMMIT_PLAYER, VP_COMMIT_CORE, VP_COMMIT_RECON, VP_COMMIT_GFX,
+      VP_COMMIT_PLAYER, VP_COMMIT_CORE, VP_COMMIT_GRID, VP_COMMIT_GFX,
       sizeof(VP_BUILD_TYPE) > 1 ? VP_BUILD_TYPE : "none"};
   return info;
 }
@@ -193,7 +193,7 @@ core::Result<std::unique_ptr<MeasureLog>> MeasureLog::open(
   log->out_ << "# format: volumetric_kit_player measure " << kFormat << '\n'
             << "# player: " << build.player << '\n'
             << "# core: " << build.core << '\n'
-            << "# recon: " << build.recon << '\n'
+            << "# grid: " << build.grid << '\n'
             << "# gfx: " << build.gfx << '\n'
             << "# build: " << build.build_type << '\n'
             << "# device: " << one_line(context.device) << '\n'
@@ -220,7 +220,7 @@ core::Result<std::unique_ptr<MeasureLog>> MeasureLog::open(
 }
 
 core::Status MeasureLog::add(const FrameStamp& stamp,
-                             const recon::mesh::DeviceMesh& mesh,
+                             const grid::mesh::DeviceMesh& mesh,
                              const std::vector<core::StageRow>& render) {
   if (finished_) {
     return core::Status::io_error("MeasureLog: " + path_ + " is finished");
@@ -254,8 +254,8 @@ core::Status MeasureLog::add(const FrameStamp& stamp,
        << ms(figures.device_idle_ms) << ',' << ms(figures.queue_ms) << ','
        << ms(figures.publish_ms) << ',' << ms(figures.take_ms) << ','
        << ms(figures.present_ms) << ',' << mesh.vertex_count << ','
-       << (stamp.set == recon::stream::kNoSet ? std::string()
-                                              : std::to_string(stamp.set))
+       << (stamp.set == grid::stream::kNoSet ? std::string()
+                                             : std::to_string(stamp.set))
        << '\n';
   if (!out_) {
     return core::Status::io_error("MeasureLog: cannot write " + path_ +

@@ -30,13 +30,13 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
-#include "volumetric_kit/recon/stream/session.hpp"
 
 namespace {
 
 namespace core = volumetric_kit::core;
-namespace stream = volumetric_kit::recon::stream;
+namespace stream = volumetric_kit::grid::stream;
 using std::chrono::milliseconds;
 using std::chrono::seconds;
 using volumetric_kit::player::FrameStamp;

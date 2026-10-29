@@ -12,17 +12,17 @@
 #include "volumetric_kit/core/base/exception_status.hpp"
 #include "volumetric_kit/core/vulkan/host_ring.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
+#include "volumetric_kit/grid/codec/decode_grid.hpp"
+#include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/player/frame_hooks.hpp"
-#include "volumetric_kit/recon/codec/decode_grid.hpp"
-#include "volumetric_kit/recon/stream/session.hpp"
 
 namespace volumetric_kit::player {
 namespace {
 
-namespace codec = recon::codec;
-namespace mesh = recon::mesh;
-namespace networking = recon::networking;
-namespace stream = recon::stream;
+namespace codec = grid::codec;
+namespace mesh = grid::mesh;
+namespace networking = grid::networking;
+namespace stream = grid::stream;
 using Clock = Playback::Clock;
 
 // Live: the longest one receive, or one wait for the consumer's take, lasts,
@@ -51,7 +51,7 @@ core::Status nothing_shown(core::Status first_skip) {
   return std::move(first_skip).with_context(kWhat);
 }
 
-// `to` the host and wait halves of the rows of `from`, recon's, that are
+// `to` the host and wait halves of the rows of `from`, grid's, that are
 // breakdowns: its stage's own row is the player's, open around the call. A
 // breakdown's device half comes from the batch (StreamPlayer::note_batch),
 // or, for a blocking recovery, with its row.
@@ -276,7 +276,7 @@ LiveStatus StreamPlayer::live_status() const {
 
 core::Status StreamPlayer::start(core::Device& device,
                                  core::Allocator& allocator,
-                                 const recon::mesh::MarchingCubesConfig& config,
+                                 const grid::mesh::MarchingCubesConfig& config,
                                  FrameExchange& exchange,
                                  const FrameHooks* hooks) {
   if (worker_.joinable() || quit_) {
@@ -570,19 +570,19 @@ core::Status StreamPlayer::record_frame(Next next, Pass& pass,
   if (!decode.ok()) {
     return pass.skip(decode.status());  // the batch is dropped
   }
-  core::StageMetrics recon;  // as record_decode's
+  core::StageMetrics breakdowns;  // as record_decode's
   core::Result<mesh::PendingExtract> extract = [&] {
     const core::StageScope host(stamp.stages, "mesh");
     exchange_->release_and_may_publish(*extractor_);  // the consumer's first
     return extractor_->record_extract(batch, *grid_, decode->blocks,
                                       &decode->gate, 0.0f,
-                                      stamp.timed ? &recon : nullptr);
+                                      stamp.timed ? &breakdowns : nullptr);
   }();
   if (!extract.ok()) {
     decoder_->abandon(*decode);
     return extract.status();  // a ring too short is fatal
   }
-  forward_breakdowns(recon, stamp.stages);
+  forward_breakdowns(breakdowns, stamp.stages);
   core::Result<Batch> submitted =
       submit(batch, &extract->signal, &stamp.stages);
   if (!submitted.ok()) {
@@ -616,8 +616,8 @@ core::Result<bool> StreamPlayer::finish_frame(InFlight frame, Pass& pass) {
   // About 0: the GPU kept up, and its fence signalled before it was due.
   // after_mesh's batch too, before the finish, which may grow the grid.
   VKC_TRY(wait_batch(frame));
-  core::StageMetrics recon;
-  core::StageMetrics* const timed = frame.stamp.timed ? &recon : nullptr;
+  core::StageMetrics breakdowns;
+  core::StageMetrics* const timed = frame.stamp.timed ? &breakdowns : nullptr;
   core::Status refused;
   std::optional<mesh::DeviceMesh> shown;
   {
@@ -637,7 +637,7 @@ core::Result<bool> StreamPlayer::finish_frame(InFlight frame, Pass& pass) {
                  extractor_->finish(*frame.extract, *grid_, nullptr, timed));
     }
   }
-  forward_breakdowns(recon, frame.stamp.stages);
+  forward_breakdowns(breakdowns, frame.stamp.stages);
   if (!refused.ok() || !shown) {
     VKC_TRY(pass.skip(std::move(refused)));  // the shown mesh stays
     return true;
@@ -849,14 +849,14 @@ core::Result<bool> StreamPlayer::finish_decode(InFlight decoding,
                                                std::uint32_t* blocks) {
   FrameStamp& stamp = decoding.stamp;
   VKC_TRY(wait_batch(decoding));  // as at a file's frame's finish
-  core::StageMetrics recon;
+  core::StageMetrics breakdowns;
   const core::Result<codec::Finished> done = [&] {
     const core::StageScope host(stamp.stages, "finish");
     return codec::finish_growing(*decoder_, decoding.decode, *grid_,
                                  kMaxFrameBlocks,
-                                 stamp.timed ? &recon : nullptr);
+                                 stamp.timed ? &breakdowns : nullptr);
   }();
-  forward_breakdowns(recon, stamp.stages);
+  forward_breakdowns(breakdowns, stamp.stages);
   if (!done.ok()) {
     if (!skippable(done.status())) {
       return done.status();
@@ -872,10 +872,10 @@ core::Result<bool> StreamPlayer::finish_decode(InFlight decoding,
 core::Result<codec::PendingDecode> StreamPlayer::record_decode(
     core::CommandBatch& batch, const core::HostSlot& slot, std::size_t size,
     FrameStamp& stamp) {
-  // recon's rows: with them it tags its commands, whose tiles count to every
+  // grid's rows: with them it tags its commands, whose tiles count to every
   // scope open around them, the player's included; without, it writes no
   // timestamp, and the player's rows have their host and wait halves alone.
-  core::StageMetrics recon;
+  core::StageMetrics breakdowns;
   core::Result<codec::PendingDecode> decode =
       [&]() -> core::Result<codec::PendingDecode> {
     const core::StageScope host(stamp.stages, "decode");
@@ -885,10 +885,10 @@ core::Result<codec::PendingDecode> StreamPlayer::record_decode(
     decoder_->set_deblock(deblock());
     return codec::record_growing(*decoder_, batch, slot, size, *grid_,
                                  kMaxFrameBlocks,
-                                 stamp.timed ? &recon : nullptr);
+                                 stamp.timed ? &breakdowns : nullptr);
   }();
   if (decode.ok()) {
-    forward_breakdowns(recon, stamp.stages);
+    forward_breakdowns(breakdowns, stamp.stages);
   }
   return decode;
 }
@@ -907,7 +907,7 @@ core::Status StreamPlayer::wait_batch(InFlight& frame) {
 
 core::Status StreamPlayer::make_grid(const core::HostSlot& slot,
                                      std::size_t size) {
-  VKC_ASSIGN(recon::volume::VoxelBlockGrid grid,
+  VKC_ASSIGN(grid::volume::VoxelBlockGrid grid,
              codec::make_decode_grid(*device_, *allocator_, slot.data(), size,
                                      kMaxFrameBlocks));
   grid_.emplace(std::move(grid));
@@ -931,7 +931,7 @@ core::Result<StreamPlayer::Batch> StreamPlayer::submit(
 
 void StreamPlayer::note_batch(const Batch& batch, FrameStamp& stamp) {
   // Device rows come for every scope a tile counts to: the stamp's own, and
-  // recon's breakdowns, whose host halves it has, and recon's stage rows
+  // grid's breakdowns, whose host halves it has, and grid's stage rows
   // ("codec decode", "marching cubes"), which the player's hold already.
   for (const core::StageRow& row : batch.pending.device_rows()) {
     for (const core::StageRow& own : stamp.stages.rows()) {
@@ -972,7 +972,7 @@ void StreamPlayer::note_batch(const Batch& batch, FrameStamp& stamp) {
 core::Result<std::optional<mesh::DeviceMesh>> StreamPlayer::mesh_alone(
     FrameStamp& stamp, std::uint32_t blocks, const char* row) {
   const bool timed = row != nullptr && stamp.timed;
-  core::StageMetrics recon;  // as record_decode's
+  core::StageMetrics breakdowns;  // as record_decode's
   std::optional<Batch> ran;
   core::Result<std::optional<mesh::DeviceMesh>> meshed =
       [&]() -> core::Result<std::optional<mesh::DeviceMesh>> {
@@ -982,7 +982,7 @@ core::Result<std::optional<mesh::DeviceMesh>> StreamPlayer::mesh_alone(
     exchange_->release_and_may_publish(*extractor_);  // the consumer's first
     VKC_ASSIGN(const mesh::PendingExtract extract,
                extractor_->record_extract(batch, *grid_, blocks, nullptr, 0.0f,
-                                          timed ? &recon : nullptr));
+                                          timed ? &breakdowns : nullptr));
     core::Result<Batch> submitted = submit(batch, &extract.signal, nullptr);
     if (!submitted.ok()) {
       extractor_->abandon(extract);
@@ -991,9 +991,9 @@ core::Result<std::optional<mesh::DeviceMesh>> StreamPlayer::mesh_alone(
     ran.emplace(std::move(submitted).value());
     VKC_TRY(ran->pending.wait());
     return extractor_->finish(extract, *grid_, nullptr,
-                              timed ? &recon : nullptr);
+                              timed ? &breakdowns : nullptr);
   }();
-  forward_breakdowns(recon, stamp.stages);
+  forward_breakdowns(breakdowns, stamp.stages);
   if (ran && meshed.ok()) {
     note_batch(*ran, stamp);
   }

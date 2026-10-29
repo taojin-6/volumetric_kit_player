@@ -14,14 +14,14 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/grid/mesh/device_mesh.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/player/app_config.hpp"
 #include "volumetric_kit/player/desktop.hpp"
 #include "volumetric_kit/player/frame_hooks.hpp"
-#include "volumetric_kit/recon/mesh/device_mesh.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace core = volumetric_kit::core;
-namespace recon = volumetric_kit::recon;
+namespace grid = volumetric_kit::grid;
 namespace vkp = volumetric_kit::player;
 
 int main(int argc, char** argv) {
@@ -35,8 +35,8 @@ int main(int argc, char** argv) {
     ++made;
     vkp::FrameHooks hooks;
     hooks.after_mesh =
-        [&meshed](core::CommandBatch&, const recon::volume::VoxelBlockGrid&,
-                  const recon::mesh::DeviceMesh&, vkp::FrameStamp&) {
+        [&meshed](core::CommandBatch&, const grid::volume::VoxelBlockGrid&,
+                  const grid::mesh::DeviceMesh&, vkp::FrameStamp&) {
           ++meshed;
           return core::Status();
         };

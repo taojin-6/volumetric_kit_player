@@ -150,11 +150,11 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 /// @return The track's mean bitrate, or live its bitrate over the last
 ///         second (`-` when unknown); the frame's type (I for a key record,
 ///         else P), payload and triangles (each `-` before the first); what
-///         the deblock did to it (FrameStamp::deblock): the filter recon ran
+///         the deblock did to it (FrameStamp::deblock): the filter grid ran
 ///         (`LF`, `LG` or `R`) or `off`, for the deblock off or a T finer
 ///         than every filter's, then its T to the micrometre (each `-`
 ///         before the first), and after a filter how many of the frame's
-///         blocks recon's per-block fallback kept at their exact decode
+///         blocks grid's per-block fallback kept at their exact decode
 ///         (`codec::DeblockInfo::exact_blocks`); the frames' device time, the
 ///         worker's queue idle before its batch and its queue latency
 ///         (PlaybackStats::frame_means), each `n/t` while no frame of the

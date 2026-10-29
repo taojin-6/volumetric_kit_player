@@ -26,15 +26,15 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
+#include "volumetric_kit/grid/codec/decoder.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/mesh/mesh_exchange.hpp"
+#include "volumetric_kit/grid/networking/stream_client.hpp"
+#include "volumetric_kit/grid/stream/session.hpp"
+#include "volumetric_kit/grid/stream/stream_reader.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/player/live_connection.hpp"
 #include "volumetric_kit/player/playback.hpp"
-#include "volumetric_kit/recon/codec/decoder.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/mesh/mesh_exchange.hpp"
-#include "volumetric_kit/recon/networking/stream_client.hpp"
-#include "volumetric_kit/recon/stream/session.hpp"
-#include "volumetric_kit/recon/stream/stream_reader.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace volumetric_kit::player {
 
@@ -55,14 +55,14 @@ struct LiveStatus {
   /// (@ref live_reason). Empty until one has, and once a park has ended one.
   std::string last_error;
   std::uint64_t seq = 0;                      ///< The newest record received.
-  std::uint64_t set = recon::stream::kNoSet;  ///< The newest record's.
+  std::uint64_t set = grid::stream::kNoSet;   ///< The newest record's.
   Playback::Clock::time_point last_record{};  ///< When it arrived.
 };
 
 /// @brief How often the worker times its frames' device work
 ///        (@ref StreamPlayer::set_device_timing).
 enum class DeviceTiming : std::uint8_t {
-  kOff,      ///< Never: recon gets no metrics, so it writes no timestamp.
+  kOff,      ///< Never: grid gets no metrics, so it writes no timestamp.
   kSampled,  ///< One frame in @ref kSampleEvery: the first, then every
              ///< kSampleEvery-th.
   kAll,      ///< Every frame.
@@ -85,10 +85,10 @@ struct FrameStamp {
   std::uint64_t pts_ns = 0;  ///< Its pts, on its track's clock.
   std::uint64_t bytes = 0;   ///< Its record's payload bytes.
   bool key = false;          ///< A key record: an intra (I) frame; else P.
-  /// The capture set its record belongs to (recon::stream::RecordInfo::set),
-  /// or recon::stream::kNoSet for a record that names none. A rebuild keeps
+  /// The capture set its record belongs to (grid::stream::RecordInfo::set),
+  /// or grid::stream::kNoSet for a record that names none. A rebuild keeps
   /// its frame's.
-  std::uint64_t set = recon::stream::kNoSet;
+  std::uint64_t set = grid::stream::kNoSet;
   /// Its stages, each with its host time and the part of it blocked on the
   /// device (`core::StageRow::wait_ms`): "read" (its record, CRC included,
   /// into one of the decoder's input slots, and other tracks' records passed
@@ -100,7 +100,7 @@ struct FrameStamp {
   /// mesh, a rare grow, retry or refit inside). Live, there is no "read" (the
   /// wait for the network is no stage), and "mesh" is its own batch,
   /// recorded, submitted and waited on. A @ref timed frame's "decode" and
-  /// "mesh" have device halves too, each over recon's breakdown rows that
+  /// "mesh" have device halves too, each over grid's breakdown rows that
   /// follow it: decode's "  ..rans decode", "  ..apply" and "  ..inverse",
   /// mesh's "  ..compact" and "  ..dispatch"; "finish" is followed by a
   /// recovery's "  ..grow", "  ..retry" or "  ..refit". A rebuild's are
@@ -125,13 +125,13 @@ struct FrameStamp {
   /// Whether the deblock was on for its decode or rebuild
   /// (@ref StreamPlayer::set_deblock).
   bool deblock_on = false;
-  /// What the deblock did to it: recon's `codec::Decoder::last_deblock`
+  /// What the deblock did to it: grid's `codec::Decoder::last_deblock`
   /// once its decode or rebuild finished: the filter, `"off"` with the
   /// deblock off or a T finer than every filter's; T; and the frame's
-  /// blocks, with those recon's per-block fallback kept at their exact
+  /// blocks, with those grid's per-block fallback kept at their exact
   /// decode (all of them with no filter).
-  recon::codec::DeblockInfo deblock{};
-  /// recon's `codec::Decoder::last_rounds` once its decode finished: the most
+  grid::codec::DeblockInfo deblock{};
+  /// grid's `codec::Decoder::last_rounds` once its decode finished: the most
   /// rounds its removal or allocation ran on the device. A rebuild keeps its
   /// frame's.
   std::uint32_t rounds = 0;
@@ -166,9 +166,9 @@ struct FrameStamp {
 };
 
 /// @brief The handoff of the worker's meshes to the thread that draws them.
-using FrameExchange = recon::mesh::MeshExchange<FrameStamp>;
+using FrameExchange = grid::mesh::MeshExchange<FrameStamp>;
 
-/// The most blocks a frame may hold: the ceiling the worker passes recon's
+/// The most blocks a frame may hold: the ceiling the worker passes grid's
 /// `codec::make_decode_grid`, `record_growing` and `finish_growing`, which
 /// bounds the decode grid (DECISIONS.md). A frame past it, or a grow past the
 /// grid for it, is skipped as a damaged record is.
@@ -193,7 +193,7 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 /// paused or held, it records a frame only once it is due, and a pause
 /// publishes the frame already recorded, so whenever the clock is paused the
 /// grid holds the frame shown, which a deblock toggle then rebuilds. A
-/// damaged record, one this version cannot read, or one recon refuses is
+/// damaged record, one this version cannot read, or one grid refuses is
 /// skipped, the shown mesh stays, and playback resumes at the next key
 /// record. At the track's end it plays the track again with loop on; with
 /// loop off it holds the last frame, paused, until @ref play restarts it.
@@ -265,7 +265,7 @@ class StreamPlayer {
       const std::string& path);
 
   /// @brief A player of what a sender serves at @p address
-  ///        (recon::networking::StreamServer). It does no I/O, so it is safe
+  ///        (grid::networking::StreamServer). It does no I/O, so it is safe
   ///        on the main thread.
   ///
   /// Once started, the worker builds, then connects. It reads every record
@@ -301,9 +301,9 @@ class StreamPlayer {
   std::uint16_t track() const noexcept { return track_; }
   /// @return The geometry track's counts, from the footer or the open scan;
   ///         none live.
-  const recon::stream::TrackStats& track_stats() const noexcept;
+  const grid::stream::TrackStats& track_stats() const noexcept;
   /// @return The track's nominal rate; `num` 0 when unknown, and live.
-  recon::stream::Rate rate() const noexcept;
+  grid::stream::Rate rate() const noexcept;
   /// @return A live player's connection, under the mutex, so safe from any
   ///         thread; a file's is never anything but the default.
   LiveStatus live_status() const;
@@ -322,7 +322,7 @@ class StreamPlayer {
   /// @return OK; `Status::Code::InvalidArgument` once started or stopped; or
   ///         the thread's failure.
   core::Status start(core::Device& device, core::Allocator& allocator,
-                     const recon::mesh::MarchingCubesConfig& config,
+                     const grid::mesh::MarchingCubesConfig& config,
                      FrameExchange& exchange,
                      const FrameHooks* hooks = nullptr);
 
@@ -340,12 +340,12 @@ class StreamPlayer {
   /// @return Whether it loops.
   bool loop() const;
 
-  /// @brief Turns the decoder-side deblock on or off (recon's
+  /// @brief Turns the decoder-side deblock on or off (grid's
   ///        `codec::Decoder::set_deblock`), on by default: from the next
   ///        frame recorded, live too. Playing, that is the second frame after
   ///        the toggle, as the next is recorded already. While a file's
   ///        playback is paused or held at the end, the worker also rebuilds
-  ///        the frame it published last under the new setting (recon's
+  ///        the frame it published last under the new setting (grid's
   ///        `codec::Decoder::rebuild`), meshes it and publishes it again
   ///        (@ref FrameStamp::rebuild), so the change shows at once; parked,
   ///        it does so at @ref unpark. Safe before @ref start: the first
@@ -385,8 +385,8 @@ class StreamPlayer {
   void unpark();
 
   /// @brief Time the device work of the frames the worker starts from now on
-  ///        as @p timing says; safe from any thread. A timed frame's recon
-  ///        writes timestamps, which cost device time (DECISIONS.md).
+  ///        as @p timing says; safe from any thread. A timed frame's decode
+  ///        and mesh write timestamps, which cost device time (DECISIONS.md).
   ///
   /// @code
   /// player.set_device_timing(panel.open() ? DeviceTiming::kAll
@@ -403,7 +403,7 @@ class StreamPlayer {
 
   /// @brief Tile the worker's timed batches only @p depth scopes deep, from
   ///        the next frame recorded (`core::GpuTimer::set_max_depth`): 0,
-  ///        every scope, recon's breakdowns included; 1, "decode" and "mesh"
+  ///        every scope, grid's breakdowns included; 1, "decode" and "mesh"
   ///        alone, with the fewest timestamps. Safe from any thread; for
   ///        M4's A/B.
   ///
@@ -431,7 +431,7 @@ class StreamPlayer {
   core::Status status() const;
 
  private:
-  StreamPlayer(std::unique_ptr<recon::stream::StreamReader> reader,
+  StreamPlayer(std::unique_ptr<grid::stream::StreamReader> reader,
                std::uint16_t track);
   explicit StreamPlayer(LiveAddress address);
 
@@ -466,10 +466,10 @@ class StreamPlayer {
   core::Status play_track();
   // The next record of the track read into `*next` (empty at the pass's
   // end), within a step; skippable refusals skipped: false on quit.
-  core::Result<bool> read_next(recon::stream::Position* pos, Pass& pass,
+  core::Result<bool> read_next(grid::stream::Position* pos, Pass& pass,
                                std::optional<Next>* next);
   // Record `next`'s decode and its mesh into one batch and submit it, into
-  // `*frame`, within a step that the frame keeps; a record recon refuses
+  // `*frame`, within a step that the frame keeps; a record grid refuses
   // leaves it empty, as does quit.
   core::Status record_frame(Next next, Pass& pass,
                             std::optional<InFlight>* frame);
@@ -481,7 +481,7 @@ class StreamPlayer {
   core::Status play_live();
   // Play `client`'s connection until it ends, into `*ended`, or quit or a
   // park ends it (`*ended` OK). Only a GPU failure is returned.
-  core::Status play_connection(recon::networking::StreamClient& client,
+  core::Status play_connection(grid::networking::StreamClient& client,
                                core::Status* ended);
   // Live: wait for `decoding`'s batch and finish it, into `*newest`, with
   // its blocks: true once it succeeded; false, leaving them, for a skippable
@@ -490,10 +490,10 @@ class StreamPlayer {
                                    std::uint32_t* blocks);
   // Record into `batch` the decode of the record of `size` bytes at the
   // start of `slot`, with the deblock as set_deblock last set it: `stamp`'s
-  // "decode" row, and when it is timed recon's breakdowns under it. The
+  // "decode" row, and when it is timed grid's breakdowns under it. The
   // first frame read builds grid_ first. On a refusal the caller drops
   // `batch`.
-  core::Result<recon::codec::PendingDecode> record_decode(
+  core::Result<grid::codec::PendingDecode> record_decode(
       core::CommandBatch& batch, const core::HostSlot& slot, std::size_t size,
       FrameStamp& stamp);
   // Wait for `frame`'s batch, then finish after_mesh's (finish_hook_batch),
@@ -519,7 +519,7 @@ class StreamPlayer {
   // grid_ meshed in a batch of its own, `blocks` expected, submitted and
   // waited on; timed, and into a `row` of `stamp`'s, when `row` is set. None
   // when its slot came back unpublished.
-  core::Result<std::optional<recon::mesh::DeviceMesh>> mesh_alone(
+  core::Result<std::optional<grid::mesh::DeviceMesh>> mesh_alone(
       FrameStamp& stamp, std::uint32_t blocks, const char* row);
   // `stamp`'s deblock fields and rounds, from the decoder's last finish or
   // rebuild.
@@ -536,20 +536,20 @@ class StreamPlayer {
   // Under the lock: whether a paused toggle asks for last_ to be rebuilt.
   bool rebuild_wanted() const;
   // Rebuild last_ under the deblock as now set, untimed, mesh it and publish
-  // it again (FrameStamp::rebuild): false on quit. A rebuild recon refuses as
+  // it again (FrameStamp::rebuild): false on quit. A rebuild grid refuses as
   // skippable publishes nothing.
   core::Result<bool> rebuild();
   // Once the consumer took the last mesh and while not parked, publish
   // `mesh` with `stamp`: false on quit.
-  core::Result<bool> publish(const recon::mesh::DeviceMesh& mesh,
+  core::Result<bool> publish(const grid::mesh::DeviceMesh& mesh,
                              FrameStamp stamp);
   // Under the lock: publish `mesh` with `stamp` now, the device's counts
   // since the last publish into its counters.
-  void publish_now(const recon::mesh::DeviceMesh& mesh, FrameStamp stamp);
+  void publish_now(const grid::mesh::DeviceMesh& mesh, FrameStamp stamp);
   // Before `mesh`'s publish, within its step: after_mesh, when given, into a
   // batch of its own submitted behind `mesh`'s ready point, which becomes
   // that batch's; the batch before is finished first. A failure is fatal.
-  core::Status run_after_mesh(recon::mesh::DeviceMesh& mesh, FrameStamp& stamp);
+  core::Status run_after_mesh(grid::mesh::DeviceMesh& mesh, FrameStamp& stamp);
   // Wait for after_mesh's batch in flight, if any, so its readbacks are
   // written: the worker's, before anything may grow the grid it was given
   // (a frame's finish, and below), before the next after_mesh and at its
@@ -585,7 +585,7 @@ class StreamPlayer {
   template <typename Change>
   void control(Change&& change);
 
-  std::unique_ptr<recon::stream::StreamReader> reader_;  // null live
+  std::unique_ptr<grid::stream::StreamReader> reader_;  // null live
   std::uint16_t track_ = 0;
   LiveAddress address_;  // live
 
@@ -593,12 +593,12 @@ class StreamPlayer {
   // rest; destroyed hook batch first, then the extractor, after the join.
   core::Device* device_ = nullptr;
   core::Allocator* allocator_ = nullptr;
-  recon::mesh::MarchingCubesConfig config_;
+  grid::mesh::MarchingCubesConfig config_;
   FrameExchange* exchange_ = nullptr;
   const FrameHooks* hooks_ = nullptr;
-  std::optional<recon::codec::Decoder> decoder_;
-  std::optional<recon::volume::VoxelBlockGrid> grid_;
-  std::optional<recon::mesh::MarchingCubes> extractor_;
+  std::optional<grid::codec::Decoder> decoder_;
+  std::optional<grid::volume::VoxelBlockGrid> grid_;
+  std::optional<grid::mesh::MarchingCubes> extractor_;
   std::optional<core::GpuTimer> timer_;  // the worker's timed batches'
   // after_mesh's batches' timeline, built with after_mesh, and its last
   // value; the worker's.
