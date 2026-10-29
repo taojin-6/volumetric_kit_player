@@ -26,8 +26,10 @@ jobs:
     # 24-core host over a repository's 6 runners. It also puts the NVIDIA
     # driver's shader cache in the runner's tool cache, which outlives a job:
     # the driver's default, $HOME/.cache, is missing from a bare image, and
-    # with no cache every process compiles every pipeline. The Mac legs run on
-    # the host.
+    # with no cache every process compiles every pipeline. Each image is
+    # pinned by digest, the tag it was read from in a comment, so a new image
+    # comes only with a commit that moves the pin. The Mac legs run on the
+    # host.
     container: ${{ matrix.container && fromJSON(matrix.container) || null }}
     timeout-minutes: 30
     defaults:
@@ -52,11 +54,13 @@ jobs:
           - os: ubuntu-24.04
             runner: vk-linux-gpu
             build_type: Release
-            container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4","__GL_SHADER_DISK_CACHE_PATH":"/__w/_tool/nvidia-glcache","__GL_SHADER_DISK_CACHE_SKIP_CLEANUP":"1"}}'
+            # ubuntu:24.04
+            container: '{"image":"ubuntu@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4","__GL_SHADER_DISK_CACHE_PATH":"/__w/_tool/nvidia-glcache","__GL_SHADER_DISK_CACHE_SKIP_CLEANUP":"1"}}'
           - os: ubuntu-26.04
             runner: vk-linux-gpu
             build_type: Release
-            container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4","__GL_SHADER_DISK_CACHE_PATH":"/__w/_tool/nvidia-glcache","__GL_SHADER_DISK_CACHE_SKIP_CLEANUP":"1"}}'
+            # ubuntu:26.04
+            container: '{"image":"ubuntu@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4","__GL_SHADER_DISK_CACHE_PATH":"/__w/_tool/nvidia-glcache","__GL_SHADER_DISK_CACHE_SKIP_CLEANUP":"1"}}'
     steps:
       # The bare image runs us as root and lacks git (checkout needs it) and a
       # toolchain. The NVIDIA ICD needs libXext.so.6 and libEGL.so.1 before it
@@ -289,7 +293,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # No job pushes, so no checkout keeps a token.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No workflow is triggered by an event an outsider can cause, or by a
+      # schedule (the core's tools/runners/README.md, "Who can trigger CI").
+      # The action is at the core commit that added it, newer than the core
+      # pin in third_party/CMakeLists.txt.
+      - uses: taojin-6/volumetric_kit_core/.github/actions/check-workflow-triggers@fcbbe0c99a2fcec8d2e5cc3ddaf77add1f5679af
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.14'

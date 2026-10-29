@@ -269,6 +269,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   may turn it on alone, with no app. The desktop app's and vp_probe's mains
   are one call each; `player_probe`, on every desktop, builds only when
   linked, and the player asks the core for its test policy there.
+- ci: the lint job fails on a workflow triggered by an event an outsider can
+  cause or by a schedule (the core's `check-workflow-triggers` action), its
+  checkout keeps no token, as the build's already did, and the Linux legs'
+  `ubuntu` images are pinned by digest.
 
 ### Fixed
 
