@@ -336,8 +336,14 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
                     leg(means.present_ms));
   }
   lines.push_back(std::move(rate));
-  if (!program_line.empty()) {
-    lines.emplace_back(program_line);
+  // A program's text, each of its lines but the empty ones.
+  for (std::size_t start = 0; start < program_line.size();) {
+    const std::size_t end =
+        std::min(program_line.find('\n', start), program_line.size());
+    if (end > start) {
+      lines.emplace_back(program_line.substr(start, end - start));
+    }
+    start = end + 1;
   }
   return lines;
 }
@@ -399,10 +405,10 @@ void StatsPanel::draw(const PlaybackStats& stats,
   // the renderer's its rows but its loop's submit, and a work area wider than
   // tall has room for the renderer's beside the worker's, not below. The
   // worker's column holds the bitrate, frame and deblock lines; the rest, the
-  // device's line, the rate and a program's line, sit over the display's
-  // rate, where a phone in landscape has room for them (DECISIONS.md).
-  // Beside, a worker's line takes the width the renderer's column left as of
-  // the last frame.
+  // device's line, the rate and a program's lines, sit over the display's
+  // rate, where a phone in landscape has room for them with one program line
+  // (DECISIONS.md). Beside, a worker's line takes the width the renderer's
+  // column left as of the last frame.
   const auto kept = [](const std::vector<core::StageRow>& rows,
                        std::initializer_list<const char*> dropped) {
     std::vector<core::StageRow> kept_rows;
