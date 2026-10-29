@@ -12,12 +12,18 @@
 // of frame 2 until frame 4 is meshed keep five meshes of the ring at once,
 // which the ring one mesh deeper for a program's hooks (mesh_wiring's
 // `holds`) has room for: the run passes, by the worker alone and through the
-// view. On the host: --latency and --save-meshes exit 2 when a program set
-// make_hooks, which is never made, and without it pass to the stream's
-// refusal; and the view's settings run_probe plays with (probe_view_config)
-// are the program's, make_hooks included, with the command line's
-// validation, timing, tile depth, labels and vertex sharing, its defaults
-// included, and none for its usage. The device tests skip with no device,
+// view. A program's device requirements (AppConfig::view.device_requirements),
+// by the worker alone and through the view: an optional extension the GPU
+// offers is enabled on the hooks' devices, one it lacks skipped, and grid's
+// stay enabled under requirements that leave them out, the run passing; with
+// none, the device is grid's alone; and a required extension no GPU offers
+// fails the run, its hooks never made. On the host: --latency and
+// --save-meshes exit 2 when a program set make_hooks, which is never made,
+// and without it pass to the stream's refusal; and the view's settings
+// run_probe plays with (probe_view_config) are the program's, make_hooks and
+// device requirements included, with the command line's validation, timing,
+// tile depth, labels and vertex sharing, its defaults included, and none for
+// its usage. The device tests skip with no device,
 // and fail without one under VKC_REQUIRE_VULKAN_DEVICE. run_probe validates
 // as the core's test policy asks, its exit code failing on any error the
 // layer reports.
@@ -39,11 +45,14 @@
 #include <utility>
 #include <vector>
 
+#include "program_requirements.hpp"
 #include "test_stream.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/vulkan_policy.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/physical_device_info.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/grid/base/device_requirements.hpp"
 #include "volumetric_kit/grid/mesh/device_mesh.hpp"
@@ -171,6 +180,43 @@ class SkippingHooks {
   bool waited_ = false;
 };
 
+// A program's hooks that note, as they are made, what their devices enabled:
+// extension `name`, the absent one (program_requirements.hpp), and grid's
+// requirements. Made on the thread that calls run_probe.
+class DeviceHooks {
+ public:
+  explicit DeviceHooks(std::string name) : name_(std::move(name)) {}
+
+  vkp::MakeHooks make_hooks() {
+    return [this](const vkp::HookContext& context) {
+      ++makes_;
+      const char* name = name_.c_str();
+      enabled_ = context.device.extension_enabled(name) &&
+                 context.commit_device.extension_enabled(name);
+      absent_ =
+          context.device.extension_enabled(vp_test::kAbsentExtension) ||
+          context.commit_device.extension_enabled(vp_test::kAbsentExtension);
+      grids_ = context.device.check_enabled(grid::device_requirements());
+      return core::Result<vkp::FrameHooks>(vkp::FrameHooks{});
+    };
+  }
+
+  int makes() const { return makes_; }
+  // Whether both devices enabled `name`.
+  bool enabled() const { return enabled_; }
+  // Whether either enabled the absent extension.
+  bool absent() const { return absent_; }
+  // The worker's device's check of grid's requirements.
+  const core::Status& grids() const { return grids_; }
+
+ private:
+  std::string name_;
+  int makes_ = 0;
+  bool enabled_ = false;
+  bool absent_ = false;
+  core::Status grids_ = core::Status::invalid_argument("never made");
+};
+
 // `call(argc, argv)` with `args` after the program's name, as main has them.
 template <typename Call>
 auto with_argv(std::vector<std::string> args, Call&& call) {
@@ -240,11 +286,15 @@ class RunProbeTest : public ::testing::Test {
   void SetUp() override {
     const core::Result<core::Instance> instance =
         core::Instance::create(test::instance_config(test::Validation::Off));
-    const core::Status found =
-        instance.ok()
-            ? instance->select_physical_device(grid::device_requirements())
-                  .status()
-            : instance.status();
+    core::Status found = instance.status();
+    if (instance.ok()) {
+      const core::Result<core::PhysicalDeviceInfo> physical =
+          instance->select_physical_device(grid::device_requirements());
+      found = physical.status();
+      if (physical.ok()) {
+        offered_ = vp_test::offered_extension(*physical);
+      }
+    }
     if (!found.ok()) {
       if (test::device_required()) {
         FAIL() << "no Vulkan device for this test: " << found.message();
@@ -255,8 +305,62 @@ class RunProbeTest : public ::testing::Test {
     ASSERT_FALSE(path_.empty());
   }
 
+  // run_probe's device, by the worker alone or through the view, with a
+  // program's optional extension the GPU offers and one it lacks, in
+  // requirements that leave grid's out: on the hooks' devices the one
+  // offered is enabled, the other not, and grid's are; the run passes.
+  void expect_optional_enabled(bool worker) {
+    ASSERT_FALSE(offered_.empty()) << "the GPU offers none of the extensions";
+    DeviceHooks hooks(offered_);
+    vkp::AppConfig config;
+    config.view.make_hooks = hooks.make_hooks();
+    config.view.device_requirements.optional_extensions = {
+        offered_, vp_test::kAbsentExtension};
+    config.view.device_requirements.timeline_semaphore = false;
+    config.view.device_requirements.scalar_block_layout = false;
+    EXPECT_EQ(run(args(worker), config), 0);
+    EXPECT_EQ(hooks.makes(), 1);
+    EXPECT_TRUE(hooks.enabled()) << offered_;
+    EXPECT_FALSE(hooks.absent());
+    EXPECT_TRUE(hooks.grids().ok()) << hooks.grids().message();
+  }
+
+  // With no program requirements, the device is grid's alone: the extension
+  // offered is off, and grid's are on.
+  void expect_grids_alone(bool worker) {
+    ASSERT_FALSE(offered_.empty()) << "the GPU offers none of the extensions";
+    DeviceHooks hooks(offered_);
+    vkp::AppConfig config;
+    config.view.make_hooks = hooks.make_hooks();
+    EXPECT_EQ(run(args(worker), config), 0);
+    EXPECT_EQ(hooks.makes(), 1);
+    EXPECT_FALSE(hooks.enabled()) << offered_;
+    EXPECT_TRUE(hooks.grids().ok()) << hooks.grids().message();
+  }
+
+  // A program's required extension no GPU offers fails the run before its
+  // hooks are made.
+  void expect_required_refused(bool worker) {
+    DeviceHooks hooks(vp_test::kAbsentExtension);
+    vkp::AppConfig config;
+    config.view.make_hooks = hooks.make_hooks();
+    config.view.device_requirements.extensions = {vp_test::kAbsentExtension};
+    EXPECT_EQ(run(args(worker), config), 1);
+    EXPECT_EQ(hooks.makes(), 0);
+  }
+
+  // Two frames of the stream, by the worker alone or through the view.
+  std::vector<std::string> args(bool worker) const {
+    std::vector<std::string> list = {"--frames", "2", "--file", path_};
+    if (worker) {
+      list.insert(list.begin(), "--worker");
+    }
+    return list;
+  }
+
   Scratch scratch_;
   std::string path_;
+  std::string offered_;  // vp_test::offered_extension of the GPU
 };
 
 // Through the view, where the loader has a headless surface: MoltenVK has
@@ -322,6 +426,30 @@ TEST_F(RunProbeViewTest, TheViewKeepsAMeshMoreForAProgramsHooks) {
   EXPECT_TRUE(hooks.waited()) << "frame 4 not meshed while frame 2 waited";
 }
 
+TEST_F(RunProbeTest, TheWorkersDeviceEnablesAProgramsOptionalExtension) {
+  expect_optional_enabled(/*worker=*/true);
+}
+
+TEST_F(RunProbeViewTest, TheViewsDeviceEnablesAProgramsOptionalExtension) {
+  expect_optional_enabled(/*worker=*/false);
+}
+
+TEST_F(RunProbeTest, WithNoProgramRequirementsTheWorkersDeviceIsGrids) {
+  expect_grids_alone(/*worker=*/true);
+}
+
+TEST_F(RunProbeViewTest, WithNoProgramRequirementsTheViewsDeviceIsGrids) {
+  expect_grids_alone(/*worker=*/false);
+}
+
+TEST_F(RunProbeTest, AProgramsRequiredExtensionTheGpuLacksFailsTheWorker) {
+  expect_required_refused(/*worker=*/true);
+}
+
+TEST_F(RunProbeViewTest, AProgramsRequiredExtensionTheGpuLacksFailsTheView) {
+  expect_required_refused(/*worker=*/false);
+}
+
 // Refused before the stream opens or the hooks are made; with no program's
 // hooks the same command line reaches the stream, which is missing.
 TEST(RunProbe, ItsHooksOptionsWithAProgramsMakeHooksExit2) {
@@ -345,9 +473,9 @@ TEST(RunProbe, ItsHooksOptionsWithAProgramsMakeHooksExit2) {
 }
 
 // The view's settings run_probe plays with: the program's, its make_hooks
-// (never made) included, with the command line's validation, timing, tile
-// depth, labels and vertex sharing, given or its defaults; none for the
-// usage.
+// (never made) and device requirements included, with the command line's
+// validation, timing, tile depth, labels and vertex sharing, given or its
+// defaults; none for the usage.
 TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
   CountingHooks hooks;
   vkp::AppConfig config;
@@ -362,6 +490,7 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
   config.view.debug_labels = false;
   config.view.share_vertices = false;
   config.view.make_hooks = hooks.make_hooks();
+  config.view.device_requirements.optional_extensions = {"VK_VP_test_kept"};
 #ifdef NDEBUG
   const bool validation = test::requested_validation() != test::Validation::Off;
 #else
@@ -376,6 +505,8 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
     EXPECT_TRUE(view.unlit);
     EXPECT_TRUE(view.textured);
     EXPECT_TRUE(static_cast<bool>(view.make_hooks)) << "make_hooks dropped";
+    EXPECT_EQ(view.device_requirements.optional_extensions,
+              std::vector<std::string>{"VK_VP_test_kept"});
   };
   const std::optional<vkp::PlayerViewConfig> defaults =
       view_of({"--worker", "--file", "s.vrst"}, config);

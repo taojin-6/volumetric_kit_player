@@ -45,9 +45,10 @@ namespace volumetric_kit::player {
 /// The view, or the worker alone, makes `config.view.make_hooks`' hooks as
 /// the view does (HookContext: with no view, the worker's device takes the
 /// meshes, the pipeline is null, and before_draw never runs, as nothing is
-/// drawn). The command line's settings replace `config.view`'s: validation,
-/// device timing, tile depth, labels and vertex sharing
-/// (@ref probe_view_config).
+/// drawn), on a device with worker_requirements of
+/// `config.view.device_requirements`, as the view's. The command line's
+/// settings replace `config.view`'s: validation, device timing, tile depth,
+/// labels and vertex sharing (@ref probe_view_config).
 ///
 /// @code
 /// int main(int argc, char** argv) {
@@ -59,10 +60,12 @@ namespace volumetric_kit::player {
 /// @param argc    The command line's count, as main has it.
 /// @param argv    Its arguments, as main has them.
 /// @param config  The view's settings before the command line's.
-/// @return 0; 1 for a GPU, log or file failure, a latency record left, an
-///         error the validation layer reports or a layer the policy asks for
-///         that did not load; 2 for its usage, or for `--latency` or
-///         `--save-meshes` with `config.view.make_hooks` set.
+/// @return 0; 1 for a GPU, log or file failure (a GPU that lacks a required
+///         extension or feature of `config.view.device_requirements` among
+///         them), a latency record left, an error the validation layer
+///         reports or a layer the policy asks for that did not load; 2 for
+///         its usage, or for `--latency` or `--save-meshes` with
+///         `config.view.make_hooks` set.
 int run_probe(int argc, char** argv, const AppConfig& config = {});
 
 /// @brief The view's settings @ref run_probe plays with, on the host alone.
@@ -74,10 +77,11 @@ int run_probe(int argc, char** argv, const AppConfig& config = {});
 /// @param config  The program's settings.
 /// @param argc    The command line's count, as main has it.
 /// @param argv    Its arguments, as main has them.
-/// @return `config.view`, make_hooks included, with the command line's
-///         validation (on in Debug, else as the core's test policy asks),
-///         device timing, tile depth, labels and vertex sharing, given or
-///         not; none for a command line refused with the usage.
+/// @return `config.view`, make_hooks and device_requirements included, with
+///         the command line's validation (on in Debug, else as the core's
+///         test policy asks), device timing, tile depth, labels and vertex
+///         sharing, given or not; none for a command line refused with the
+///         usage.
 ///         `--latency` and `--save-meshes` install their hooks over an
 ///         empty make_hooks as run_probe starts.
 std::optional<PlayerViewConfig> probe_view_config(const AppConfig& config,
