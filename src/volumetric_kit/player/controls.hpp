@@ -167,7 +167,7 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 /// //        "rate 29.8 fps · 30 rec/s"}
 /// // compact: the GPU and latency lines as one, "GPU 6.30 ms · latency
 /// //          9.8 ms"
-/// // with a program's line, "saved 30 meshes/s", that line last
+/// // with a program's text, "saved 30 meshes/s\n61.2 MB/s", its lines last
 /// @endcode
 /// @param stats      The figures.
 /// @param shown      The newest frame drawn; empty before the first.
@@ -175,7 +175,7 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 /// @param now        The time, for the rates.
 /// @param live       Whether they are a live player's (StreamPlayer::live).
 /// @param compact    Whether for the compact stats (StatsPanel), a phone's.
-/// @param program_line  A program's line (FrameHooks::stats_line); empty,
+/// @param program_line  A program's text (FrameHooks::stats_line); empty,
 ///                      none.
 /// @return The track's mean bitrate, or live its bitrate over the last
 ///         second (`-` when unknown); the frame's type (I for a key record,
@@ -195,8 +195,9 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 ///         published, published to taken and taken to presented (each `-`
 ///         while unknown); and the
 ///         rate frames are taken at, over the nominal when it is known, or
-///         live beside the records a second; and @p program_line, unless
-///         empty. Compact, the device time and the latency share one line.
+///         live beside the records a second; and each line of
+///         @p program_line, split at '\n', but the empty ones. Compact, the
+///         device time and the latency share one line.
 std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
@@ -234,7 +235,7 @@ std::string display_line(const gfx::FrameMetrics& render);
 /// While it is open its figures are rebuilt every @ref kRefresh, so the
 /// digits stay readable; while it is closed nothing is rebuilt, but the
 /// @ref PlaybackStats it reads keeps counting, so it reopens with current
-/// figures. A program's line, given, is read at a rebuild once
+/// figures. A program's text, given, is read at a rebuild once
 /// @ref kProgramLineRefresh has passed since its last read, and shown until
 /// the next. Not thread-safe: the drawing thread owns it.
 ///
@@ -243,7 +244,7 @@ std::string display_line(const gfx::FrameMetrics& render);
 /// renderer's leaves out its loop's "submit" and names @ref kDrawRow "draw",
 /// each table's window is stated
 /// on a shorter line ("per stream frame · 30/30 timed"), the one "GPU ·
-/// latency" line, the rate and a program's line sit over the renderer's
+/// latency" line, the rate and a program's lines sit over the renderer's
 /// table, and, in an area wider than tall, the renderer's table is beside
 /// the worker's, whose lines have the width it leaves them.
 ///
@@ -278,7 +279,7 @@ class StatsPanel {
   /// @param area       Where it goes (@ref work_area, or
   ///                   ProgramPanel::scene_area): its
   ///                   lines break against its width.
-  /// @param program_line  A program's line (FrameHooks::stats_line), for
+  /// @param program_line  A program's text (FrameHooks::stats_line), for
   ///                      @ref stats_lines; empty, none.
   /// @pre An ImGui frame is open on the view's context.
   void draw(const PlaybackStats& stats, const std::optional<FrameStamp>& shown,

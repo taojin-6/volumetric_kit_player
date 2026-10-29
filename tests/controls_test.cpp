@@ -23,9 +23,10 @@
 // work area's top left; a finger on their header is ImGui's and on their body
 // the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
-// refresh; a program's line is their last, read a program-line refresh apart at
-// most, never while they are closed, and at once when given again, and with
-// none, or an empty one, they are the player's alone; a line too wide for the
+// refresh; a program's text is their last, a row for each of its lines, read
+// a program-line refresh apart at most, never while they are closed, and at
+// once when given again, and with none, or a text of empty lines, they are
+// the player's alone; a line too wide for the
 // work area, the deblock's at the block ceiling on a phone in portrait, breaks
 // before its blocks, and takes one row where it fits; and they are the stage
 // means per stream frame, then the renderer's rows per display frame under its
@@ -33,13 +34,13 @@
 // time, queue idle and queue latency, n/t or n/a where unknown, and the
 // latency's legs, as one line when compact. Compact, the worker's table leaves
 // out its breakdowns, submit and finish, the renderer's sits beside it in a
-// work area wider than tall, the rate and a program's line over it, the
-// worker's column as tall with the line as without, and a line breaks against
-// the room its column has. Beside a program's panel (ProgramPanel), docked
-// right or at the bottom, safe areas kept clear, the controls, Source and the
-// stats sit in the scene's part of the work area, clear of the panel's handle
-// and header; and the panel's box is drawn only when given, after Texture,
-// and a tap opens and closes the panel.
+// work area wider than tall, the rate and a program's lines over it, the
+// worker's column as tall with them as without, and a line breaks against the
+// room its column has. Beside a program's panel (ProgramPanel), docked right
+// or at the bottom, safe areas kept clear, the controls, Source and the stats
+// sit in the scene's part of the work area, clear of the panel's handle and
+// header; and the panel's box is drawn only when given, after Texture, and a
+// tap opens and closes the panel.
 
 #include "volumetric_kit/player/controls.hpp"
 
@@ -322,6 +323,30 @@ TEST(StatsLines, AProgramsLineIsTheLast) {
   EXPECT_EQ(stats_lines(live, std::nullopt, 0, t0, true, false, kLine), lines);
   EXPECT_EQ(stats_lines(file, std::nullopt, 0, t0, false, false, ""),
             stats_lines(file, std::nullopt, 0, t0, false, false));
+}
+
+// A program's text of several lines shows each as its own, in order, last,
+// full and compact; an empty line shows nothing, so a text of newlines alone
+// adds nothing.
+TEST(StatsLines, AProgramsTextShowsEachOfItsLinesLast) {
+  const PlaybackStats file(a_track(), {30, 1});
+  for (const bool compact : {false, true}) {
+    SCOPED_TRACE(compact);
+    Lines lines = stats_lines(file, std::nullopt, 0, t0, false, compact);
+    const Lines players = lines;
+    for (const char* line : {"saving · 1,234 meshes", "in 12.3 s", "4 files"}) {
+      lines.emplace_back(line);
+    }
+    EXPECT_EQ(stats_lines(file, std::nullopt, 0, t0, false, compact,
+                          "saving · 1,234 meshes\nin 12.3 s\n4 files"),
+              lines);
+    EXPECT_EQ(stats_lines(file, std::nullopt, 0, t0, false, compact,
+                          "\n\nsaving · 1,234 meshes\n\nin 12.3 s\n4 files\n"),
+              lines)
+        << "empty lines";
+    EXPECT_EQ(stats_lines(file, std::nullopt, 0, t0, false, compact, "\n\n\n"),
+              players);
+  }
 }
 
 TEST(LiveStatusLine, SaysConnectingThenWhyItReconnects) {
@@ -1266,10 +1291,10 @@ TEST_F(ControlsTest, CompactALineBreaksAgainstTheRoomItsColumnHas) {
   }
 }
 
-// Compact, a program's line sits over the renderer's table, in its column: in
+// Compact, a program's lines sit over the renderer's table, in its column: in
 // portrait (288 points) and beside the worker's (560), the worker's column is
-// as tall with the line as without, and the renderer's one row taller.
-TEST_F(ControlsTest, CompactAProgramsLineIsInTheRenderersColumn) {
+// as tall with them as without, and the renderer's one row taller for each.
+TEST_F(ControlsTest, CompactAProgramsLinesAreInTheRenderersColumn) {
   panel_ = StatsPanel(/*compact=*/true);
   take(0);
   // Each column's height at `width` with `line`, past the line's refresh.
@@ -1298,7 +1323,34 @@ TEST_F(ControlsTest, CompactAProgramsLineIsInTheRenderersColumn) {
     EXPECT_FLOAT_EQ(with.second,
                     none.second + ImGui::GetTextLineHeightWithSpacing())
         << "the renderer's column";
+    const std::pair<float, float> three =
+        heights_at(width, "saved 1,234 meshes\n61.2 MB/s\n4 files");
+    ASSERT_EQ(panel_.lines().back(), "4 files");
+    EXPECT_FLOAT_EQ(three.first, none.first) << "the worker's column, three";
+    EXPECT_FLOAT_EQ(three.second,
+                    none.second + 3.0f * ImGui::GetTextLineHeightWithSpacing())
+        << "the renderer's column, three";
   }
+}
+
+// Full, as on a desktop, the panel is one row taller for each of a program's
+// lines.
+TEST_F(ControlsTest, AProgramsLinesEachTakeARow) {
+  // The body's height with `text`, past the line's refresh. An auto-sized
+  // window takes its size on its second frame.
+  const auto height_with = [&](const char* text) {
+    program_line_ = [text] { return std::string(text); };
+    seconds_ +=
+        std::chrono::duration<double>(StatsPanel::kProgramLineRefresh).count();
+    frame();
+    frame();
+    return stats_body()->ContentSize.y;
+  };
+  const float none = height_with("");
+  EXPECT_FLOAT_EQ(height_with("saved 1,234 meshes\n61.2 MB/s\n4 files"),
+                  none + 3.0f * ImGui::GetTextLineHeightWithSpacing());
+  EXPECT_EQ(panel_.lines().back(), "4 files");
+  EXPECT_FLOAT_EQ(height_with("\n\n"), none) << "newlines alone";
 }
 
 TEST(DisplayLine, StatesTheRateFramesAreDrawnAt) {
