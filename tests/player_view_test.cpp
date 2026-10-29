@@ -686,7 +686,9 @@ class PlayerViewTest : public core::test::VulkanTest {
   bool unlit_ = PlayerViewConfig{}.unlit;
   bool textured_ = PlayerViewConfig{}.textured;
   MakeHooks make_hooks_;  // the view's hooks, with the context noted
-  core::DeviceRequirements device_requirements_;  // the program's
+  // The program's: as the view's config has them unless a test sets them.
+  core::DeviceRequirements device_requirements_ =
+      PlayerViewConfig{}.device_requirements;
   // What the hooks were made with, as the view's create gave it.
   struct Context {
     core::Device* device;
