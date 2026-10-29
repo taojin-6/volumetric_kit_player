@@ -5,6 +5,10 @@
 
 #include <utility>
 
+#include <glm/geometric.hpp>
+#include <glm/mat3x3.hpp>
+#include <glm/matrix.hpp>
+
 #include "imgui.h"
 #include "volumetric_kit/core/base/exception_status.hpp"
 #include "volumetric_kit/gfx/app/shared_device_config.hpp"
@@ -54,6 +58,17 @@ gfx::windowing::SwapchainConfig view_swapchain(VkExtent2D extent, bool live) {
     config.min_image_count = 2;
   }
   return config;
+}
+
+// TODO: gfx derives a view-relative light for its mesh pipeline, which
+// recon's rig_viewer, with a light of its own, would share (a gfx task).
+glm::vec3 headlight(const glm::mat4& view) {
+  // Toward the eye (view +z), a little up (+y) and to the left (-x), so a
+  // surface square to the line of sight is lit short of full and its relief
+  // shows. A rotation's transpose is its inverse: it takes the view-space
+  // direction to world space.
+  const glm::vec3 in_view = glm::normalize(glm::vec3(-0.3f, 0.4f, 1.0f));
+  return glm::normalize(glm::transpose(glm::mat3(view)) * in_view);
 }
 
 core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
@@ -360,15 +375,16 @@ void PlayerView::record_mesh(VkCommandBuffer cmd, VkExtent2D extent,
       viewport.extent.width > 0 && viewport.extent.height > 0 ? viewport.extent
                                                               : extent;
   const pipelines::HybridMeshDraw draw{live_mesh(live)};
+  const gfx::camera::Camera camera = camera_.to_camera(
+      kFovY, static_cast<float>(shape.width) / static_cast<float>(shape.height),
+      kNear, kFar);
   pipelines::HybridMeshFrame draws;
   draws.extent = extent;
   draws.viewport = viewport;
-  draws.view_proj = camera_
-                        .to_camera(kFovY,
-                                   static_cast<float>(shape.width) /
-                                       static_cast<float>(shape.height),
-                                   kNear, kFar)
-                        .view_proj();
+  draws.view_proj = camera.view_proj();
+  // The light follows the viewer, not gfx's default, which is fixed in the
+  // world (DECISIONS.md).
+  draws.light_dir = headlight(camera.view());
   draws.flags = mesh_flags() & ~binding_.mesh_flags_clear;
   draws.atlas = binding_.descriptor_set;
   draws.draws = &draw;

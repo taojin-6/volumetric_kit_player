@@ -87,6 +87,8 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib \
   --config <scenario.json>
 ```
 
+The mesh is lit from just above and left of the eye (a headlight), so what
+faces the viewer is lit whatever axes the stream's world has.
 The panel at the bottom plays, pauses, steps and loops, and shows the frame
 and, where its record names one, its capture set ("set N");
 Normals, shown pressed while on, colours the mesh by its world-space normals
