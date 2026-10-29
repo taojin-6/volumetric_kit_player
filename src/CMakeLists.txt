@@ -18,6 +18,8 @@ add_library(
   volumetric_kit/player/playback.cpp
   volumetric_kit/player/playback_stats.cpp
   volumetric_kit/player/player_view.cpp
+  volumetric_kit/player/pointer.cpp
+  volumetric_kit/player/program_panel.cpp
   volumetric_kit/player/scenario.cpp
   volumetric_kit/player/stream_player.cpp)
 add_library(volumetric_kit::player ALIAS player)

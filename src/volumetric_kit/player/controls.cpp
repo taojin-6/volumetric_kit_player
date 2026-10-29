@@ -106,10 +106,10 @@ void draw_parted_line(std::string_view line, float width) {
   }
 }
 
-// The widest text a window holds inside the main viewport's work area.
-float text_room() {
+// The widest text a window holds inside `area`.
+float text_room(const UiArea& area) {
   const ImGuiStyle& style = ImGui::GetStyle();
-  return ImGui::GetMainViewport()->WorkSize.x -
+  return area.size.x -
          2.0f * (style.DisplaySafeAreaPadding.x + style.WindowPadding.x);
 }
 
@@ -134,8 +134,8 @@ void draw_normals(bool& normals) {
 }
 
 // A box labelled `label` after the line's last control, or below it when the
-// line would not fit the work area with it; whether a press flipped `*on`.
-bool draw_box(const char* label, bool* on) {
+// line would not fit `area` with it; whether a press flipped `*on`.
+bool draw_box(const char* label, bool* on, const UiArea& area) {
   const ImGuiStyle& style = ImGui::GetStyle();
   const float box = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x +
                     ImGui::CalcTextSize(label).x;
@@ -143,31 +143,37 @@ bool draw_box(const char* label, bool* on) {
   // auto-sized window grow.
   const float row = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x +
                     style.ItemSpacing.x + box + style.WindowPadding.x;
-  if (row <= ImGui::GetMainViewport()->WorkSize.x -
-                 2.0f * style.DisplaySafeAreaPadding.x) {
+  if (row <= area.size.x - 2.0f * style.DisplaySafeAreaPadding.x) {
     ImGui::SameLine();
   }
   return ImGui::Checkbox(label, on);
 }
 
-// Deblock, Unlit and, given, Texture, each a box after the line's last
-// control, or below it when the line would not fit the work area with it.
-void draw_boxes(StreamPlayer& player, bool& unlit, bool* textured) {
+// Deblock, Unlit and, given, Texture and the panel's, each a box after the
+// line's last control, or below it when the line would not fit `area` with
+// it.
+void draw_boxes(StreamPlayer& player, bool& unlit, bool* textured,
+                const UiArea& area, const char* panel_label, bool* panel_open) {
   bool on = player.deblock();
-  if (draw_box("Deblock", &on)) {
+  if (draw_box("Deblock", &on, area)) {
     player.set_deblock(on);
   }
-  draw_box("Unlit", &unlit);
+  draw_box("Unlit", &unlit, area);
   if (textured != nullptr) {
-    draw_box("Texture", textured);
+    draw_box("Texture", textured, area);
+  }
+  if (panel_label != nullptr && panel_open != nullptr) {
+    draw_box(panel_label, panel_open, area);
   }
 }
 
 // A file's controls: Play/Pause, Step, Loop, Normals, Deblock, Unlit and,
-// given, Texture; returns its status line.
+// given, Texture and the panel's box; returns its status line.
 std::string draw_file_controls(StreamPlayer& player,
                                const std::optional<FrameStamp>& shown,
-                               bool& normals, bool& unlit, bool* textured) {
+                               bool& normals, bool& unlit, bool* textured,
+                               const UiArea& area, const char* panel_label,
+                               bool* panel_open) {
   const ImVec2 button = button_size();
   // One ID for both labels, so a press that flips the label completes.
   if (ImGui::Button(player.playing() ? "Pause###play" : "Play###play",
@@ -189,39 +195,44 @@ std::string draw_file_controls(StreamPlayer& player,
   }
   ImGui::SameLine();
   draw_normals(normals);
-  draw_boxes(player, unlit, textured);
+  draw_boxes(player, unlit, textured, area, panel_label, panel_open);
   return status_line(shown, player.frame_count(), player.playing(), loop);
 }
 
 }  // namespace
 
-void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
-                   bool& normals, bool& unlit, bool* textured) {
+UiArea work_area() {
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
+  return {{viewport->WorkPos.x, viewport->WorkPos.y},
+          {viewport->WorkSize.x, viewport->WorkSize.y}};
+}
+
+void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
+                   bool& normals, bool& unlit, bool* textured,
+                   const UiArea& area, const char* panel_label,
+                   bool* panel_open) {
   ImGui::SetNextWindowPos(
-      ImVec2(viewport->WorkPos.x + 0.5f * viewport->WorkSize.x,
-             viewport->WorkPos.y + viewport->WorkSize.y),
+      ImVec2(area.pos.x + 0.5f * area.size.x, area.pos.y + area.size.y),
       ImGuiCond_Always, ImVec2(0.5f, 1.0f));
   if (ImGui::Begin(kControlsWindow, nullptr, kFlags)) {
     // A file's or a live player's status line, drawn by the one call below.
     std::string status;
     if (player.live()) {
       draw_normals(normals);
-      draw_boxes(player, unlit, textured);
+      draw_boxes(player, unlit, textured, area, panel_label, panel_open);
       status = live_status_line(player.live_status(), Playback::Clock::now());
     } else {
-      status = draw_file_controls(player, shown, normals, unlit, textured);
+      status = draw_file_controls(player, shown, normals, unlit, textured, area,
+                                  panel_label, panel_open);
     }
-    draw_parted_line(status, text_room());
+    draw_parted_line(status, text_room(area));
   }
   ImGui::End();
 }
 
-bool draw_source() {
-  const ImGuiViewport* viewport = ImGui::GetMainViewport();
-  ImGui::SetNextWindowPos(
-      ImVec2(viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y),
-      ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+bool draw_source(const UiArea& area) {
+  ImGui::SetNextWindowPos(ImVec2(area.pos.x + area.size.x, area.pos.y),
+                          ImGuiCond_Always, ImVec2(1.0f, 0.0f));
   // No padding, so the button is all of the window, and no border, which
   // would clip a point off each side of the button's target.
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -350,10 +361,10 @@ void StatsPanel::draw(const PlaybackStats& stats,
                       const std::optional<FrameStamp>& shown,
                       std::uint32_t triangles, const gfx::FrameMetrics& render,
                       Playback::Clock::time_point now, bool live,
+                      const UiArea& area,
                       const std::function<std::string()>& program_line) {
-  const ImGuiViewport* viewport = ImGui::GetMainViewport();
-  if (!gfx::ui::begin_collapsible_panel(kStatsWindow, "Stats",
-                                        viewport->WorkPos, &open_)) {
+  if (!gfx::ui::begin_collapsible_panel(
+          kStatsWindow, "Stats", ImVec2(area.pos.x, area.pos.y), &open_)) {
     return;
   }
   // After the header, so the frame a tap opens it on is current.
@@ -382,9 +393,9 @@ void StatsPanel::draw(const PlaybackStats& stats,
                       "display frame"};
     rebuilt_ = now;
   }
-  // The widest text the body's window holds inside the work area.
+  // The widest text the body's window holds inside its area.
   const ImGuiStyle& style = ImGui::GetStyle();
-  const float width = text_room();
+  const float width = text_room(area);
   if (!compact_) {
     for (const std::string& line : lines_) {
       draw_parted_line(line, width);
@@ -396,7 +407,7 @@ void StatsPanel::draw(const PlaybackStats& stats,
     return;
   }
   // Compact: the worker's table holds its stages, read, decode and mesh, and
-  // the renderer's its rows but its loop's submit, and a work area wider than
+  // the renderer's its rows but its loop's submit, and an area wider than
   // tall has room for the renderer's beside the worker's, not below. The
   // worker's column holds the bitrate, frame and deblock lines; the rest, the
   // device's line, the rate and a program's line, sit over the display's
@@ -429,7 +440,7 @@ void StatsPanel::draw(const PlaybackStats& stats,
       row.name = "draw";
     }
   }
-  const bool beside = viewport->WorkSize.x > viewport->WorkSize.y;
+  const bool beside = area.size.x > area.size.y;
   const float worker_width =
       beside ? width - render_width_ - style.ItemSpacing.x : width;
   const std::size_t worker_lines = std::min<std::size_t>(lines_.size(), 3);

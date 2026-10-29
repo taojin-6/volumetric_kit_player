@@ -96,6 +96,15 @@ Unlit shows the mesh's vertex colours unshaded; Normals takes precedence.
 Texture, a box shown once a program's `before_draw` binds a texture set,
 draws the mesh with that texture; off, as at first, the mesh is drawn in its
 own shading.
+A program may add a panel of its own (`FrameHooks::panel`), with a box after
+Texture and a key, which docks beside the scene: at the right, or at the
+bottom of a window taller than wide, at 40 % of the safe area (45 % on an
+iPhone). A drag on its inner edge resizes it within 25-60 %, snapping to
+45 % and 60 % on an iPhone, and a release below 25 % closes it; its header
+names it and closes it. While it is open the mesh, the panel at the bottom,
+the stats and Source sit in the scene's part, and the pointer and gestures
+that begin over the panel are the program's: a drag or one or two fingers,
+the wheel or a pinch, and a double click or tap.
 The stats at the top left show the bitrate, the frame drawn, what the
 deblock did to it (its filter, T and the blocks it kept at their exact
 decode), the frames' GPU time, the worker's queue idle and queue latency, the
@@ -117,6 +126,7 @@ are the panel's shortcuts:
 | D | turns Deblock on or off |
 | U | turns Unlit on or off |
 | T | turns Texture on or off |
+| A program's key | opens or closes its panel |
 | Esc | closes the window |
 
 With `run.frames`, the app prints the frame drawn as it exits, for CI's
@@ -198,7 +208,7 @@ Unless a sender is the choice, the app looks each time it builds its view,
 and with no `.vrst` asks: at launch, on a choice, and on coming back to the
 foreground with nothing playing. A file plays with loop on. A tap works the
 panel, Source and the stats' header, one finger orbits the camera, two pan
-it, and a pinch zooms.
+it, and a pinch zooms, each but over a program's panel.
 
 It logs the view's bring-up time, each park's wait and any failure, which
 Console.app shows. The owner checks the app on a device by hand

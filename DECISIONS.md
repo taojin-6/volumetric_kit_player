@@ -4,6 +4,35 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-29 — A program's docked panel
+
+`FrameHooks::panel`: a program's own panel beside the scene, on the desktop
+and on iOS alike. The player holds the panel; what it shows is the
+program's.
+
+- **Docked, never floating.** The panel and the scene split the drawable,
+  and the mesh, the controls, the stats and Source move into the scene's
+  part, so nothing covers the mesh.
+- **At the end of the drawable's long axis.** Why: the owner's choice of an
+  automatic side over fixed sides per device: desktops dock right, an iPhone
+  at the bottom in portrait and right in landscape.
+- **40 % of the safe area, 45 % on an iPhone, held to 25-60 % and 240 pt
+  across; an iPhone's handle snaps to 45 % and 60 %, and a release below
+  25 % closes.** Why: the scene keeps at least 40 %; on an iPhone the owner
+  chose two sizes over a free drag.
+- **Pointer input goes where a press began, kept until it ends**
+  (`PointerTarget`). Why: a drag that crosses the panel's edge keeps its
+  target.
+- **Closed, nothing of it runs**: the mesh is drawn across the whole target
+  and no hook of the panel is called. Why: a program pays only while its
+  panel is open.
+- **The state lasts the run,** carried across the iOS shell's view rebuilds
+  as Deblock is; nothing is saved across launches.
+- **The layout is the player's for now** (`ProgramPanel`), a knowing copy of
+  the generic part of gfx's `ui::ImagePanel`, which lays out content of its
+  own. Why: gfx's panel draws its own header buttons; one home in gfx is a
+  gfx task (the TODO in `program_panel.cpp`).
+
 ## 2026-10-29 — A program's device requirements
 
 For the device the worker decodes and meshes on, in the view and in vp_probe

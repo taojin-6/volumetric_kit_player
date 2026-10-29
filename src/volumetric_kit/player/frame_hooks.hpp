@@ -6,9 +6,9 @@
 /// @file frame_hooks.hpp
 /// @brief A caller's per-frame work, which the player runs: on the worker
 ///        after each mesh, as the drawing thread takes a mesh, before the
-///        draw, and at a park; a line for the view's stats panel; and the
-///        take that the view and a consumer with no view share
-///        (@ref FrameTaker).
+///        draw, and at a park; a line for the view's stats panel; a panel of
+///        its own beside the scene (@ref PanelHooks); and the take that the
+///        view and a consumer with no view share (@ref FrameTaker).
 
 #include <cstdint>
 #include <functional>
@@ -16,6 +16,8 @@
 #include <optional>
 #include <string>
 #include <vector>
+
+#include <glm/vec2.hpp>
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -51,6 +53,94 @@ enum class FrameCommit {
           ///< published is taken at the next display frame. One frame at
           ///< most is skipped between two drawn: a kSkip with a skip and no
           ///< draw since holds the frame, as kHold does.
+};
+
+/// @brief The window edge a program's panel docks at (@ref PanelHooks): the
+///        end of the drawable's long axis.
+enum class DockSide : std::uint8_t {
+  kRight,   ///< Beside the scene: a drawable at least as wide as tall.
+  kBottom,  ///< Below it: a drawable taller than wide.
+};
+
+/// @brief One display frame of a program's panel (@ref PanelHooks), in
+///        drawable pixels, which the frame's pass covers.
+struct PanelFrame {
+  VkExtent2D drawable{};  ///< The pass's extent.
+  /// The program's part: the panel below its header, inside the safe area.
+  VkRect2D content{};
+  DockSide side = DockSide::kRight;  ///< Where the panel docks.
+};
+
+/// @brief Pointer input over a program's panel (@ref PanelHooks::pointer),
+///        in drawable pixels: from a press or a gesture that began over its
+///        content (PanelFrame::content), wherever it has moved since.
+struct PanelPointer {
+  glm::vec2 at{0.0f, 0.0f};  ///< The cursor, or the gesture's centre.
+  /// The move since the last call, while held: a drag with either button,
+  /// or with one finger or two.
+  glm::vec2 drag{0.0f, 0.0f};
+  /// A scale about @ref at: a pinch's, or the wheel's (pointer.hpp's
+  /// kWheelZoom a notch, above 1 when rolled away from the user).
+  float zoom = 1.0f;
+  bool double_tap = false;  ///< A double click or a double tap at @ref at.
+};
+
+/// @brief A program's panel, docked beside the scene while open
+///        (PlayerView::panel_open): at the drawable's right, or at its
+///        bottom when it is taller than wide, its share of the safe area
+///        resized by a handle on its inner edge. The view draws its handle
+///        and its header (the title, then @ref draw_ui's items, then a
+///        close button), the mesh in the scene's part alone, and the
+///        controls, the stats and Source there too. A box in the controls,
+///        and the desktop's @ref key, open and close it.
+///
+/// Each display frame the panel is open, on the draw thread: @ref draw_ui
+/// in the UI's frame, before the take; @ref prepare after before_draw and
+/// before the pass; and @ref record in the pass, after the mesh and under the
+/// UI. A change to the panel (its box, its close button, its handle) applies
+/// from the next frame. Closed, none runs and the frame draws as with no
+/// panel: the mesh across the whole drawable. Any member but @ref title may
+/// be empty.
+///
+/// @code
+/// hooks.panel.title = "Inspector";
+/// hooks.panel.label = "Inspect";
+/// hooks.panel.key = 'I';
+/// hooks.panel.record = [](VkCommandBuffer cmd, const PanelFrame& frame) {
+///   draw_inspector(cmd, frame.drawable, frame.content);  // the program's
+/// };
+/// hooks.panel.pointer = [&view2d](const PanelPointer& pointer) {
+///   view2d.pan(pointer.drag);
+///   view2d.zoom_about(pointer.at, pointer.zoom);
+/// };
+/// @endcode
+struct PanelHooks {
+  /// The header's text; empty, the program has no panel.
+  std::string title;
+  /// Its box's label in the controls, which opens and closes it; empty, the
+  /// title.
+  std::string label;
+  /// The desktop's key that opens and closes it: an upper-case letter, which
+  /// GLFW's key codes match, other than the view's own (L, N, D, U, T,
+  /// which keep their meaning); 0, none.
+  char key = 0;
+  /// The header's items after the title, such as buttons, inside its ImGui
+  /// window; and captions over the content through ImGui's draw lists, in
+  /// points (pixels over `DisplayFramebufferScale`), drawn after
+  /// @ref record.
+  std::function<void(const PanelFrame& frame)> draw_ui;
+  /// Work outside the pass whose results @ref record reads, into the
+  /// frame's command buffer; it runs whether or not before_draw ran this
+  /// frame. A failure stops the view with its status.
+  std::function<core::Status(VkCommandBuffer cmd, const PanelFrame& frame)>
+      prepare;
+  /// The panel's drawing, into @ref PanelFrame::content of a pass laid out
+  /// as the view's swapchain (PlayerView::target_layout): set the viewport
+  /// and scissor it needs; the mesh's are its own.
+  std::function<void(VkCommandBuffer cmd, const PanelFrame& frame)> record;
+  /// The shell's thread (the draw thread): a press or a gesture over the
+  /// content, as the shell routes it (PlayerView::panel_pointer).
+  std::function<void(const PanelPointer& pointer)> pointer;
 };
 
 /// @brief A caller's per-frame work, which the player runs. Any member may
@@ -115,6 +205,9 @@ struct FrameHooks {
   /// drawn, so a call may come long after the one before. Empty, or an empty
   /// text, shows nothing; with no view it is never called.
   std::function<std::string()> stats_line;
+  /// The program's panel beside the scene; with no title, none. The view's
+  /// alone: with no view it is never shown.
+  PanelHooks panel;
 };
 
 /// @brief What hooks are made with, valid during MakeHooks' call alone: a

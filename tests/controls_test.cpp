@@ -35,7 +35,11 @@
 // out its breakdowns, submit and finish, the renderer's sits beside it in a
 // work area wider than tall, the rate and a program's line over it, the
 // worker's column as tall with the line as without, and a line breaks against
-// the room its column has.
+// the room its column has. Beside a program's panel (ProgramPanel), docked
+// right or at the bottom, safe areas kept clear, the controls, Source and the
+// stats sit in the scene's part of the work area, clear of the panel's handle
+// and header; and the panel's box is drawn only when given, after Texture,
+// and a tap opens and closes the panel.
 
 #include "volumetric_kit/player/controls.hpp"
 
@@ -63,6 +67,7 @@
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
+#include "volumetric_kit/player/program_panel.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
 namespace {
@@ -78,6 +83,8 @@ using volumetric_kit::player::draw_controls;
 using volumetric_kit::player::draw_source;
 using volumetric_kit::player::FrameStamp;
 using volumetric_kit::player::kControlsWindow;
+using volumetric_kit::player::kPanelHandleWindow;
+using volumetric_kit::player::kPanelHeaderWindow;
 using volumetric_kit::player::kSourceWindow;
 using volumetric_kit::player::kStatsWindow;
 using volumetric_kit::player::live_reason;
@@ -87,10 +94,12 @@ using volumetric_kit::player::LiveState;
 using volumetric_kit::player::LiveStatus;
 using volumetric_kit::player::parse_live_address;
 using volumetric_kit::player::PlaybackStats;
+using volumetric_kit::player::ProgramPanel;
 using volumetric_kit::player::stats_lines;
 using volumetric_kit::player::StatsPanel;
 using volumetric_kit::player::status_line;
 using volumetric_kit::player::StreamPlayer;
+using volumetric_kit::player::UiArea;
 using Lines = std::vector<std::string>;
 using TimePoint = PlaybackStats::Clock::time_point;
 
@@ -409,12 +418,12 @@ TEST(ParseLiveAddress, RefusesNoHostAndAPortOutOfRange) {
   }
 }
 
-// A `width` x 300-point display at 2 pixels per point, `safe_area` kept
+// A `width` x `height`-point display at 2 pixels per point, `safe_area` kept
 // clear.
 ui::DisplayFrame display(double seconds, const ui::EdgeInsets& safe_area,
-                         std::uint32_t width) {
+                         std::uint32_t width, std::uint32_t height = 300) {
   ui::DisplayFrame frame;
-  frame.pixels = {2 * width, 600};
+  frame.pixels = {2 * width, 2 * height};
   frame.pixels_per_point = 2.0f;
   frame.safe_area = safe_area;
   frame.seconds = seconds;
@@ -466,21 +475,31 @@ class ControlsTest : public ::testing::Test {
                     std::chrono::duration<double>(seconds_));
   }
 
-  // One frame, 1/60 s after the last, with the controls over
-  // `controls_shown_`, Texture while `texture_shown_`, Source while
-  // `source_shown_`, and the stats in it, with `program_line_`; a press on
-  // Source is counted.
+  // One frame, 1/60 s after the last, as the view lays it out: a program's
+  // panel (`program_`), then in the scene's part of the work area the
+  // controls over `controls_shown_`, Texture while `texture_shown_`, the
+  // panel's box while `box_shown_`, which opens and closes it, Source while
+  // `source_shown_`, and the stats, with `program_line_`, and the panel's
+  // handle and header; a press on Source is counted.
   void frame() {
     seconds_ += 1.0 / 60.0;
-    touch_->new_frame(display(seconds_, safe_area_, width_));
+    touch_->new_frame(display(seconds_, safe_area_, width_, height_));
     ImGui::NewFrame();
+    program_.layout({2 * width_, 2 * height_});
+    const UiArea& area = program_.scene_area();
+    bool open = program_.laid_out_open();
     draw_controls(*player_, controls_shown_, normals_, unlit_,
-                  texture_shown_ ? &textured_ : nullptr);
-    if (source_shown_ && draw_source()) {
+                  texture_shown_ ? &textured_ : nullptr, area,
+                  box_shown_ ? vp_test::kPanelLabel : nullptr, &open);
+    if (source_shown_ && draw_source(area)) {
       ++source_presses_;
     }
     panel_.draw(*stats_, shown_, triangles_, render_, now(), player_->live(),
-                program_line_);
+                area, program_line_);
+    program_.draw_chrome("Program panel", {});
+    if (open != program_.laid_out_open()) {
+      program_.set_open(open);
+    }
     ImGui::Render();
   }
 
@@ -641,7 +660,12 @@ class ControlsTest : public ::testing::Test {
   bool source_shown_ = false;
   int source_presses_ = 0;
   ui::EdgeInsets safe_area_;
-  std::uint32_t width_ = 400;  // the display's, in points
+  std::uint32_t width_ = 400;   // the display's, in points
+  std::uint32_t height_ = 300;  // the display's, in points
+  // A program's panel, closed unless a test opens it; its box while
+  // `box_shown_`.
+  ProgramPanel program_;
+  bool box_shown_ = false;
   ImGuiContext* context_ = nullptr;
   std::unique_ptr<ui::ImGuiTouch> touch_;  // reset before the context
   double seconds_ = 0.0;
@@ -1366,6 +1390,101 @@ TEST_F(ControlsTest, CompactStatsLeaveOutBreakdownsAndSitBesideWhenWide) {
     EXPECT_LT(render->OuterRect.Min.x,
               stages->OuterRect.Min.x + ImGui::CalcTextSize(line.c_str()).x);
   }
+}
+
+// --- Beside a program's panel ----------------------------------------------
+
+// Whether rectangles `a` and `b`, in points, overlap.
+bool overlap(const ImRect& a, const ImRect& b) {
+  return a.Min.x < b.Max.x && b.Min.x < a.Max.x && a.Min.y < b.Max.y &&
+         b.Min.y < a.Max.y;
+}
+
+// The panel docked right on a phone in landscape and at the bottom on one in
+// portrait, its safe area kept clear: the controls, Source and the stats'
+// header and lines lie in the scene's part of the work area, clear of the
+// panel's handle and header. Closed again, the part is the work area.
+TEST_F(ControlsTest, BesideTheProgramsPanelThePanelsSitInTheScenesPart) {
+  struct Phone {
+    const char* name;
+    std::uint32_t width;
+    std::uint32_t height;
+    ui::EdgeInsets safe;
+  };
+  for (const Phone& phone :
+       {Phone{"landscape", 956, 440, {0.0f, 62.0f, 21.0f, 62.0f}},
+        Phone{"portrait", 440, 956, {62.0f, 0.0f, 34.0f, 0.0f}}}) {
+    SCOPED_TRACE(phone.name);
+    width_ = phone.width;
+    height_ = phone.height;
+    safe_area_ = phone.safe;
+    texture_shown_ = true;
+    box_shown_ = true;
+    program_.set_open(true);
+    show_source();
+    const UiArea& area = program_.scene_area();
+    const UiArea work = volumetric_kit::player::work_area();
+    ASSERT_TRUE(phone.width > phone.height ? area.size.x < work.size.x
+                                           : area.size.y < work.size.y);
+    const ImRect inside(area.pos.x - 1.0f, area.pos.y - 1.0f,
+                        area.pos.x + area.size.x + 1.0f,
+                        area.pos.y + area.size.y + 1.0f);
+    const ImGuiWindow* const handle =
+        ImGui::FindWindowByName(kPanelHandleWindow);
+    const ImGuiWindow* const header =
+        ImGui::FindWindowByName(kPanelHeaderWindow);
+    ASSERT_NE(handle, nullptr);
+    ASSERT_NE(header, nullptr);
+    for (const ImGuiWindow* window :
+         {&panel(), static_cast<const ImGuiWindow*>(source_window()),
+          &stats_header(), stats_body()}) {
+      ASSERT_NE(window, nullptr);
+      SCOPED_TRACE(window->Name);
+      EXPECT_TRUE(inside.Contains(window->Rect().Min) &&
+                  inside.Contains(window->Rect().Max) &&
+                  !overlap(window->Rect(), handle->Rect()) &&
+                  !overlap(window->Rect(), header->Rect()))
+          << window->Rect().Min.x << "," << window->Rect().Min.y << " - "
+          << window->Rect().Max.x << "," << window->Rect().Max.y;
+    }
+    program_.set_open(false);
+    frame();
+    EXPECT_EQ(program_.scene_area().size.x, work.size.x);
+    EXPECT_EQ(program_.scene_area().size.y, work.size.y);
+  }
+}
+
+// The panel's box, after Texture, is drawn only when given; a tap opens the
+// panel, and the controls move into the scene's part, and another closes it,
+// flipping nothing else.
+TEST_F(ControlsTest, ThePanelsBoxIsDrawnOnlyWhenGivenAndATapOpensAndClosesIt) {
+  width_ = 1200;  // the row on one line, the panel open or not
+  texture_shown_ = true;
+  frame();
+  frame();
+  const ImGuiID box_id =
+      ImGui::FindWindowByName(kControlsWindow)->GetID(vp_test::kPanelLabel);
+  EXPECT_NE(item_under(control(vp_test::kPanel)), box_id);
+  box_shown_ = true;
+  frame();
+  frame();
+  const glm::vec2 texture =
+      vp_test::control_top_left(panel(), vp_test::kTexture);
+  const glm::vec2 box = vp_test::control_top_left(panel(), vp_test::kPanel);
+  EXPECT_EQ(box.y, texture.y);
+  EXPECT_GT(box.x, texture.x);
+  EXPECT_EQ(item_under(control(vp_test::kPanel)), box_id);
+  ASSERT_FALSE(program_.open());
+  const float centre = panel().Pos.x + 0.5f * panel().Size.x;
+  tap(control(vp_test::kPanel));
+  EXPECT_TRUE(program_.open());
+  EXPECT_LT(panel().Pos.x + 0.5f * panel().Size.x, centre - 100.0f)
+      << "the controls did not move into the scene's part";
+  EXPECT_FALSE(textured_);
+  EXPECT_FALSE(unlit_);
+  EXPECT_TRUE(player_->playing()) << "the tap pressed the box alone";
+  tap(control(vp_test::kPanel));
+  EXPECT_FALSE(program_.open());
 }
 
 }  // namespace

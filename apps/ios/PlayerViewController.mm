@@ -4,8 +4,9 @@
 // The iOS shell over PlayerView (DECISIONS.md), all on main: a MetalView hosts
 // the CAMetalLayer, a display link ticks the view, every touch phase reaches
 // gfx's ImGuiTouch for the controls panel, three recognizers drive the camera
-// unless the panel holds the finger, and the scene's activation parks and
-// unparks the worker. The Source button, at the top right, opens iOS's
+// unless the panel holds the finger, or a program's panel where they begin
+// over its content, with a double tap there, and the scene's activation parks
+// and unparks the worker. The Source button, at the top right, opens iOS's
 // dialog, which chooses a sender by host and port, or the first .vrst in the
 // app's Documents folder, which the Files app and Finder show (Info.plist.in);
 // the choice is kept for the next launch. A measure launch (--measure, the
@@ -144,15 +145,16 @@ vkc::Result<std::optional<cfg::Source>> MeasureSource(
 }
 
 // The view over `source`, on `layer`, with fingertip-sized controls, the
-// Source button, on an iPhone the compact stats, and the deblock as
-// `deblock`, if set, as a view before had it; the worker's device timing, its
-// tile depth, the labels and the vertex sharing as a `measure` launch fixes
-// them, or else timed while the stats panel is open. No validation: iOS has
-// no layer to load (DECISIONS.md).
+// Source button, on an iPhone the compact stats and a program's panel at 45 %
+// with detents at 45 % and 60 %, and the deblock and the panel as `deblock`
+// and `panel`, if set, as a view before had them; the worker's device timing,
+// its tile depth, the labels and the vertex sharing as a `measure` launch
+// fixes them, or else timed while the stats panel is open. No validation: iOS
+// has no layer to load (DECISIONS.md).
 vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
     CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source,
-    const std::optional<vkp::MeasureArgs>& measure,
-    std::optional<bool> deblock) {
+    const std::optional<vkp::MeasureArgs>& measure, std::optional<bool> deblock,
+    const std::optional<vkp::PanelState>& panel) {
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
              vkp::open_source(source));
   if (deblock) {
@@ -164,8 +166,17 @@ vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
   config.ui_scale = 1.3f;              // 17-pt text, near iOS body text
   config.ui_min_frame_height = 44.0f;  // Apple's least touch target
   config.source_button = true;
-  config.compact_stats =
+  const bool phone =
       UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
+  config.compact_stats = phone;
+  if (phone) {
+    config.panel.right_share = 0.45f;
+    config.panel.bottom_share = 0.45f;
+    config.panel_detents = {0.45f, 0.6f};
+  }
+  if (panel) {
+    config.panel = *panel;
+  }
   if (measure) {
     config.device_timing = measure->timing;
     config.tile_depth = measure->tile_depth;
@@ -183,6 +194,13 @@ std::uintptr_t Finger(UITouch* touch) {
 glm::vec2 At(UITouch* touch, UIView* view) {
   const CGPoint at = [touch locationInView:view];
   return {static_cast<float>(at.x), static_cast<float>(at.y)};
+}
+
+// `at`, in points of `view`, in its drawable's pixels, as a program's panel
+// takes them.
+glm::vec2 Pixels(CGPoint at, UIView* view) {
+  const CGFloat scale = view.contentScaleFactor;
+  return {static_cast<float>(at.x * scale), static_cast<float>(at.y * scale)};
 }
 
 }  // namespace
@@ -240,6 +258,12 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   UIPanGestureRecognizer* _orbit;  // one finger
   UIPanGestureRecognizer* _pan;    // two fingers, with the pinch
   UIPinchGestureRecognizer* _pinch;
+  UITapGestureRecognizer* _doubleTap;  // over a program's panel alone
+  // Each recognizer's target, the program's panel or the scene, chosen where
+  // it began and kept until it ends.
+  BOOL _orbitOnPanel;
+  BOOL _panOnPanel;
+  BOOL _pinchOnPanel;
   std::unique_ptr<vkp::PlayerView> _view;
   std::unique_ptr<vg::ui::ImGuiTouch> _touch;  // after _view: goes first
   BOOL _failed;    // the label is up until the next activation or choice
@@ -254,6 +278,7 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   std::unique_ptr<vkp::MeasureLog> _log;
   std::uint64_t _logged;  // the view's frames taken, as of the last logged
   std::optional<bool> _deblock;  // the last view's Deblock, for the next
+  std::optional<vkp::PanelState> _panel;  // and its program's panel
 }
 
 - (void)loadView {
@@ -305,7 +330,14 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   _pinch =
       [[UIPinchGestureRecognizer alloc] initWithTarget:self
                                                 action:@selector(onPinch:)];
-  for (UIGestureRecognizer* recognizer in @[ _orbit, _pan, _pinch ]) {
+  _doubleTap =
+      [[UITapGestureRecognizer alloc] initWithTarget:self
+                                              action:@selector(onDoubleTap:)];
+  _doubleTap.numberOfTapsRequired = 2;
+  // A tap's end reaches ImGui at once, not after the second tap's wait.
+  _doubleTap.delaysTouchesEnded = NO;
+  for (UIGestureRecognizer* recognizer in
+       @[ _orbit, _pan, _pinch, _doubleTap ]) {
     recognizer.delegate = self;
     [_metal addGestureRecognizer:recognizer];
   }
@@ -366,8 +398,9 @@ glm::vec2 At(UITouch* touch, UIView* view) {
     [self askOnScreen];
     return;
   }
-  vkc::Result<std::unique_ptr<vkp::PlayerView>> made = MakeView(
-      (CAMetalLayer*)_metal.layer, pixels, **chosen, _measure, _deblock);
+  vkc::Result<std::unique_ptr<vkp::PlayerView>> made =
+      MakeView((CAMetalLayer*)_metal.layer, pixels, **chosen, _measure,
+               _deblock, _panel);
   if (!made.ok()) {
     [self fail:made.status()];
     return;
@@ -640,6 +673,7 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   _log.reset();  // a measurement under way is left as its .part
   if (_view) {
     _deblock = _view->player().deblock();
+    _panel = _view->panel_state();
   }
   _touch.reset();  // the platform half first; the view waits for the GPU
   _view.reset();
@@ -696,9 +730,36 @@ glm::vec2 At(UITouch* touch, UIView* view) {
   }
 }
 
-// The camera: none until the view exists, and none from the panel.
+// Whether `at`, in points, is over a program's panel's content.
+- (BOOL)overPanel:(CGPoint)at {
+  return _view && _view->over_panel(Pixels(at, _metal));
+}
+
+// The double tap takes only touches over a program's panel's content.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer*)recognizer
+       shouldReceiveTouch:(UITouch*)touch {
+  return recognizer != _doubleTap ||
+         [self overPanel:[touch locationInView:_metal]];
+}
+
+// None until the view exists, and none from the panels: the controls, the
+// stats' header and the program's panel's header and handle, which reaches
+// over its content's edge. Over the content a recognizer drives the
+// program's panel, kept until it ends; elsewhere the camera. The double tap
+// begins over the content alone.
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)recognizer {
-  return _view && !_view->ui_wants_pointer();
+  if (!_view || _view->ui_wants_pointer()) {
+    return NO;
+  }
+  const BOOL onPanel = [self overPanel:[recognizer locationInView:_metal]];
+  if (recognizer == _orbit) {
+    _orbitOnPanel = onPanel;
+  } else if (recognizer == _pan) {
+    _panOnPanel = onPanel;
+  } else if (recognizer == _pinch) {
+    _pinchOnPanel = onPanel;
+  }
+  return recognizer != _doubleTap || onPanel;
 }
 
 // A two-finger pan and a pinch compose.
@@ -709,35 +770,78 @@ glm::vec2 At(UITouch* touch, UIView* view) {
          (recognizer == _pinch && other == _pan);
 }
 
-// The pan's move since the last call, in view heights (OrbitCamera's drag;
-// it ignores the non-finite move a zero height gives).
-- (glm::vec2)dragOf:(UIPanGestureRecognizer*)recognizer {
-  const CGFloat height = _metal.bounds.size.height;
+// The pan's move since the last call: in the drawable's pixels for a
+// program's panel (`onPanel`), else in the scene's heights (OrbitCamera's
+// drag; it ignores the non-finite move a zero height gives).
+- (glm::vec2)dragOf:(UIPanGestureRecognizer*)recognizer onPanel:(BOOL)onPanel {
   const CGPoint moved = [recognizer translationInView:_metal];
   [recognizer setTranslation:CGPointZero inView:_metal];
+  if (onPanel) {
+    return Pixels(moved, _metal);
+  }
+  const CGFloat height =
+      _view && _view->scene_rect().extent.height > 0
+          ? _view->scene_rect().extent.height / _metal.contentScaleFactor
+          : _metal.bounds.size.height;
   return {static_cast<float>(moved.x / height),
           static_cast<float>(moved.y / height)};
 }
 
+// A drag over a program's panel, at the gesture's centre.
+- (void)panelDrag:(glm::vec2)drag of:(UIGestureRecognizer*)recognizer {
+  vkp::PanelPointer pointer;
+  pointer.at = Pixels([recognizer locationInView:_metal], _metal);
+  pointer.drag = drag;
+  _view->panel_pointer(pointer);
+}
+
+// One finger: the program's panel's drag, or the camera's orbit.
 - (void)onOrbit:(UIPanGestureRecognizer*)recognizer {
-  const glm::vec2 drag = [self dragOf:recognizer];
-  if (_view) {
+  const glm::vec2 drag = [self dragOf:recognizer onPanel:_orbitOnPanel];
+  if (!_view) {
+    return;
+  }
+  if (_orbitOnPanel) {
+    [self panelDrag:drag of:recognizer];
+  } else {
     _view->camera().drag_orbit(drag);
   }
 }
 
+// Two fingers: the program's panel's drag, or the camera's pan.
 - (void)onPan:(UIPanGestureRecognizer*)recognizer {
-  const glm::vec2 drag = [self dragOf:recognizer];
-  if (_view) {
+  const glm::vec2 drag = [self dragOf:recognizer onPanel:_panOnPanel];
+  if (!_view) {
+    return;
+  }
+  if (_panOnPanel) {
+    [self panelDrag:drag of:recognizer];
+  } else {
     _view->camera().drag_pan(drag, vkp::PlayerView::kFovY);
   }
 }
 
+// The program's panel's zoom about the pinch's centre, or the camera's.
 - (void)onPinch:(UIPinchGestureRecognizer*)recognizer {
-  if (_view) {
+  if (_view && _pinchOnPanel) {
+    vkp::PanelPointer pointer;
+    pointer.at = Pixels([recognizer locationInView:_metal], _metal);
+    pointer.zoom = static_cast<float>(recognizer.scale);
+    _view->panel_pointer(pointer);
+  } else if (_view) {
     _view->camera().zoom(static_cast<float>(1.0 / recognizer.scale));
   }
   recognizer.scale = 1.0;
+}
+
+// A double tap over the program's panel.
+- (void)onDoubleTap:(UITapGestureRecognizer*)recognizer {
+  if (_view) {
+    vkp::PanelPointer pointer;
+    pointer.at = Pixels([recognizer locationInView:_metal], _metal);
+    pointer.double_tap = true;
+    _view->panel_pointer(pointer);
+  }
 }
 
 - (void)sceneWillResignActive {
