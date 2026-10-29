@@ -131,7 +131,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <random>
 #include <string>
 #include <thread>
 #include <utility>
@@ -4067,22 +4066,26 @@ TEST_F(LivePlayerTest, ARecordIsMeshedOnceNothingNewerHasCome) {
 }
 
 // A frame meshed and left untaken, B, then the next record, C, decoded
-// behind it: the take of B, at a seeded point in the worker's 10 ms slice,
-// wakes it at once, so beyond C's own mesh C is published within 2.5 ms of
-// the take, by the median of 15: a worker that waited out its slice would
-// give about 5 ms, and the margin is for a busy CI host. Each sample starts
-// from a frame taken, so the worker is idle, and each record goes once the
-// one before had time to be meshed (twice that frame's decode and mesh); a
-// sample where C still came before B was meshed, so stands for both, is
-// retried.
+// behind it: the take of B wakes the worker, which waits for it with C in
+// hand, and C is meshed at once. Each take comes about 1 ms after C's decode
+// was submitted, early in the first of the worker's 10 ms slices of waiting.
+// C's wait, from the take to its publish beyond its own work since (the wait
+// for its decode, its finish and its mesh), is within half a slice of B's
+// lateness, from its arrival to its publish beyond its own work, by their
+// medians of 15, as a loaded host delays both (CI run 40822414889). A worker
+// that saw the take only at a slice's end, after a timed wait or the
+// socket's, adds most of a slice to C's alone, 8-11 ms under TSan and in
+// Release; a take that came before the worker began to wait shows none, so
+// the medians. A host that delays B by half a slice could hide one, so the
+// test skips there. Each sample starts from a frame taken, so the worker is
+// idle, and C goes once B's mesh has run, so B is published before C is read.
 TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
+  constexpr auto kSlice = 10ms;  // the worker's (stream_player.cpp)
   const std::unique_ptr<networking::StreamServer> server = serve();
   ASSERT_NE(server, nullptr);
   StreamPlayer* player = start_live(server->port());
   ASSERT_NE(player, nullptr);
   ASSERT_TRUE(reaches(LiveState::kConnected));
-  std::mt19937 random(20261022);
-  std::uniform_int_distribution<int> phase(0, 10);
   std::uint64_t n = 0;
   // The stream's next record, looped and restamped: whether it came.
   const auto send = [&] {
@@ -4093,48 +4096,64 @@ TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
     return server->publish(info, payload.data(), payload.size()).ok() &&
            eventually([&] { return player->live_status().seq == info.seq; });
   };
-  // Twice `frame`'s decode and mesh.
-  const auto twice = [](const FrameStamp& frame) {
-    double ms = 0.0;
+  // ms from `from` to `frame`'s publish beyond its rows named in `own`.
+  const auto beyond = [](const FrameStamp& frame, SteadyClock::time_point from,
+                         std::initializer_list<const char*> own) {
+    double ms =
+        std::chrono::duration<double, std::milli>(frame.published - from)
+            .count();
     for (const core::StageRow& row : frame.stages.rows()) {
-      ms += row.cpu_ms;
+      for (const char* name : own) {
+        if (std::strcmp(row.name, name) == 0) {
+          ms -= row.cpu_ms;
+        }
+      }
     }
-    return std::chrono::microseconds(static_cast<std::int64_t>(2000.0 * ms));
+    return ms;
+  };
+  const auto median = [](std::vector<double> ms) {
+    std::nth_element(ms.begin(), ms.begin() + ms.size() / 2, ms.end());
+    return ms[ms.size() / 2];
   };
   constexpr std::size_t kSamples = 15;
-  std::vector<double> waits;  // ms, from each take of B to C's publish
-  for (int attempt = 0; attempt < 50 && waits.size() < kSamples; ++attempt) {
+  std::vector<double> late;   // ms, each B's
+  std::vector<double> waits;  // ms, each C's
+  while (waits.size() < kSamples) {
     ASSERT_TRUE(send());
-    const std::optional<FrameStamp> idle = take(kArrival);
-    ASSERT_TRUE(idle.has_value());
+    ASSERT_TRUE(take(kArrival).has_value());
+    // B's mesh sets the value after this one's on the extractor's timeline.
+    const core::TimelinePoint ready = exchange_.live().ready;
+    ASSERT_NE(ready.semaphore, nullptr);
     ASSERT_TRUE(send());  // B
-    std::this_thread::sleep_for(twice(*idle) + 10ms);
-    ASSERT_TRUE(send());  // C
-    std::this_thread::sleep_for(twice(*idle) +
-                                std::chrono::milliseconds(phase(random)));
+    const core::Status meshed = ready.semaphore->wait(
+        ready.value + 1,
+        std::chrono::duration_cast<std::chrono::nanoseconds>(kArrival).count());
+    ASSERT_TRUE(meshed.ok()) << meshed.message();
+    const std::uint64_t submits = device().counters().submits;
+    ASSERT_TRUE(send());                    // C
+    ASSERT_TRUE(submitted_after(submits));  // its decode
+    std::this_thread::sleep_for(1ms);       // so the worker waits for the take
     const SteadyClock::time_point taken_at = SteadyClock::now();
     const std::optional<FrameStamp> b = take(kArrival);
     ASSERT_TRUE(b.has_value());
-    if (b->records != 1) {
-      continue;
-    }
+    ASSERT_EQ(b->records, 1u) << "C came before B was meshed";
     const std::optional<FrameStamp> c = take(kArrival);
     ASSERT_TRUE(c.has_value());
-    double wait =
-        std::chrono::duration<double, std::milli>(c->published - taken_at)
-            .count();
-    for (const core::StageRow& row : c->stages.rows()) {
-      if (std::string(row.name) == "mesh") {
-        wait -= row.cpu_ms;
-      }
-    }
-    waits.push_back(wait);
+    late.push_back(beyond(*b, b->due,
+                          {"decode", "submit", "wait: GPU", "finish", "mesh"}));
+    waits.push_back(beyond(*c, taken_at, {"wait: GPU", "finish", "mesh"}));
   }
-  ASSERT_EQ(waits.size(), kSamples) << "C kept coming before B was meshed";
-  std::nth_element(waits.begin(), waits.begin() + waits.size() / 2,
-                   waits.end());
-  EXPECT_LT(waits[waits.size() / 2], 2.5) << "ms, the median";
   EXPECT_TRUE(player->status().ok()) << player->status().message();
+  const double half_slice =
+      std::chrono::duration<double, std::milli>(kSlice).count() / 2;
+  const double b_late = median(late);
+  if (b_late >= half_slice) {
+    GTEST_SKIP() << "B's median lateness, " << b_late
+                 << " ms, is half a slice or more: too loaded a host to tell";
+  }
+  EXPECT_LT(median(waits), b_late + half_slice)
+      << "ms, C's median wait after the take; B's median lateness, " << b_late
+      << " ms";
 }
 
 // Records faster than their decode, so one is always in hand: a newer frame
