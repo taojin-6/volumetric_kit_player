@@ -347,7 +347,7 @@ mac() {
   out="$MEASURE_OUT/$(date +%Y-%m-%d)"
   run_worktree "$ref"
   build="$worktree/build-mac"
-  for name in core recon gfx; do
+  for name in core grid gfx; do
     siblings+=("$(sibling_arg "$sha" "$name")")
   done
   mac_idle

@@ -17,7 +17,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # The apps, tests and -Werror default ON only when the player is the top-level
-# project, as in core, recon and gfx, so a project that adds the player builds
+# project, as in core, grid and gfx, so a project that adds the player builds
 # its library alone, with no GLFW; the tests never on iOS: they run on the host.
 option(VP_BUILD_APPS "Build the apps" ${PROJECT_IS_TOP_LEVEL})
 # The apps: the desktop app, a GLFW window, everywhere but iOS, which builds the

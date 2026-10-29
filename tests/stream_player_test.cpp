@@ -8,7 +8,7 @@
 // times (read, decode, mesh, submit, the wait
 // for its batch and finish, untimed with no device half) and the worker's
 // device counts over the frame alone; timed, decode and mesh have device
-// halves over recon's breakdowns, every frame or one in kSampleEvery, and
+// halves over grid's breakdowns, every frame or one in kSampleEvery, and
 // from the second batch on the queue's idle before it, and its queue latency
 // where the device calibrates; each pass of the track is counted; each mesh
 // is non-empty on the device, carries a reached ready value, and a frame that
@@ -19,10 +19,10 @@
 // publishes the frame recorded ahead at once, and the grid then holds it.
 // With loop on a step past the end wraps, with loop off the last frame holds
 // until play restarts; a corrupt P-frame, a damaged record header or a record
-// this version cannot read resyncs at the next key, as does one recon refuses
+// this version cannot read resyncs at the next key, as does one grid refuses
 // on the device, whose ring slot comes back over more passes than the ring
 // has; a stream with no key left stops the worker with the reason, one of
-// keys past kMaxFrameBlocks blocks with recon's refusal naming that ceiling;
+// keys past kMaxFrameBlocks blocks with grid's refusal naming that ceiling;
 // quit is prompt, playing, paused or waiting for a consumer that takes
 // nothing; the worker sleeps until taken() rather than polling for the take; a
 // fatal error stops the worker, a failed build on it included, as does a ring
@@ -65,7 +65,7 @@
 // holds the build; one before start or after stop returns at once; and a stop
 // while parked is prompt, at a step's start too.
 //
-// Live, from a recon StreamServer on 127.0.0.1 publishing the stream (looped
+// Live, from a grid StreamServer on 127.0.0.1 publishing the stream (looped
 // and restamped for a steady flow), or a raw peer: frames arrive with their
 // seq as their index and their set, the status's too, a mesh of their own
 // decode, decode, submit, wait,
@@ -145,22 +145,22 @@
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/grid/base/device_requirements.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
+#include "volumetric_kit/grid/networking/stream_server.hpp"
+#include "volumetric_kit/grid/stream/chunks.hpp"
+#include "volumetric_kit/grid/stream/stream_writer.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/player/frame_hooks.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
-#include "volumetric_kit/recon/networking/stream_server.hpp"
-#include "volumetric_kit/recon/stream/chunks.hpp"
-#include "volumetric_kit/recon/stream/stream_writer.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 namespace {
 
 namespace core = volumetric_kit::core;
-namespace recon = volumetric_kit::recon;
-namespace networking = recon::networking;
-namespace stream = recon::stream;
+namespace grid = volumetric_kit::grid;
+namespace networking = grid::networking;
+namespace stream = grid::stream;
 using namespace std::chrono_literals;
 using volumetric_kit::player::DeviceTiming;
 using volumetric_kit::player::FrameCommit;
@@ -195,12 +195,12 @@ constexpr std::size_t kBodyCrcAt = 16;
 constexpr std::size_t kFlagsAt = 22;
 constexpr std::size_t kPtsAt = 24;
 constexpr std::size_t kHeaderCrcAt = 52;
-// A codec frame's block count, in its header (recon's codec/bitstream.hpp).
+// A codec frame's block count, in its header (grid's codec/bitstream.hpp).
 constexpr std::size_t kBlockCountAt = 32;
-// The streams' T (recon's DeblockInfo::step), in metres: the default scale,
+// The streams' T (grid's DeblockInfo::step), in metres: the default scale,
 // 0.2, times the largest sample of the (0,0,1) basis, cos(pi/16) / 16, times
 // trunc_dist, the sphere's 0.04 m and the true-SDF stream's 0.16 m
-// (vp_write_stream); and how far recon's float arithmetic may land from it.
+// (vp_write_stream); and how far grid's float arithmetic may land from it.
 constexpr float kSphereStep = 0.00049039264f;
 constexpr float kTrueSdfStep = 0.0019615706f;
 constexpr float kStepError = 1e-9f;
@@ -325,7 +325,7 @@ struct Compacted {
 class StreamPlayerTest : public core::test::VulkanDeviceTest {
  protected:
   core::DeviceRequirements requirements() const override {
-    return recon::device_requirements();
+    return grid::device_requirements();
   }
 
   void SetUp() override {
@@ -348,9 +348,9 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
 
   // The extractor's, for a renderer of kFramesInFlight frames into
   // `slot_count` ring slots: mesh_wiring's two more by default.
-  static recon::mesh::MarchingCubesConfig extractor_config(
+  static grid::mesh::MarchingCubesConfig extractor_config(
       std::uint32_t slot_count = kFramesInFlight + 2) {
-    recon::mesh::MarchingCubesConfig config;
+    grid::mesh::MarchingCubesConfig config;
     config.extra_vertex_usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     config.extra_index_usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
     config.slot_count = slot_count;
@@ -410,8 +410,8 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   FrameHooks& logging_hooks() {
     hooks_.emplace();
     hooks_->after_mesh =
-        [this](core::CommandBatch&, const recon::volume::VoxelBlockGrid& grid,
-               const recon::mesh::DeviceMesh& mesh, FrameStamp& stamp) {
+        [this](core::CommandBatch&, const grid::volume::VoxelBlockGrid& grid,
+               const grid::mesh::DeviceMesh& mesh, FrameStamp& stamp) {
           log_.add({stamp.index, stamp.pass, stamp.rebuild, mesh.generation,
                     grid.map().allocated_blocks(), mesh.triangle_count,
                     mesh.ready.semaphore});
@@ -424,18 +424,18 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
 
   // hooks_ as logging_hooks makes them, with after_mesh also recording work
   // that reads the grid it is handed read-only: a compaction of its map's
-  // active blocks (recon's VoxelHashMap::record_compaction), whose batch
+  // active blocks (grid's VoxelHashMap::record_compaction), whose batch
   // binds the map's own kernel sets until it has resolved, their count read
   // back into compacted_.
   FrameHooks& compacting_hooks() {
     logging_hooks();
     const auto log = hooks_->after_mesh;
     hooks_->after_mesh = [this, log](core::CommandBatch& batch,
-                                     const recon::volume::VoxelBlockGrid& grid,
-                                     const recon::mesh::DeviceMesh& mesh,
+                                     const grid::volume::VoxelBlockGrid& grid,
+                                     const grid::mesh::DeviceMesh& mesh,
                                      FrameStamp& stamp) -> core::Status {
       VKC_TRY(log(batch, grid, mesh, stamp));
-      VKC_ASSIGN(const recon::volume::RecordedBlockList active,
+      VKC_ASSIGN(const grid::volume::RecordedBlockList active,
                  grid.map().record_compaction(batch, nullptr));
       std::lock_guard<std::mutex> lock(compacted_mutex_);
       Compacted& read = compacted_.emplace_back();
@@ -610,22 +610,22 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     const SteadyClock::time_point deadline = SteadyClock::now() + wait;
     while (SteadyClock::now() < deadline) {
       std::optional<FrameStamp> taken;
-      const recon::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
-          slot_, [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+      const grid::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
+          slot_, [&](const grid::mesh::DeviceMesh&, FrameStamp& stamp) {
             taken = stamp;
             player_->taken();
             return true;
           });
       slot_ = (slot_ + 1) % kFramesInFlight;
-      if (outcome == recon::mesh::ExchangeOutcome::kRefused) {
+      if (outcome == grid::mesh::ExchangeOutcome::kRefused) {
         ADD_FAILURE() << "refused: " << exchange_.refused();
         return std::nullopt;
       }
-      if (outcome == recon::mesh::ExchangeOutcome::kCommitted) {
+      if (outcome == grid::mesh::ExchangeOutcome::kCommitted) {
         // Every mesh committed, an empty one included, came through the
         // commit with its stamp.
         EXPECT_TRUE(taken.has_value()) << "a mesh committed without its stamp";
-        const recon::mesh::DeviceMesh& mesh = exchange_.live();
+        const grid::mesh::DeviceMesh& mesh = exchange_.live();
         if (taken) {
           EXPECT_EQ(mesh.empty(), taken->index == empty_frame_)
               << "frame " << taken->index;
@@ -633,7 +633,7 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
         // An empty mesh may name null buffers: no draw command to read.
         if (mesh.valid()) {
           EXPECT_EQ(index_count(mesh),
-                    recon::mesh::kIndicesPerTriangle * mesh.triangle_count);
+                    grid::mesh::kIndicesPerTriangle * mesh.triangle_count);
         }
         if (!mesh.empty()) {
           expect_ready(mesh);
@@ -653,14 +653,14 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     const SteadyClock::time_point deadline = SteadyClock::now() + wait;
     while (SteadyClock::now() < deadline) {
       std::optional<FrameStamp> taken;
-      const recon::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
-          slot_, [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+      const grid::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
+          slot_, [&](const grid::mesh::DeviceMesh&, FrameStamp& stamp) {
             taken = stamp;
             player_->taken();
             return true;
           });
       slot_ = (slot_ + 1) % kFramesInFlight;
-      if (outcome == recon::mesh::ExchangeOutcome::kCommitted) {
+      if (outcome == grid::mesh::ExchangeOutcome::kCommitted) {
         if (!exchange_.live().empty()) {
           expect_ready(exchange_.live());
         }
@@ -674,7 +674,7 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   // A mesh carries the value on its extractor's timeline that the batch
   // which wrote it set, reached by its hand-over (DeviceMesh::ready), which a
   // drawing frame waits on with no stall.
-  static void expect_ready(const recon::mesh::DeviceMesh& mesh) {
+  static void expect_ready(const grid::mesh::DeviceMesh& mesh) {
     ASSERT_NE(mesh.ready.semaphore, nullptr)
         << "generation " << mesh.generation;
     EXPECT_GT(mesh.ready.value, 0u);
@@ -728,7 +728,7 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   }
 
   // The index count the mesh's indirect draw command holds on the device.
-  std::uint32_t index_count(const recon::mesh::DeviceMesh& mesh) {
+  std::uint32_t index_count(const grid::mesh::DeviceMesh& mesh) {
     // A view of the extractor's buffer: its deleter frees nothing.
     const core::Buffer command(
         mesh.indirect, sizeof(VkDrawIndexedIndirectCommand),
@@ -745,10 +745,9 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
 
   // The mesh's vertices, read back from the device; none, with a failure
   // recorded, for an empty mesh.
-  std::vector<recon::mesh::Vertex> vertices(
-      const recon::mesh::DeviceMesh& mesh) {
+  std::vector<grid::mesh::Vertex> vertices(const grid::mesh::DeviceMesh& mesh) {
     const VkDeviceSize size =
-        VkDeviceSize{mesh.vertex_count} * sizeof(recon::mesh::Vertex);
+        VkDeviceSize{mesh.vertex_count} * sizeof(grid::mesh::Vertex);
     if (size == 0) {
       ADD_FAILURE() << "an empty mesh";
       return {};
@@ -757,7 +756,7 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     const core::Buffer buffer(
         mesh.vertices, size, mesh.vertex_usage, mesh.sharing_mode, nullptr,
         [] {}, std::nullopt);
-    std::vector<recon::mesh::Vertex> read(mesh.vertex_count);
+    std::vector<grid::mesh::Vertex> read(mesh.vertex_count);
     core::CommandBatch batch(device(), allocator());
     core::Status status = batch.readback(buffer, 0, size, read.data());
     if (status.ok()) {
@@ -769,13 +768,13 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
 
   // The mean x of the mesh's vertices on the device, in metres: about its
   // frame's sphere's centre, kMetresAFrame times the frame.
-  double mean_x(const recon::mesh::DeviceMesh& mesh) {
-    const std::vector<recon::mesh::Vertex> read = vertices(mesh);
+  double mean_x(const grid::mesh::DeviceMesh& mesh) {
+    const std::vector<grid::mesh::Vertex> read = vertices(mesh);
     if (read.empty()) {
       return 0.0;
     }
     double sum = 0.0;
-    for (const recon::mesh::Vertex& vertex : read) {
+    for (const grid::mesh::Vertex& vertex : read) {
       sum += vertex.position.x;
     }
     return sum / static_cast<double>(read.size());
@@ -784,9 +783,9 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   // The positions of the mesh's vertices, sorted, so two extracts of the same
   // voxels compare equal in whatever order the device wrote them.
   std::vector<std::array<float, 3>> positions(
-      const recon::mesh::DeviceMesh& mesh) {
+      const grid::mesh::DeviceMesh& mesh) {
     std::vector<std::array<float, 3>> sorted;
-    for (const recon::mesh::Vertex& vertex : vertices(mesh)) {
+    for (const grid::mesh::Vertex& vertex : vertices(mesh)) {
       sorted.push_back(
           {vertex.position.x, vertex.position.y, vertex.position.z});
     }
@@ -794,7 +793,7 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
     return sorted;
   }
 
-  // Each frame's blocks, as its header counts them (recon's
+  // Each frame's blocks, as its header counts them (grid's
   // codec::read_frame_info), in file order.
   std::vector<std::uint32_t> block_counts() {
     std::vector<std::uint32_t> counts;
@@ -808,8 +807,8 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
       Bytes payload;
       const core::Status read = (*reader)->read(record, &payload);
       EXPECT_TRUE(read.ok()) << read.message();
-      const core::Result<recon::codec::FrameInfo> info =
-          recon::codec::read_frame_info(payload.data(), payload.size());
+      const core::Result<grid::codec::FrameInfo> info =
+          grid::codec::read_frame_info(payload.data(), payload.size());
       EXPECT_TRUE(info.ok()) << info.status().message();
       counts.push_back(info.ok() ? info->block_count : 0);
     }
@@ -975,7 +974,7 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   }
 
   // Flips a byte near the end of `record`'s frame, in its last segment's
-  // rANS stream (recon's frames end with their PAYLOAD section), with its
+  // rANS stream (grid's frames end with their PAYLOAD section), with its
   // payload's and its header's CRCs rewritten, so the record still reads and
   // its header still parses: only decoding it on the device finds the fault.
   void corrupt_segments(const stream::Record& record) {
@@ -1114,11 +1113,11 @@ TEST_F(StreamPlayerTest, PlaysEachFrameInOrderWhenStepped) {
 }
 
 // Timed, every frame's decode and mesh have a device half, where the queue
-// can time measured, each over recon's breakdowns, which follow its row and
+// can time measured, each over grid's breakdowns, which follow its row and
 // whose tiles it holds, folded in once from its batch; read, submit, the
 // wait and finish have none.
-TEST_F(StreamPlayerTest, ATimedFramesDecodeAndMeshHoldReconsBreakdowns) {
-  // recon's timers are private; one on the same device times where they can.
+TEST_F(StreamPlayerTest, ATimedFramesDecodeAndMeshHoldGridsBreakdowns) {
+  // grid's timers are private; one on the same device times where they can.
   core::Result<core::GpuTimer> timer = core::GpuTimer::create(device());
   ASSERT_TRUE(timer.ok()) << timer.status().message();
   const core::DeviceTime expected = timer.value().available()
@@ -1181,7 +1180,7 @@ TEST_F(StreamPlayerTest, SampledTimesOneFrameInKSampleEveryFromTheFirst) {
     ASSERT_TRUE(frame.has_value()) << "no frame " << i;
     EXPECT_EQ(frame->timed, i % volumetric_kit::player::kSampleEvery == 0)
         << "frame " << i;
-    // A timed frame has recon's breakdowns too.
+    // A timed frame has grid's breakdowns too.
     EXPECT_EQ(frame->stages.rows().size() > 6u, frame->timed) << "frame " << i;
   }
   // Paused, the worker has read the next frame but records it once a step
@@ -1392,7 +1391,7 @@ TEST_F(StreamPlayerTest, ACorruptPFrameResyncsAtTheNextKey) {
 }
 
 // A P-frame whose rANS data is damaged reads and parses, so its batch runs,
-// and recon refuses it on the device: the shown mesh stays, its extract, run
+// and grid refuses it on the device: the shown mesh stays, its extract, run
 // gated off, gives its ring slot back unpublished, and the frame after, which
 // lost its reference, is skipped, so playback resumes at the next key. Over
 // more passes than the ring has slots, no slot is lost.
@@ -1476,7 +1475,7 @@ TEST_F(StreamPlayerTest, WithNoFrameToShowTheWorkerStopsWithTheReason) {
   EXPECT_LT(stop_time(*player), kPrompt);
 }
 
-// Every key claims one block past the ceiling: recon refuses each before it
+// Every key claims one block past the ceiling: grid refuses each before it
 // allocates for it, as a frame to skip, so the pass shows nothing and the
 // worker stops with the first refusal, which names the ceiling the player
 // passed.
@@ -1615,7 +1614,7 @@ TEST_F(StreamPlayerTest, OneBatchPerFrame) {
                        std::to_string(counted.barriers) + " barriers");
     // Its rounds on the device, and its latency's first leg.
     EXPECT_GE(frame->rounds, 1u);
-    EXPECT_LE(frame->rounds, recon::volume::VoxelHashMap::kRecordedRounds);
+    EXPECT_LE(frame->rounds, grid::volume::VoxelHashMap::kRecordedRounds);
     EXPECT_NE(frame->due, SteadyClock::time_point{});
     EXPECT_LE(frame->due, frame->published);
   }
@@ -1867,7 +1866,7 @@ TEST_F(StreamPlayerTest,
 
 // The grow stream's frame kGrownFrame nearly fills the grid: its batch runs,
 // the table refuses blocks on the device, and its extract runs gated off.
-// Parked with that batch in flight, nothing is submitted; at unpark recon
+// Parked with that batch in flight, nothing is submitted; at unpark the codec
 // grows the grid and decodes the frame again ("  ..grow"), the worker meshes
 // it in a batch of its own, and publishes it.
 TEST_F(StreamPlayerTest, AParkWhileARecoveryIsDueRunsItAtUnpark) {
@@ -2543,8 +2542,8 @@ TEST_F(StreamPlayerTest, AMeshIsPublishedReadyOnceAfterMeshsBatchIs) {
   std::atomic<const core::TimelineSemaphore*> meshed{nullptr};  // its ready's
   hooks_.emplace();
   hooks_->after_mesh = [&written, &meshed](core::CommandBatch& batch,
-                                           const recon::volume::VoxelBlockGrid&,
-                                           const recon::mesh::DeviceMesh& mesh,
+                                           const grid::volume::VoxelBlockGrid&,
+                                           const grid::mesh::DeviceMesh& mesh,
                                            FrameStamp& stamp) {
     meshed = mesh.ready.semaphore;
     return batch.fill(written, 0, sizeof(std::uint32_t),
@@ -2559,7 +2558,7 @@ TEST_F(StreamPlayerTest, AMeshIsPublishedReadyOnceAfterMeshsBatchIs) {
     std::optional<FrameStamp> frame;
     ASSERT_TRUE(eventually([&] {
       exchange_.begin_frame(
-          slot_, [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+          slot_, [&](const grid::mesh::DeviceMesh&, FrameStamp& stamp) {
             frame = std::move(stamp);
             player->taken();
             return true;
@@ -2604,13 +2603,13 @@ TEST_F(StreamPlayerTest, ATakeHoldsAMeshUntilItsReadyValueIsReached) {
   core::TimelineSemaphore ready = std::move(made).value();
   int asked = 0;
   FrameHooks hooks;
-  hooks.commit = [&asked](const recon::mesh::DeviceMesh&, FrameStamp&) {
+  hooks.commit = [&asked](const grid::mesh::DeviceMesh&, FrameStamp&) {
     ++asked;
     return core::Result<FrameCommit>(FrameCommit::kDraw);
   };
   FrameTaker taker(*player_, exchange_, kFramesInFlight, &hooks);
   // An empty mesh, which needs no buffer to be handed to the commit.
-  recon::mesh::DeviceMesh mesh;
+  grid::mesh::DeviceMesh mesh;
   mesh.generation = 1;
   mesh.ready = {&ready, 1};
   FrameStamp stamp;
@@ -2653,13 +2652,12 @@ TEST_F(StreamPlayerTest, AfterMeshAddsOneSubmitAndNoBlockingWait) {
   ASSERT_TRUE(made.ok()) << made.status().message();
   const core::Buffer written = std::move(made).value();
   hooks_.emplace();
-  hooks_->after_mesh = [&written](core::CommandBatch& batch,
-                                  const recon::volume::VoxelBlockGrid&,
-                                  const recon::mesh::DeviceMesh&,
-                                  FrameStamp& stamp) {
-    return batch.fill(written, 0, sizeof(std::uint32_t),
-                      static_cast<std::uint32_t>(stamp.index));
-  };
+  hooks_->after_mesh =
+      [&written](core::CommandBatch& batch, const grid::volume::VoxelBlockGrid&,
+                 const grid::mesh::DeviceMesh&, FrameStamp& stamp) {
+        return batch.fill(written, 0, sizeof(std::uint32_t),
+                          static_cast<std::uint32_t>(stamp.index));
+      };
   StreamPlayer* player = start(/*playing=*/true);
   ASSERT_NE(player, nullptr);
   FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
@@ -2694,11 +2692,11 @@ TEST_F(StreamPlayerTest, AfterMeshsReadbackIsWrittenBeforeTheNextAfterMesh) {
   int unwritten = 0;
   hooks_.emplace();
   hooks_->after_mesh = [&](core::CommandBatch& batch,
-                           const recon::volume::VoxelBlockGrid&,
-                           const recon::mesh::DeviceMesh& mesh, FrameStamp&) {
+                           const grid::volume::VoxelBlockGrid&,
+                           const grid::mesh::DeviceMesh& mesh, FrameStamp&) {
     if (!reads.empty() &&
         reads.back().command.indexCount !=
-            recon::mesh::kIndicesPerTriangle * reads.back().triangles) {
+            grid::mesh::kIndicesPerTriangle * reads.back().triangles) {
       ++unwritten;
     }
     reads.emplace_back();
@@ -2718,7 +2716,7 @@ TEST_F(StreamPlayerTest, AfterMeshsReadbackIsWrittenBeforeTheNextAfterMesh) {
   ASSERT_GE(reads.size(), kFrames);
   EXPECT_EQ(unwritten, 0);
   EXPECT_EQ(reads.back().command.indexCount,
-            recon::mesh::kIndicesPerTriangle * reads.back().triangles);
+            grid::mesh::kIndicesPerTriangle * reads.back().triangles);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
@@ -2738,13 +2736,13 @@ TEST_F(StreamPlayerTest, AParkFinishesAfterMeshsBatchThenOnParkAndOnResume) {
     std::lock_guard<std::mutex> lock(mutex);
     if (commands.empty() ||
         commands.back().indexCount !=
-            recon::mesh::kIndicesPerTriangle * triangles.back()) {
+            grid::mesh::kIndicesPerTriangle * triangles.back()) {
       ++unfinished_at_park;
     }
   };
   hooks_->after_mesh = [&, log](core::CommandBatch& batch,
-                                const recon::volume::VoxelBlockGrid& grid,
-                                const recon::mesh::DeviceMesh& mesh,
+                                const grid::volume::VoxelBlockGrid& grid,
+                                const grid::mesh::DeviceMesh& mesh,
                                 FrameStamp& stamp) {
     VKC_TRY(log(batch, grid, mesh, stamp));
     std::lock_guard<std::mutex> lock(mutex);
@@ -2766,7 +2764,7 @@ TEST_F(StreamPlayerTest, AParkFinishesAfterMeshsBatchThenOnParkAndOnResume) {
     std::lock_guard<std::mutex> lock(mutex);
     ASSERT_FALSE(commands.empty());
     EXPECT_EQ(commands.back().indexCount,
-              recon::mesh::kIndicesPerTriangle * triangles.back())
+              grid::mesh::kIndicesPerTriangle * triangles.back())
         << "after_mesh's batch unfinished at the park's return";
     EXPECT_EQ(unfinished_at_park, 0) << "on_park before the batch finished";
   }
@@ -2847,8 +2845,8 @@ TEST_F(StreamPlayerTest, AParkWaitsForAfterMeshsBatchNoLongerThanItsTimeout) {
   std::uint32_t marked = 0;        // their batch's readback
   const auto log = hooks_->after_mesh;
   hooks_->after_mesh = [&, log](core::CommandBatch& batch,
-                                const recon::volume::VoxelBlockGrid& grid,
-                                const recon::mesh::DeviceMesh& mesh,
+                                const grid::volume::VoxelBlockGrid& grid,
+                                const grid::mesh::DeviceMesh& mesh,
                                 FrameStamp& stamp) -> core::Status {
     VKC_TRY(log(batch, grid, mesh, stamp));
     if (!heavy.exchange(false)) {
@@ -2870,17 +2868,17 @@ TEST_F(StreamPlayerTest, AParkWaitsForAfterMeshsBatchNoLongerThanItsTimeout) {
   // Frame 1 published, so its step has ended: kept back untaken.
   bool running = false;  // its batch, when its publish was seen
   EXPECT_TRUE(eventually([&] {
-    const recon::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
-        slot_, [&](const recon::mesh::DeviceMesh& mesh, FrameStamp&) {
+    const grid::mesh::ExchangeOutcome outcome = exchange_.begin_frame(
+        slot_, [&](const grid::mesh::DeviceMesh& mesh, FrameStamp&) {
           if (mesh.ready.semaphore != nullptr) {
             const core::Result<std::uint64_t> reached =
                 mesh.ready.semaphore->value();
             running = reached.ok() && *reached < mesh.ready.value;
           }
-          return recon::mesh::CommitDecision::kPark;
+          return grid::mesh::CommitDecision::kPark;
         });
     slot_ = (slot_ + 1) % kFramesInFlight;
-    return outcome == recon::mesh::ExchangeOutcome::kParked;
+    return outcome == grid::mesh::ExchangeOutcome::kParked;
   })) << "frame 1 not published";
   EXPECT_TRUE(running) << "the copies finished before the publish was seen";
   const std::size_t meshed = log_.meshed().size();
@@ -2914,8 +2912,8 @@ TEST_F(StreamPlayerTest, AnAfterMeshFailureStopsPlaybackWithItsStatus) {
   std::atomic<int> calls{0};
   hooks_.emplace();
   hooks_->after_mesh = [&calls](core::CommandBatch&,
-                                const recon::volume::VoxelBlockGrid&,
-                                const recon::mesh::DeviceMesh&, FrameStamp&) {
+                                const grid::volume::VoxelBlockGrid&,
+                                const grid::mesh::DeviceMesh&, FrameStamp&) {
     if (++calls == 3) {
       return core::Status::unsupported("the test's after_mesh refuses");
     }
@@ -2967,8 +2965,8 @@ TEST_F(StreamPlayerTest, AnUnpublishedFramesExtraGoesOnceItsBatchHasFinished) {
   const auto reads = std::make_shared<Reads>();
   hooks_.emplace();
   hooks_->after_mesh = [&written, reads](core::CommandBatch& batch,
-                                         const recon::volume::VoxelBlockGrid&,
-                                         const recon::mesh::DeviceMesh&,
+                                         const grid::volume::VoxelBlockGrid&,
+                                         const grid::mesh::DeviceMesh&,
                                          FrameStamp& stamp) -> core::Status {
     std::uint32_t* value = nullptr;
     {
@@ -3009,7 +3007,7 @@ TEST_F(StreamPlayerTest, AnUnpublishedFramesExtraGoesOnceItsBatchHasFinished) {
 TEST_F(StreamPlayerTest, ACommitFailureIsTheTakesAndHoldsTheFrame) {
   int asked = 0;  // for frame 1, on the take's thread
   hooks_.emplace();
-  hooks_->commit = [&asked](const recon::mesh::DeviceMesh&,
+  hooks_->commit = [&asked](const grid::mesh::DeviceMesh&,
                             FrameStamp& stamp) -> core::Result<FrameCommit> {
     if (stamp.index == 1 && ++asked <= 2) {
       return core::Status::unsupported("the test's commit refuses");
@@ -3058,7 +3056,7 @@ TEST_F(StreamPlayerTest, AHeldFrameKeepsTheOneBeforeAndTheFileTwoAheadAtMost) {
   logging_hooks();
   std::atomic<bool> release{false};
   int holds = 0;  // the hook's kHold answers: the take's thread's
-  hooks_->commit = [&](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+  hooks_->commit = [&](const grid::mesh::DeviceMesh&, FrameStamp& stamp) {
     if (stamp.index == 2 && !release) {
       ++holds;
       return core::Result<FrameCommit>(FrameCommit::kHold);
@@ -3102,7 +3100,7 @@ TEST_F(StreamPlayerTest, AHeldFrameKeepsTheOneBeforeAndTheFileTwoAheadAtMost) {
 TEST_F(StreamPlayerTest, ASkippedFrameIsNeverDrawnAndTheRingNeverRunsOut) {
   constexpr std::uint64_t kPasses = 3;
   hooks_.emplace();
-  hooks_->commit = [](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+  hooks_->commit = [](const grid::mesh::DeviceMesh&, FrameStamp& stamp) {
     return core::Result<FrameCommit>(stamp.index % 2 == 1 ? FrameCommit::kSkip
                                                           : FrameCommit::kDraw);
   };
@@ -3135,7 +3133,7 @@ TEST_F(StreamPlayerTest, ASkippedFrameIsNeverDrawnAndTheRingNeverRunsOut) {
 TEST_F(StreamPlayerTest, ASecondSkipBeforeADrawHoldsTheFrame) {
   std::atomic<int> asked{0};  // for frame 3
   hooks_.emplace();
-  hooks_->commit = [&asked](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+  hooks_->commit = [&asked](const grid::mesh::DeviceMesh&, FrameStamp& stamp) {
     if (stamp.index == 2 || (stamp.index == 3 && ++asked < 4)) {
       return core::Result<FrameCommit>(FrameCommit::kSkip);
     }
@@ -3172,8 +3170,8 @@ TEST_F(StreamPlayerTest, ATakerKeepsAnExtraUntilTheSlotsThatDrewItTakeAgain) {
   const auto extras = std::make_shared<Extras>();
   hooks_.emplace();
   hooks_->after_mesh =
-      [extras](core::CommandBatch&, const recon::volume::VoxelBlockGrid&,
-               const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+      [extras](core::CommandBatch&, const grid::volume::VoxelBlockGrid&,
+               const grid::mesh::DeviceMesh&, FrameStamp& stamp) {
         stamp.extra = Extras::make(extras, stamp.index);
         return core::Status();
       };
@@ -3206,7 +3204,7 @@ TEST_F(StreamPlayerTest, ATakerKeepsAnExtraUntilTheSlotsThatDrewItTakeAgain) {
 constexpr auto kClosed = 50ms;
 // Between two records of a steady flow.
 constexpr auto kFlow = 20ms;
-// The most StreamClient takes in one receive (recon's StreamClient::next).
+// The most StreamClient takes in one receive (grid's StreamClient::next).
 constexpr std::size_t kClientReceive = std::size_t{2} << 20;
 
 #ifdef __APPLE__
@@ -4499,7 +4497,7 @@ TEST_F(LivePlayerTest, AfterMeshRunsBeforeEachLivePublishWithItsMeshsGrid) {
 TEST_F(LivePlayerTest, AHeldFrameKeepsTheOneBeforeWhileRecordsKeepDecoding) {
   std::atomic<bool> release{false};
   hooks_.emplace();
-  hooks_->commit = [&release](const recon::mesh::DeviceMesh&,
+  hooks_->commit = [&release](const grid::mesh::DeviceMesh&,
                               FrameStamp& stamp) {
     return core::Result<FrameCommit>(
         stamp.index == 1 && !release ? FrameCommit::kHold : FrameCommit::kDraw);
@@ -4554,9 +4552,9 @@ TEST_F(LivePlayerTest, ANewConnectionsGridWaitsForAfterMeshsBatch) {
   std::deque<float> reads;  // under mutex: each batch's readback destination
   hooks_.emplace();
   hooks_->after_mesh =
-      [&](core::CommandBatch& batch, const recon::volume::VoxelBlockGrid& grid,
-          const recon::mesh::DeviceMesh&, FrameStamp&) -> core::Status {
-    VKC_ASSIGN(const recon::volume::AttributeView tsdf, grid.attribute("tsdf"));
+      [&](core::CommandBatch& batch, const grid::volume::VoxelBlockGrid& grid,
+          const grid::mesh::DeviceMesh&, FrameStamp&) -> core::Status {
+    VKC_ASSIGN(const grid::volume::AttributeView tsdf, grid.attribute("tsdf"));
     std::lock_guard<std::mutex> lock(mutex);
     return batch.readback(*tsdf.buffer, 0, sizeof(float),
                           &reads.emplace_back(0.0f));

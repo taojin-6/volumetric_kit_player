@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// LiveConnection on the host, against a recon StreamServer on 127.0.0.1
+// LiveConnection on the host, against a grid StreamServer on 127.0.0.1
 // (never 0.0.0.0, which could raise a firewall prompt) and a port nothing
 // listens on, with a short retry: poll keeps one client while connected,
 // which reads the server's records; a refused connect, dropped with its
@@ -24,16 +24,16 @@
 #include <utility>
 
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/recon/networking/stream_client.hpp"
-#include "volumetric_kit/recon/networking/stream_server.hpp"
-#include "volumetric_kit/recon/stream/session.hpp"
-#include "volumetric_kit/recon/stream/stream_reader.hpp"
+#include "volumetric_kit/grid/networking/stream_client.hpp"
+#include "volumetric_kit/grid/networking/stream_server.hpp"
+#include "volumetric_kit/grid/stream/session.hpp"
+#include "volumetric_kit/grid/stream/stream_reader.hpp"
 
 namespace {
 
 namespace core = volumetric_kit::core;
-namespace networking = volumetric_kit::recon::networking;
-namespace stream = volumetric_kit::recon::stream;
+namespace networking = volumetric_kit::grid::networking;
+namespace stream = volumetric_kit::grid::stream;
 using namespace std::chrono_literals;
 using volumetric_kit::player::kLiveRetry;
 using volumetric_kit::player::LiveConnection;

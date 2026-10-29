@@ -3,7 +3,7 @@
 
 # `vp_build_info(<target> <source>)` gives <source>, which defines the player's
 # build_info() (measure_log.hpp), the commits of the player and of its fetched
-# core, recon and gfx, read now, at configure time, and <target> the
+# core, grid and gfx, read now, at configure time, and <target> the
 # configuration it builds. A checkout with uncommitted changes to tracked files
 # reads "<commit>-dirty"; a directory that is not a checkout's top, as an
 # unpacked copy is, reads "unknown", rather than the commit of a checkout around
@@ -46,7 +46,7 @@ endfunction()
 
 function(vp_build_info target source)
   vp_commit_of("${PROJECT_SOURCE_DIR}" player)
-  foreach(sibling core recon gfx)
+  foreach(sibling core grid gfx)
     FetchContent_GetProperties(volumetric_kit_${sibling})
     vp_commit_of("${volumetric_kit_${sibling}_SOURCE_DIR}" ${sibling})
   endforeach()
@@ -55,8 +55,8 @@ function(vp_build_info target source)
     APPEND
     PROPERTY COMPILE_DEFINITIONS
              "VP_COMMIT_PLAYER=\"${player}\";VP_COMMIT_CORE=\"${core}\""
-             "VP_COMMIT_RECON=\"${recon}\";VP_COMMIT_GFX=\"${gfx}\"")
+             "VP_COMMIT_GRID=\"${grid}\";VP_COMMIT_GFX=\"${gfx}\"")
   target_compile_definitions(${target} PRIVATE VP_BUILD_TYPE="$<CONFIG>")
   message(STATUS "Build info: player ${player}, core ${core}, "
-                 "recon ${recon}, gfx ${gfx}")
+                 "grid ${grid}, gfx ${gfx}")
 endfunction()

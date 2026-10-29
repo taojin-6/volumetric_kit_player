@@ -22,9 +22,9 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/grid/mesh/device_mesh.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
-#include "volumetric_kit/recon/mesh/device_mesh.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
 class HybridMeshPipeline;
@@ -59,12 +59,12 @@ enum class FrameCommit {
 /// @code
 /// FrameHooks hooks;
 /// hooks.after_mesh = [](core::CommandBatch&,
-///                       const recon::volume::VoxelBlockGrid&,
-///                       const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+///                       const grid::volume::VoxelBlockGrid&,
+///                       const grid::mesh::DeviceMesh&, FrameStamp& stamp) {
 ///   stamp.extra = std::make_shared<const Clock::time_point>(Clock::now());
 ///   return core::Status();
 /// };
-/// hooks.commit = [](const recon::mesh::DeviceMesh&, FrameStamp&) {
+/// hooks.commit = [](const grid::mesh::DeviceMesh&, FrameStamp&) {
 ///   return core::Result<FrameCommit>(FrameCommit::kDraw);
 /// };
 /// VKC_TRY(player.start(device, allocator, mc_config, exchange, &hooks));
@@ -80,20 +80,20 @@ struct FrameHooks {
   /// the next after_mesh, before a park returns true or a stop returns, and
   /// before a frame's stamp goes unpublished at a stop. So the batch may
   /// record work that reads the grid, such as a compaction of its map
-  /// (recon's volume::VoxelHashMap::record_compaction, which binds the
+  /// (grid's volume::VoxelHashMap::record_compaction, which binds the
   /// map's own kernel sets until the batch has resolved); the next frame's
   /// batch, queued after it, is ordered after it by the core's barriers.
   /// A host wait inside stalls playback; a failure stops it with its status.
   std::function<core::Status(
-      core::CommandBatch& batch, const recon::volume::VoxelBlockGrid& grid,
-      const recon::mesh::DeviceMesh& mesh, FrameStamp& stamp)>
+      core::CommandBatch& batch, const grid::volume::VoxelBlockGrid& grid,
+      const grid::mesh::DeviceMesh& mesh, FrameStamp& stamp)>
       after_mesh;
   /// The thread that takes meshes, inside its take
-  /// (recon::mesh::MeshExchange::begin_frame's commit, through
+  /// (grid::mesh::MeshExchange::begin_frame's commit, through
   /// @ref FrameTaker), for a frame just taken or held, once its ready value
   /// is reached. Empty means kDraw. A failure stops the view with its
   /// status.
-  std::function<core::Result<FrameCommit>(const recon::mesh::DeviceMesh& mesh,
+  std::function<core::Result<FrameCommit>(const grid::mesh::DeviceMesh& mesh,
                                           FrameStamp& stamp)>
       commit;
   /// Draw thread, each display frame that draws a mesh, after the take and
@@ -146,7 +146,7 @@ using MakeHooks = std::function<core::Result<FrameHooks>(const HookContext&)>;
 /// or not. A mesh whose ready value the device has not reached is held
 /// without asking the hook, as gfx's frame loop draws only behind values
 /// reached and after_mesh's batch may still run. Otherwise the commit hook
-/// decides: kDraw commits it (recon's CommitDecision::kCommit), kHold parks
+/// decides: kDraw commits it (grid's CommitDecision::kCommit), kHold parks
 /// it (kPark), and kSkip drops it (kDrop). As one frame at most is skipped
 /// between two drawn (FrameCommit::kSkip), the ring needs one mesh more
 /// (mesh_wiring's `holds`). Each slot keeps the extra (FrameStamp::extra) of

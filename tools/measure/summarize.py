@@ -5,9 +5,10 @@
 
 usage: summarize.py LOG.csv [LOG.csv ...]
 
-A log is the player's (src/volumetric_kit/player/measure_log.hpp, format 1,
-2 or 3), as vp_probe and the iOS app's measure launch write it. Per log,
-under what it measured (format 3 adds whether vertices were shared), and
+A log is the player's (src/volumetric_kit/player/measure_log.hpp, format 1
+to 4), as vp_probe and the iOS app's measure launch write it. Per log,
+under what it measured (format 3 adds whether vertices were shared; format 4
+names the grid's commit where the earlier named recon's), and
 after its device the machine's load before the run if a <log>.load beside it
 says (the runner's mac mode writes one): per stage of the worker's, then of
 the renderer's (format 2), the mean, p50 and p95 of its host (busy), wait and
@@ -36,7 +37,8 @@ from dataclasses import dataclass, field
 FORMAT_1 = "volumetric_kit_player measure 1"
 FORMAT_2 = "volumetric_kit_player measure 2"
 FORMAT_3 = "volumetric_kit_player measure 3"
-FORMATS = {FORMAT_1: 1, FORMAT_2: 2, FORMAT_3: 3}
+FORMAT_4 = "volumetric_kit_player measure 4"
+FORMATS = {FORMAT_1: 1, FORMAT_2: 2, FORMAT_3: 3, FORMAT_4: 4}
 HEADER_KEYS = (
     "format",
     "player",
@@ -54,6 +56,10 @@ HEADER_KEYS = (
 # low_power.
 HEADER_KEYS_2 = HEADER_KEYS + ("rings", "tile_depth", "labels")
 HEADER_KEYS_3 = HEADER_KEYS_2 + ("share_vertices",)
+# Format 4's: the grid's commit in place of recon's, which the player no
+# longer builds on.
+HEADER_KEYS_4 = tuple("grid" if key == "recon" else key
+                      for key in HEADER_KEYS_3)
 OPTIONAL_KEYS = ("rings", "tile_depth", "labels", "share_vertices", "thermal",
                  "low_power")
 COLUMNS = [
@@ -108,7 +114,8 @@ COUNTS_3 = COUNTS_2 + ("vertices",)
 # Each format's columns, header keys and counts per frame.
 LAYOUTS = {1: (COLUMNS, HEADER_KEYS, COUNTS),
            2: (COLUMNS_2, HEADER_KEYS_2, COUNTS_2),
-           3: (COLUMNS_3, HEADER_KEYS_3, COUNTS_3)}
+           3: (COLUMNS_3, HEADER_KEYS_3, COUNTS_3),
+           4: (COLUMNS_3, HEADER_KEYS_4, COUNTS_3)}
 LEGS = ("publish_ms", "take_ms", "present_ms")
 # The frames' figures, in the order the tables show them: a frame's device
 # time, read from its stages in either format, then format 2's own: the
@@ -214,7 +221,8 @@ def read_header(path, lines):
         at += 1
     if "format" in header and header["format"] not in FORMATS:
         raise LogError(f"{path}: format {header['format']!r}, not "
-                       f"{FORMAT_1!r}, {FORMAT_2!r} or {FORMAT_3!r}")
+                       f"{FORMAT_1!r}, {FORMAT_2!r}, {FORMAT_3!r} or "
+                       f"{FORMAT_4!r}")
     version = FORMATS.get(header.get("format"), 1)
     _, keys, _ = LAYOUTS[version]
     missing = [key for key in keys if key not in header]
@@ -365,6 +373,7 @@ def figure_label(key):
 def summary(log):
     """The markdown for one log."""
     h = log.header
+    sibling = "grid" if log.format >= 4 else "recon"
     settings = [f"{key} {h[key]}" for key in OPTIONAL_KEYS if key in h]
     out = [
         f"## {h['stream']} · timing {h['timing']} · {h['device'].split(';')[0]}",
@@ -374,7 +383,7 @@ def summary(log):
         *([f"- {', '.join(settings)}"] if settings else []),
         f"- run: {h['run']}",
         f"- build: player {h['player']} ({h['build']}), core {h['core']}, "
-        f"recon {h['recon']}, gfx {h['gfx']}",
+        f"{sibling} {h[sibling]}, gfx {h['gfx']}",
         f"- {h['utc']} · {passes_text(log)} · {log.frames} frames · {log.path}",
         "",
         *stage_table(log.tables["worker"], "stream frame"),

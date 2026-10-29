@@ -14,7 +14,7 @@ MeshWiring mesh_wiring(std::uint32_t graphics_family,
                        std::uint32_t frames_in_flight, bool share_vertices,
                        bool holds) {
   MeshWiring wiring;
-  recon::mesh::MarchingCubesConfig& mc = wiring.mc;
+  grid::mesh::MarchingCubesConfig& mc = wiring.mc;
   mc.extra_vertex_usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
   mc.extra_index_usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
   mc.queue_families[0] = compute_family;
@@ -23,7 +23,7 @@ MeshWiring mesh_wiring(std::uint32_t graphics_family,
   // Each frame in flight holds a generation, one published may wait to be
   // taken, and the next is meshed in its frame's batch before that take. One
   // frame counts as two: the mesh a commit replaces keeps its slot until the
-  // committing frame retires (recon's slot_count). A skipped mesh keeps its
+  // committing frame retires (grid's slot_count). A skipped mesh keeps its
   // slot until the next is committed, and FrameTaker skips one at most.
   mc.slot_count = std::max(frames_in_flight, 2u) + 2 + (holds ? 1 : 0);
   // Shared, about a third of the vertices to hold, write and fetch; unshared,

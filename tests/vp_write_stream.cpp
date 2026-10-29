@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Tao Jin
 
 // vp_write_stream <dir>: writes the tests' streams (test_stream.hpp) into
-// <dir>, with recon's MeshIntegrator, Encoder and StreamWriter, on the first
-// device that meets recon's requirements: the ctest vp_test_streams, once a
+// <dir>, with grid's MeshIntegrator, Encoder and StreamWriter, on the first
+// device that meets grid's requirements: the ctest vp_test_streams, once a
 // run (CMakeLists.txt). It applies the core's test policy as a main() of its
 // own (vulkan_policy.hpp): with no device a skip, or a failure under
 // VKC_REQUIRE_VULKAN_DEVICE, and under VKC_TEST_VALIDATION any error the
@@ -27,18 +27,18 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/physical_device_info.hpp"
-#include "volumetric_kit/recon/codec/decoder.hpp"
-#include "volumetric_kit/recon/codec/encoder.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/stream/stream_writer.hpp"
-#include "volumetric_kit/recon/tsdf/mesh_integrator.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/base/device_requirements.hpp"
+#include "volumetric_kit/grid/base/math/vector_types.hpp"
+#include "volumetric_kit/grid/codec/decoder.hpp"
+#include "volumetric_kit/grid/codec/encoder.hpp"
+#include "volumetric_kit/grid/stream/stream_writer.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/voxelize/mesh_integrator.hpp"
 
 namespace {
 
 namespace core = volumetric_kit::core;
-namespace recon = volumetric_kit::recon;
+namespace grid = volumetric_kit::grid;
 using vp_test::kFrames;
 
 constexpr float kVoxel = 0.01f;
@@ -52,18 +52,18 @@ constexpr std::int32_t kGrownBuckets = 4096;
 // The outgrow stream's frame vp_test::kGrownFrame: a sphere of more blocks
 // than vp_test::kFirstGridSlots (tests check), in a grid of kGrownBuckets.
 constexpr float kOutgrownRadius = 1.6f;
-// The true-SDF stream's truncation: 16 voxels, past recon's
+// The true-SDF stream's truncation: 16 voxels, past grid's
 // kTrueSdfBandVoxels (15), so every coded voxel is observed.
 constexpr float kTrueSdfTrunc = 0.16f;
 
 struct HostMesh {
-  std::vector<recon::Vec3f> vertices;
+  std::vector<grid::Vec3f> vertices;
   std::vector<std::uint32_t> indices;
 };
 
 // A UV sphere of `radius` round `centre`, wound outward, its edges about 1.6
 // voxels long at kRadius.
-HostMesh sphere(const recon::Vec3f& centre, float radius = kRadius) {
+HostMesh sphere(const grid::Vec3f& centre, float radius = kRadius) {
   constexpr std::uint32_t kStacks = 24;
   constexpr std::uint32_t kSlices = 48;
   constexpr float kPi = 3.14159265f;
@@ -73,9 +73,9 @@ HostMesh sphere(const recon::Vec3f& centre, float radius = kRadius) {
     for (std::uint32_t j = 0; j < kSlices; ++j) {
       const float theta = 2.0f * kPi * static_cast<float>(j) / kSlices;
       mesh.vertices.push_back(
-          centre + radius * recon::Vec3f(std::sin(phi) * std::cos(theta),
-                                         std::cos(phi),
-                                         std::sin(phi) * std::sin(theta)));
+          centre + radius * grid::Vec3f(std::sin(phi) * std::cos(theta),
+                                        std::cos(phi),
+                                        std::sin(phi) * std::sin(theta)));
     }
   }
   for (std::uint32_t i = 0; i < kStacks; ++i) {
@@ -93,7 +93,7 @@ HostMesh sphere(const recon::Vec3f& centre, float radius = kRadius) {
 // along x, at pts_of, an I-frame every kIntraPeriod, each record a key
 // exactly when its frame is an I-frame and in set_of's set, at `voxel`
 // metres a voxel and `trunc` metres of truncation, coded as a true SDF when
-// `true_sdf` (recon's EncoderConfig::true_sdf). Frame `empty`, if given,
+// `true_sdf` (grid's EncoderConfig::true_sdf). Frame `empty`, if given,
 // holds no block, so it meshes nothing: an I-frame of no blocks. Frame
 // `grown`, if given, is a sphere of `grown_radius`, in a grid of
 // kGrownBuckets. It replaces a file at `path`, such as the last ctest run's,
@@ -106,8 +106,8 @@ core::Status write_stream(core::Device& device, core::Allocator& allocator,
                           float grown_radius = kGrownRadius) {
   std::error_code ec;
   std::filesystem::remove(path, ec);  // StreamWriter says why if it is left
-  namespace stream = recon::stream;
-  namespace vol = recon::volume;
+  namespace stream = grid::stream;
+  namespace vol = grid::volume;
   const std::int32_t buckets = grown ? kGrownBuckets : 1024;
   const vol::VoxelGridParams params{voxel,
                                     8,
@@ -121,13 +121,13 @@ core::Status write_stream(core::Device& device, core::Allocator& allocator,
                                       {"weight", sizeof(float)}};
   VKC_ASSIGN(vol::VoxelBlockGrid grid,
              vol::VoxelBlockGrid::create(device, allocator, params, attrs, 2));
-  VKC_ASSIGN(recon::tsdf::MeshIntegrator integrator,
-             recon::tsdf::MeshIntegrator::create(device, allocator));
-  recon::codec::EncoderConfig config;
+  VKC_ASSIGN(grid::voxelize::MeshIntegrator integrator,
+             grid::voxelize::MeshIntegrator::create(device, allocator));
+  grid::codec::EncoderConfig config;
   config.intra_period = vp_test::kIntraPeriod;
   config.true_sdf = true_sdf;
-  VKC_ASSIGN(recon::codec::Encoder encoder,
-             recon::codec::Encoder::create(device, allocator, config));
+  VKC_ASSIGN(grid::codec::Encoder encoder,
+             grid::codec::Encoder::create(device, allocator, config));
   stream::Session session;
   session.writer = "volumetric_kit_player tests";
   stream::Track track;
@@ -140,7 +140,7 @@ core::Status write_stream(core::Device& device, core::Allocator& allocator,
     VKC_TRY(grid.clear());
     if (i != empty) {
       const HostMesh mesh =
-          sphere(recon::Vec3f(8.0f * voxel * static_cast<float>(i), 0, 0),
+          sphere(grid::Vec3f(8.0f * voxel * static_cast<float>(i), 0, 0),
                  i == grown ? grown_radius : kRadius);
       const auto vertex_count =
           static_cast<std::uint32_t>(mesh.vertices.size());
@@ -159,10 +159,10 @@ core::Status write_stream(core::Device& device, core::Allocator& allocator,
                   .status());
     }
     VKC_ASSIGN(const std::vector<std::uint8_t> frame, encoder.encode(grid));
-    VKC_ASSIGN(const recon::codec::FrameInfo info,
-               recon::codec::read_frame_info(frame.data(), frame.size()));
+    VKC_ASSIGN(const grid::codec::FrameInfo info,
+               grid::codec::read_frame_info(frame.data(), frame.size()));
     stream::RecordInfo record;
-    record.key = info.type == recon::codec::FrameType::kIntra;
+    record.key = info.type == grid::codec::FrameType::kIntra;
     record.pts_ns = vp_test::pts_of(i);
     record.seq = i;
     record.set = vp_test::set_of(i);
@@ -177,7 +177,7 @@ core::Status write(const core::Instance& instance,
                    const std::filesystem::path& dir) {
   VKC_TRY(core::test::check_layer_loaded(instance));
   VKC_ASSIGN(core::Device device,
-             core::Device::create(instance, gpu, recon::device_requirements()));
+             core::Device::create(instance, gpu, grid::device_requirements()));
   VKC_ASSIGN(core::Allocator allocator,
              core::Allocator::create(instance.handle(), device));
   std::error_code ec;
@@ -215,7 +215,7 @@ int run(const char* dir) {
     return core::test::no_device_exit_code(instance.status().message());
   }
   const core::Result<core::PhysicalDeviceInfo> gpu =
-      instance->select_physical_device(recon::device_requirements());
+      instance->select_physical_device(grid::device_requirements());
   if (!gpu.ok()) {
     return core::test::no_device_exit_code(gpu.status().message());
   }

@@ -4,7 +4,8 @@
 """Tests of summarize.py, which ctest runs (tests/CMakeLists.txt).
 
 Summarize: on the fixtures in testdata/, a format-1 log (before.csv, M0's),
-a format-2 one (after.csv) and a format-3 one (unshared.csv), it keeps a
+a format-2 one (after.csv) and a format-3 one (unshared.csv), and the last
+as format 4, which names the grid's commit where recon's was, it keeps a
 log's passes after the first, takes nearest-rank p50 and p95, takes the GPU
 over measured rows alone and says why the rest were not, counts the device
 per frame, shows the load in a <log>.load beside a log after its device;
@@ -20,7 +21,8 @@ and refuses what is not a log of a format it reads.
 ProbeLog: each log vp_probe writes of the tests' stream (VP_PROBE_CSV, the
 paths joined by os.pathsep), two passes of its six frames with every frame
 timed, vertices shared or not and both among the logs, reads as one of
-format 3: its header says how it ran; each frame has its read, decode, mesh,
+format 4: its header names the commits of core, grid and gfx, which the build
+fetched, and says how it ran; each frame has its read, decode, mesh,
 submit, wait and finish rows,
 the decode's breakdowns where measured, and its frame row: its record's set,
 none for the record that names none; three vertices a triangle unshared and
@@ -182,6 +184,23 @@ class Summarize(unittest.TestCase):
             self.assertNotIn("| vertices |",
                              summarize.summary(summarize.read_log(path)))
 
+    def test_a_format_4_log_names_the_grid_where_recon_was(self):
+        with open(UNSHARED, encoding="utf-8") as file:
+            text = file.read()
+        log = summarize.read_log(self.write(
+            text.replace("measure 3", "measure 4").replace("# recon:",
+                                                           "# grid:")))
+        self.assertEqual(log.format, 4)
+        self.assertEqual(log.counts["vertices"], [1500, 1530, 1560])
+        build = ("- build: player 6666666" + "f" * 33 + " (Release), core "
+                 "2222222" + "b" * 33 + ", {} 3333333" + "c" * 33
+                 + ", gfx 4444444" + "d" * 33)
+        rows = summarize.summary(log).splitlines()
+        self.assertIn(build.format("grid"), rows)
+        self.assertIn(build.format("recon"),
+                      summarize.summary(summarize.read_log(UNSHARED))
+                      .splitlines())
+
     def test_a_format_2_log_diffs_against_a_format_3_one(self):
         rows = summarize.summarize([AFTER, UNSHARED]).split(
             "## Before -> after (means)")[1].splitlines()
@@ -231,7 +250,7 @@ class Summarize(unittest.TestCase):
         with open(UNSHARED, encoding="utf-8") as file:
             good_3 = file.read()
         for bad, why in (
-            (good.replace("measure 1", "measure 4"), "format"),
+            (good.replace("measure 1", "measure 5"), "format"),
             (good.replace("measure 1", "measure 2"), "lacks rings"),
             (good_2.replace("# labels: on\n", ""), "lacks labels"),
             (good_2.replace("measure 2", "measure 1"), "columns"),
@@ -239,6 +258,7 @@ class Summarize(unittest.TestCase):
             (good_2.replace("measure 2", "measure 3").replace(
                 "# labels: on\n", "# labels: on\n# share_vertices: on\n"),
              "columns"),
+            (good_3.replace("measure 3", "measure 4"), "lacks grid"),
             (good_3.replace("8.0000,,1530,501", "8.0000,,1530,five"),
              "set 'five' is not a number"),
             (good_3.replace("8.0000,,1530,501", "8.0000,,,501"),
@@ -279,8 +299,11 @@ class ProbeLog(unittest.TestCase):
     def test_the_header_names_what_was_measured(self):
         for log in self.logs:
             with self.subTest(log=log.path):
-                self.assertEqual(log.format, 3)
+                self.assertEqual(log.format, 4)
                 header = log.header
+                for sibling in ("core", "grid", "gfx"):
+                    self.assertRegex(header[sibling],
+                                     r"^[0-9a-f]{40}(-dirty)?$", sibling)
                 self.assertEqual(header["stream"], "sphere.vrst, track 0")
                 self.assertRegex(header["run"],
                                  r"^vp_probe( --worker)? --passes 2$")

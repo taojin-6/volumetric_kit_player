@@ -175,17 +175,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - build: the iOS app needs iOS 26 or newer: `cmake --preset ios` targets
   iOS 26.0, the family's iOS floor.
-- build: the player pins core main at #63's merge (c529072, 0.26.0), gfx
-  main at #160's merge (17b3192) and recon main at #299's merge (d8b8bda),
-  and requires core 0.26.0, its pin's version, at or above the 0.25.0
-  recon's library asks for. A mesh vertex on a corner whose distance is the
-  iso-value is exactly that corner (recon #299). A commit hook's skip is
-  recon's `CommitDecision::kDrop` (recon #293). The view presents FIFO as
+- build: the player builds on core, volumetric_kit_grid and gfx, and no
+  longer fetches recon. grid, split out of recon (recon #309), holds all the
+  player took from recon (the stream reader and client, the codec, Marching
+  Cubes, the mesh exchange, the PLY writer and the mesh integrator), the code
+  of recon main at #299's merge (d8b8bda) under grid's names. The player pins
+  core main at #65's merge (a4a6fff, 0.29.0), grid main (cbf7a6e, 0.1.0) and
+  gfx main at #160's merge (17b3192), and requires core 0.29.0, its pin's
+  version and grid's floor, and grid 0.1.0 with each tier it links. The
+  worker's device asks for grid's requirements, without the external-memory
+  and Metal-object extensions recon asked for, where offered, for its camera
+  decoders. A mesh vertex on a corner whose distance is the iso-value is
+  exactly that corner (recon #299). A commit hook's skip is grid's
+  `CommitDecision::kDrop` (recon #293). The view presents FIFO as
   gfx's default (gfx #150), naming no mode. A set a program's `before_draw`
   binds is made with `HookContext::commit_allocator` too, as gfx's
   `HybridMeshTextureSet::create` takes an allocator (gfx #158). The view
   draws its meshes without gfx's second view (gfx #160's default), as they
   carry none, so on Apple GPUs a draw costs what it did before gfx #159.
+- Measure format 4: the header's `grid` names grid's commit where format 3's
+  `recon` named recon's (`BuildInfo::grid`); the runner builds on the grid
+  checkout at the player's pin, and the summarizer reads formats 1 to 4.
 - An `after_mesh` hook may record work that reads the grid it is handed,
   such as a compaction of its map (recon #295's const
   `VoxelHashMap::record_compaction`). The worker finishes the hook's batch
@@ -299,3 +309,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A program whose `before_draw` binds a texture set sets
   `PlayerViewConfig::textured` to show it at start: Texture is off by
   default.
+- A program built on the player names grid's types where it named recon's:
+  `volumetric_kit/grid/<tier>/…` and `volumetric_kit::grid::<tier>` (an
+  `after_mesh` hook's `grid::volume::VoxelBlockGrid`, a mesh's
+  `grid::mesh::DeviceMesh`), and links `volumetric_kit::grid_<tier>`; the
+  player brings grid, not recon. `BuildInfo::recon` is `BuildInfo::grid`.

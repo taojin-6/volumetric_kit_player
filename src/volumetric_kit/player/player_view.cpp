@@ -12,9 +12,9 @@
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
+#include "volumetric_kit/grid/base/device_requirements.hpp"
 #include "volumetric_kit/player/controls.hpp"
 #include "volumetric_kit/player/mesh_wiring.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace volumetric_kit::player {
 
@@ -23,12 +23,12 @@ namespace pipelines = gfx::pipelines;
 
 namespace {
 
-// recon's buffers, drawn in place: gfx reads them at its own Vertex's size
-// and offsets, which recon's mesh.hpp and gfx's hybrid_mesh_pipeline.cpp each
+// grid's buffers, drawn in place: gfx reads them at its own Vertex's size
+// and offsets, which grid's mesh.hpp and gfx's hybrid_mesh_pipeline.cpp each
 // pin to the same numbers.
 // TODO: a gfx live-mesh class owns this conversion (plan: once a 4th app
 // draws a live mesh).
-pipelines::LiveMesh live_mesh(const recon::mesh::DeviceMesh& mesh) {
+pipelines::LiveMesh live_mesh(const grid::mesh::DeviceMesh& mesh) {
   pipelines::LiveMesh live;
   live.vertices = mesh.vertices;
   live.indices = mesh.indices;
@@ -67,7 +67,7 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   device_config.instance.request_debug_utils = config.debug_labels;
   device_config.graphics = app_config.device;
   VKC_ASSIGN(std::unique_ptr<core::SharedDevice> shared,
-             app::make_shared_device(surface, recon::device_requirements(),
+             app::make_shared_device(surface, grid::device_requirements(),
                                      device_config));
   VKC_ASSIGN(app::WindowedApp windowed,
              app::WindowedApp::adopt(*shared, app_config));
@@ -75,12 +75,11 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   profiler_config.frames_in_flight = kFramesInFlight;
   VKC_ASSIGN(gfx::Profiler profiler,
              gfx::Profiler::create(windowed.device(), profiler_config));
-  VKC_ASSIGN(core::Device recon_device,
+  VKC_ASSIGN(core::Device grid_device,
              core::Device::adopt(shared->compute_payload(),
-                                 recon::device_requirements()));
-  VKC_ASSIGN(
-      core::Allocator recon_allocator,
-      core::Allocator::create(shared->instance().handle(), recon_device));
+                                 grid::device_requirements()));
+  VKC_ASSIGN(core::Allocator grid_allocator,
+             core::Allocator::create(shared->instance().handle(), grid_device));
   VKC_ASSIGN(pipelines::HybridMeshPipeline mesh_pipeline,
              pipelines::HybridMeshPipeline::create(
                  windowed.device(), windowed.allocator(),
@@ -101,8 +100,8 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   const std::uint32_t graphics_family = shared->graphics_family();
   std::unique_ptr<PlayerView> view(
       new PlayerView(std::move(shared), std::move(windowed),
-                     std::move(profiler), std::move(recon_device),
-                     std::move(recon_allocator), std::move(mesh_pipeline),
+                     std::move(profiler), std::move(grid_device),
+                     std::move(grid_allocator), std::move(mesh_pipeline),
                      std::move(overlay), wiring.exchange, std::move(player)));
   view->camera_.set_target({0.0f, 0.85f, 0.0f});
   view->camera_.set_distance(3.0f);
@@ -116,13 +115,13 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
       config.device_timing.value_or(DeviceTiming::kAll));
   view->player_->set_tile_depth(config.tile_depth);
   if (config.make_hooks) {
-    const HookContext context{view->recon_device_,   view->recon_allocator_,
+    const HookContext context{view->grid_device_,    view->grid_allocator_,
                               view->app_.device(),   view->app_.allocator(),
                               &view->mesh_pipeline_, compute_family,
                               graphics_family};
     VKC_ASSIGN(view->hooks_, config.make_hooks(context));
   }
-  VKC_TRY(view->player_->start(view->recon_device_, view->recon_allocator_,
+  VKC_TRY(view->player_->start(view->grid_device_, view->grid_allocator_,
                                wiring.mc, view->exchange_, &view->hooks_));
   return view;
 } catch (...) {
@@ -132,17 +131,16 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
 
 PlayerView::PlayerView(std::unique_ptr<core::SharedDevice> shared,
                        app::WindowedApp app, gfx::Profiler profiler,
-                       core::Device recon_device,
-                       core::Allocator recon_allocator,
+                       core::Device grid_device, core::Allocator grid_allocator,
                        pipelines::HybridMeshPipeline mesh_pipeline,
                        gfx::ui::ImGuiOverlay overlay,
-                       const recon::mesh::MeshExchangeConfig& exchange,
+                       const grid::mesh::MeshExchangeConfig& exchange,
                        std::unique_ptr<StreamPlayer> player)
     : shared_(std::move(shared)),
       app_(std::move(app)),
       profiler_(std::move(profiler)),
-      recon_device_(std::move(recon_device)),
-      recon_allocator_(std::move(recon_allocator)),
+      grid_device_(std::move(grid_device)),
+      grid_allocator_(std::move(grid_allocator)),
       mesh_pipeline_(std::move(mesh_pipeline)),
       overlay_(std::move(overlay)),
       exchange_(exchange),
@@ -212,7 +210,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   const core::Status drawn = drawable(exchange_);
   // 4. The frame's binding: the view's own (Unlit) and before_draw's, unless
   // Texture is off and that names a set (textured()).
-  const recon::mesh::DeviceMesh& live = exchange_.live();
+  const grid::mesh::DeviceMesh& live = exchange_.live();
   const bool draws = live.valid() && !live.empty();
   binding_ = DrawBinding{};
   if (unlit_) {
@@ -297,7 +295,7 @@ std::uint32_t PlayerView::mesh_flags() const noexcept {
 }
 
 void PlayerView::record_mesh(VkCommandBuffer cmd, VkExtent2D extent) const {
-  const recon::mesh::DeviceMesh& live = exchange_.live();
+  const grid::mesh::DeviceMesh& live = exchange_.live();
   if (!live.valid() || live.empty()) {
     return;
   }

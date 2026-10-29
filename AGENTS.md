@@ -14,14 +14,14 @@ records why.
 - It is assembled from its siblings, each fetched pinned by commit:
   [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core)
   (the device, `Status`/`Result`, the scenario format, the test fixtures),
-  [`volumetric_kit_recon`](https://github.com/taojin-6/volumetric_kit_recon)
+  [`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid)
   (the stream reader and client, the codec, Marching Cubes) and
   [`volumetric_kit_gfx`](https://github.com/taojin-6/volumetric_kit_gfx)
   (the window, the mesh pipeline, the camera). From the primary checkout
   they are `../volumetric_kit_<name>/`.
 - Code another application could use belongs in its owner, as a task in that
   repository. The player keeps only its assembly and its playback.
-- Processing runs on the GPU, on one `VkDevice` that recon and gfx share. The
+- Processing runs on the GPU, on one `VkDevice` that grid and gfx share. The
   host reads the stream's bytes, from a file or a socket, and handles input,
   with no host fallbacks.
 

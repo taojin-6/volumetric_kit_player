@@ -5,7 +5,7 @@
 // two slots deeper than the frames in flight, one frame counted as two, and
 // one more for a commit hook that may hold or skip a mesh, vertices shared
 // unless asked not to be, and the families: one family is EXCLUSIVE and read
-// in place, two are CONCURRENT and read across. And drawable on recon's
+// in place, two are CONCURRENT and read across. And drawable on grid's
 // exchange: a refused mesh fails every frame after it.
 
 #include "volumetric_kit/player/mesh_wiring.hpp"
@@ -20,13 +20,13 @@
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/recon/mesh/device_mesh.hpp"
-#include "volumetric_kit/recon/mesh/mesh_exchange.hpp"
+#include "volumetric_kit/grid/mesh/device_mesh.hpp"
+#include "volumetric_kit/grid/mesh/mesh_exchange.hpp"
 
 namespace {
 
 namespace core = volumetric_kit::core;
-namespace rmesh = volumetric_kit::recon::mesh;
+namespace gmesh = volumetric_kit::grid::mesh;
 using volumetric_kit::player::drawable;
 using volumetric_kit::player::mesh_wiring;
 using volumetric_kit::player::MeshWiring;
@@ -40,9 +40,9 @@ VkBuffer fake_buffer(std::uint64_t value) {
 }
 
 // A drawable extract of one triangle at `generation`, shared as `sharing`.
-rmesh::DeviceMesh one_triangle(std::uint64_t generation,
+gmesh::DeviceMesh one_triangle(std::uint64_t generation,
                                VkSharingMode sharing) {
-  rmesh::DeviceMesh mesh;
+  gmesh::DeviceMesh mesh;
   mesh.vertices = fake_buffer(4 * generation + 1);
   mesh.indices = fake_buffer(4 * generation + 2);
   mesh.indirect = fake_buffer(4 * generation + 3);
@@ -98,7 +98,7 @@ TEST(MeshWiring, TwoFamiliesAreReadAcross) {
   expect_bindable(wiring);
 }
 
-// recon's ring rule: the frames in flight, one counted as two, two more for a
+// grid's ring rule: the frames in flight, one counted as two, two more for a
 // producer that meshes the next frame before the take, and with `holds` one
 // more for the mesh a commit hook may skip; the rest is as without.
 TEST(MeshWiring, HoldsAddOneMeshAndOneFrameCountsAsTwo) {
@@ -139,12 +139,12 @@ TEST(MeshWiring, ARefusedMeshFailsEveryLaterFrame) {
   const MeshWiring wiring = mesh_wiring(/*graphics_family=*/0,
                                         /*compute_family=*/1,
                                         /*frames_in_flight=*/2);
-  rmesh::MeshExchange<int> exchange(wiring.exchange);
-  const auto commit = [](const rmesh::DeviceMesh&, int&) { return true; };
+  gmesh::MeshExchange<int> exchange(wiring.exchange);
+  const auto commit = [](const gmesh::DeviceMesh&, int&) { return true; };
   EXPECT_TRUE(drawable(exchange).ok());
   // EXCLUSIVE buffers cannot be read across families.
   exchange.publish(one_triangle(1, VK_SHARING_MODE_EXCLUSIVE), 1);
-  ASSERT_EQ(exchange.begin_frame(0, commit), rmesh::ExchangeOutcome::kRefused);
+  ASSERT_EQ(exchange.begin_frame(0, commit), gmesh::ExchangeOutcome::kRefused);
   const core::Status refused = drawable(exchange);
   EXPECT_EQ(refused.domain(), core::Status::Code::Unsupported);
   EXPECT_NE(refused.message().find("EXCLUSIVE"), std::string::npos)
@@ -153,7 +153,7 @@ TEST(MeshWiring, ARefusedMeshFailsEveryLaterFrame) {
   exchange.publish(one_triangle(2, VK_SHARING_MODE_CONCURRENT), 2);
   for (std::uint32_t slot : {1u, 0u}) {
     ASSERT_EQ(exchange.begin_frame(slot, commit),
-              rmesh::ExchangeOutcome::kNone);
+              gmesh::ExchangeOutcome::kNone);
     const core::Status later = drawable(exchange);
     EXPECT_EQ(later.domain(), core::Status::Code::Unsupported);
     EXPECT_EQ(later.message(), refused.message());

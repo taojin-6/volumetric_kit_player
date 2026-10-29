@@ -89,20 +89,20 @@
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
+#include "volumetric_kit/grid/base/device_requirements.hpp"
+#include "volumetric_kit/grid/mesh/device_mesh.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
+#include "volumetric_kit/grid/networking/stream_server.hpp"
+#include "volumetric_kit/grid/stream/stream_reader.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/player/controls.hpp"
 #include "volumetric_kit/player/frame_hooks.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/mesh/device_mesh.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
-#include "volumetric_kit/recon/networking/stream_server.hpp"
-#include "volumetric_kit/recon/stream/stream_reader.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace {
 
 namespace core = volumetric_kit::core;
 namespace gfx = volumetric_kit::gfx;
-namespace recon = volumetric_kit::recon;
+namespace grid = volumetric_kit::grid;
 using namespace std::chrono_literals;
 using volumetric_kit::player::DeviceTiming;
 using volumetric_kit::player::DrawBinding;
@@ -196,7 +196,7 @@ class PlayerViewTest : public core::test::VulkanTest {
   // The fixture's physical device says whether there is one for the view,
   // which makes its own device.
   core::DeviceRequirements requirements() const override {
-    return recon::device_requirements();
+    return grid::device_requirements();
   }
 
   void SetUp() override {
@@ -372,8 +372,8 @@ class PlayerViewTest : public core::test::VulkanTest {
   // stream from `reader`, with the touch half bound to its controls, shown
   // each record in turn as `server` publishes it; false with a failure
   // recorded.
-  bool make_live_view(recon::stream::StreamReader& reader,
-                      recon::networking::StreamServer& server) {
+  bool make_live_view(grid::stream::StreamReader& reader,
+                      grid::networking::StreamServer& server) {
     core::Result<std::unique_ptr<StreamPlayer>> live =
         StreamPlayer::connect({"127.0.0.1", server.port()});
     EXPECT_TRUE(live.ok()) << live.status().message();
@@ -382,8 +382,8 @@ class PlayerViewTest : public core::test::VulkanTest {
         })) {
       return false;
     }
-    recon::stream::Position pos = reader.begin();
-    recon::stream::Record record;
+    grid::stream::Position pos = reader.begin();
+    grid::stream::Record record;
     std::vector<std::uint8_t> payload;
     for (std::uint64_t index = 0;; ++index) {
       const core::Result<bool> more = reader.next(&pos, &record);
@@ -696,7 +696,7 @@ TEST_F(PlayerViewTest, FramesPresentAndShownAdvances) {
   EXPECT_EQ(view_->shown()->set, vp_test::set_of(2)) << "its record's";
   // Its triangles share their vertices by default (mesh_wiring): fewer than
   // 3 each.
-  const recon::mesh::DeviceMesh& mesh = view_->mesh();
+  const grid::mesh::DeviceMesh& mesh = view_->mesh();
   EXPECT_TRUE(mesh.shares_vertices);
   EXPECT_GT(mesh.triangle_count, 0u);
   EXPECT_LT(mesh.vertex_count, 3 * mesh.triangle_count);
@@ -719,7 +719,7 @@ TEST_F(PlayerViewTest, UnsharedEachTriangleHasThreeVerticesOfItsOwn) {
     return view_->shown() && view_->shown()->index >= 1 &&
            view_->mesh().triangle_count > 0;
   }));
-  const recon::mesh::DeviceMesh& mesh = view_->mesh();
+  const grid::mesh::DeviceMesh& mesh = view_->mesh();
   EXPECT_FALSE(mesh.shares_vertices);
   EXPECT_EQ(mesh.vertex_count, 3 * mesh.triangle_count);
   ASSERT_TRUE(present());
@@ -1059,8 +1059,8 @@ TEST_F(PlayerViewTest, TheStatsFitAPhone) {
 // with no program's line and with kProgramLine: they fit the phone.
 TEST_F(PlayerViewTest, ALiveViewsStatsFitAPhone) {
   size_as_a_phone();
-  core::Result<std::unique_ptr<recon::stream::StreamReader>> reader =
-      recon::stream::StreamReader::open(path_);
+  core::Result<std::unique_ptr<grid::stream::StreamReader>> reader =
+      grid::stream::StreamReader::open(path_);
   ASSERT_TRUE(reader.ok()) << reader.status().message();
   for (const std::string line : {"", kProgramLine}) {
     make_hooks_ = line_hooks(line);
@@ -1068,11 +1068,11 @@ TEST_F(PlayerViewTest, ALiveViewsStatsFitAPhone) {
       SCOPED_TRACE(std::to_string(phone.pixels.width) + " \"" + line + "\"");
       extent_ = phone.pixels;
       safe_area_ = phone.safe_area;
-      recon::networking::ServerOptions options;
+      grid::networking::ServerOptions options;
       options.host = "127.0.0.1";
       options.port = 0;  // a free one: other tests serve at the same time
-      core::Result<std::unique_ptr<recon::networking::StreamServer>> server =
-          recon::networking::StreamServer::start((*reader)->session(), options);
+      core::Result<std::unique_ptr<grid::networking::StreamServer>> server =
+          grid::networking::StreamServer::start((*reader)->session(), options);
       ASSERT_TRUE(server.ok()) << server.status().message();
       ASSERT_TRUE(make_live_view(**reader, **server));
       tick_for(2 * StatsPanel::kRefresh);
@@ -1196,7 +1196,7 @@ TEST_F(PlayerViewTest, TheDrawWaitsOnTheMeshesReadyValue) {
       VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
   int drawn = 0;
   ASSERT_TRUE(tick_until([&] {
-    const recon::mesh::DeviceMesh& mesh = view_->mesh();
+    const grid::mesh::DeviceMesh& mesh = view_->mesh();
     if (mesh.valid() && !mesh.empty()) {
       EXPECT_NE(mesh.ready.semaphore, nullptr);
       // The frame went to the queue behind that value, at the draw's stages.
@@ -1310,7 +1310,7 @@ TEST_F(PlayerViewTest, MoltenVkPlansTwoFamilies) {
   device_config.instance.enable_validation = config().validation;
   device_config.graphics = gfx::app::WindowedAppConfig{}.device;
   core::Result<std::unique_ptr<core::SharedDevice>> shared =
-      gfx::app::make_shared_device(surface_, recon::device_requirements(),
+      gfx::app::make_shared_device(surface_, grid::device_requirements(),
                                    device_config);
   ASSERT_TRUE(shared.ok()) << shared.status().message();
   EXPECT_EQ(shared.value()->plan(), core::QueuePlan::TwoFamilies)
@@ -1332,10 +1332,10 @@ int encoded(double linear) {
 
 // A view of a mesh's vertex buffer, `count` vertices: its deleter frees
 // nothing.
-core::Buffer vertex_view(const recon::mesh::DeviceMesh& mesh,
+core::Buffer vertex_view(const grid::mesh::DeviceMesh& mesh,
                          std::uint32_t count) {
   return core::Buffer(
-      mesh.vertices, VkDeviceSize{count} * sizeof(recon::mesh::Vertex),
+      mesh.vertices, VkDeviceSize{count} * sizeof(grid::mesh::Vertex),
       mesh.vertex_usage, mesh.sharing_mode, nullptr, [] {}, std::nullopt);
 }
 
@@ -1358,12 +1358,12 @@ TEST_F(PlayerViewTest, AnExtraReachesTheCommitAndBeforeDraw) {
   make_hooks_ = [seen, check](const HookContext&) {
     FrameHooks hooks;
     hooks.after_mesh = [](core::CommandBatch&,
-                          const recon::volume::VoxelBlockGrid&,
-                          const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+                          const grid::volume::VoxelBlockGrid&,
+                          const grid::mesh::DeviceMesh&, FrameStamp& stamp) {
       stamp.extra = std::make_shared<const std::uint64_t>(stamp.index);
       return core::Status();
     };
-    hooks.commit = [seen, check](const recon::mesh::DeviceMesh&,
+    hooks.commit = [seen, check](const grid::mesh::DeviceMesh&,
                                  FrameStamp& stamp) {
       check(stamp);
       ++seen->commits;
@@ -1436,8 +1436,8 @@ TEST_F(PlayerViewTest, AnExtraIsReleasedOnlyOnceEveryDrawOfItsFrameHasRun) {
     FrameHooks hooks;
     // Each frame's extra, keyed apart from its index, which a pass repeats.
     hooks.after_mesh =
-        [marks](core::CommandBatch&, const recon::volume::VoxelBlockGrid&,
-                const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+        [marks](core::CommandBatch&, const grid::volume::VoxelBlockGrid&,
+                const grid::mesh::DeviceMesh&, FrameStamp& stamp) {
           std::uint64_t key = 0;
           {
             std::lock_guard<std::mutex> lock(marks->mutex);
@@ -1534,8 +1534,8 @@ MakeHooks bound_image_hooks(std::shared_ptr<std::atomic<bool>> bind,
     core::Device* const device = &context.device;
     core::Allocator* const allocator = &context.allocator;
     hooks.after_mesh = [device, allocator](core::CommandBatch& batch,
-                                           const recon::volume::VoxelBlockGrid&,
-                                           const recon::mesh::DeviceMesh& mesh,
+                                           const grid::volume::VoxelBlockGrid&,
+                                           const grid::mesh::DeviceMesh& mesh,
                                            FrameStamp&) -> core::Status {
       if (mesh.vertex_count == 0) {
         return {};
@@ -1543,11 +1543,11 @@ MakeHooks bound_image_hooks(std::shared_ptr<std::atomic<bool>> bind,
       // Its vertices read back with a host wait of the test's, each set to
       // sample the image's middle, and written back in after_mesh's batch.
       const core::Buffer vertices = vertex_view(mesh, mesh.vertex_count);
-      std::vector<recon::mesh::Vertex> read(mesh.vertex_count);
+      std::vector<grid::mesh::Vertex> read(mesh.vertex_count);
       core::CommandBatch readback(*device, *allocator);
       VKC_TRY(readback.readback(vertices, 0, vertices.size(), read.data()));
       VKC_TRY(readback.submit());
-      for (recon::mesh::Vertex& vertex : read) {
+      for (grid::mesh::Vertex& vertex : read) {
         vertex.uv0.x = 0.5f;
         vertex.uv0.y = 0.5f;
       }
@@ -1722,16 +1722,16 @@ TEST_F(PlayerViewTest, UnlitShowsTheVertexColourUnshaded) {
   aim_at(view_->shown()->index);
   ASSERT_TRUE(present());
   // The mesh's vertex colour, one for every vertex.
-  const recon::mesh::DeviceMesh& mesh = view_->mesh();
+  const grid::mesh::DeviceMesh& mesh = view_->mesh();
   ASSERT_GT(mesh.vertex_count, 0u);
-  std::vector<recon::mesh::Vertex> read(mesh.vertex_count);
+  std::vector<grid::mesh::Vertex> read(mesh.vertex_count);
   core::CommandBatch readback(*context_->device, *context_->allocator);
   const core::Buffer vertices = vertex_view(mesh, mesh.vertex_count);
   ASSERT_TRUE(
       readback.readback(vertices, 0, vertices.size(), read.data()).ok());
   ASSERT_TRUE(readback.submit().ok());
-  const recon::mesh::Vertex& first = read.front();
-  for (const recon::mesh::Vertex& vertex : read) {
+  const grid::mesh::Vertex& first = read.front();
+  for (const grid::mesh::Vertex& vertex : read) {
     ASSERT_EQ(vertex.color.x, first.color.x);
     ASSERT_EQ(vertex.color.y, first.color.y);
     ASSERT_EQ(vertex.color.z, first.color.z);
@@ -1763,7 +1763,7 @@ TEST_F(PlayerViewTest, ACommitHookHoldsAndSkipsFrames) {
   const auto asked = std::make_shared<std::atomic<int>>(0);  // for frame 3
   make_hooks_ = [asked](const HookContext&) {
     FrameHooks hooks;
-    hooks.commit = [asked](const recon::mesh::DeviceMesh&, FrameStamp& stamp) {
+    hooks.commit = [asked](const grid::mesh::DeviceMesh&, FrameStamp& stamp) {
       if (stamp.index == 2) {
         return core::Result<FrameCommit>(FrameCommit::kSkip);
       }

@@ -45,19 +45,19 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
+#include "volumetric_kit/grid/base/device_requirements.hpp"
+#include "volumetric_kit/grid/mesh/device_mesh.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/player/app_config.hpp"
 #include "volumetric_kit/player/frame_hooks.hpp"
 #include "volumetric_kit/player/player_view.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/mesh/device_mesh.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace {
 
 namespace core = volumetric_kit::core;
 namespace gfx = volumetric_kit::gfx;
-namespace recon = volumetric_kit::recon;
+namespace grid = volumetric_kit::grid;
 namespace test = volumetric_kit::core::test;
 namespace vkp = volumetric_kit::player;
 using vp_test::Scratch;
@@ -91,13 +91,13 @@ class CountingHooks {
     with_pipeline_ = context.pipeline != nullptr;
     vkp::FrameHooks hooks;
     hooks.after_mesh =
-        [this](core::CommandBatch&, const recon::volume::VoxelBlockGrid&,
-               const recon::mesh::DeviceMesh&, vkp::FrameStamp& stamp) {
+        [this](core::CommandBatch&, const grid::volume::VoxelBlockGrid&,
+               const grid::mesh::DeviceMesh&, vkp::FrameStamp& stamp) {
           const std::lock_guard<std::mutex> lock(mutex_);
           meshed_.emplace_back(stamp.pass, stamp.index);
           return core::Status();
         };
-    hooks.commit = [this](const recon::mesh::DeviceMesh&,
+    hooks.commit = [this](const grid::mesh::DeviceMesh&,
                           vkp::FrameStamp& stamp) {
       const std::lock_guard<std::mutex> lock(mutex_);
       offered_.emplace_back(stamp.pass, stamp.index);
@@ -138,8 +138,8 @@ class SkippingHooks {
   core::Result<vkp::FrameHooks> make() {
     vkp::FrameHooks hooks;
     hooks.after_mesh =
-        [this](core::CommandBatch&, const recon::volume::VoxelBlockGrid&,
-               const recon::mesh::DeviceMesh&, vkp::FrameStamp& stamp) {
+        [this](core::CommandBatch&, const grid::volume::VoxelBlockGrid&,
+               const grid::mesh::DeviceMesh&, vkp::FrameStamp& stamp) {
           if (stamp.pass == 1 && stamp.index == 4) {
             {
               const std::lock_guard<std::mutex> lock(mutex_);
@@ -149,7 +149,7 @@ class SkippingHooks {
           }
           return core::Status();
         };
-    hooks.commit = [this](const recon::mesh::DeviceMesh&,
+    hooks.commit = [this](const grid::mesh::DeviceMesh&,
                           vkp::FrameStamp& stamp) {
       if (stamp.pass == 1 && stamp.index == 1) {
         skipped_ = true;
@@ -234,7 +234,7 @@ void expect_counted(const CountingHooks& hooks) {
   }
 }
 
-// On a device that meets recon's requirements, over the tests' stream.
+// On a device that meets grid's requirements, over the tests' stream.
 class RunProbeTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -242,7 +242,7 @@ class RunProbeTest : public ::testing::Test {
         core::Instance::create(test::instance_config(test::Validation::Off));
     const core::Status found =
         instance.ok()
-            ? instance->select_physical_device(recon::device_requirements())
+            ? instance->select_physical_device(grid::device_requirements())
                   .status()
             : instance.status();
     if (!found.ok()) {

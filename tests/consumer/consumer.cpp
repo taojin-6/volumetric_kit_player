@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Tao Jin
 
 // The consumer's program (CMakeLists.txt here): it calls the player library's
-// StreamPlayer, which reaches core and recon, and PlayerView, which reaches
+// StreamPlayer, which reaches core and grid, and PlayerView, which reaches
 // gfx, so it compiles against each sibling's headers and links each, gfx with
 // no GLFW tier; and run_probe, and with VP_CONSUMER_DESKTOP run_desktop, the
 // entry points a program's own main calls. It runs on the host alone: each

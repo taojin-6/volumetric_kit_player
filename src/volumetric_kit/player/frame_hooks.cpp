@@ -9,7 +9,7 @@
 
 namespace volumetric_kit::player {
 
-namespace mesh = recon::mesh;
+namespace mesh = grid::mesh;
 
 FrameTaker::FrameTaker(StreamPlayer& player, FrameExchange& exchange,
                        std::uint32_t frames_in_flight, const FrameHooks* hooks)

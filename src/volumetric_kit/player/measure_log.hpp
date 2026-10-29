@@ -10,8 +10,8 @@
 ///        vp_probe and the iOS app's measure launch write and tools/measure/
 ///        summarizes (DECISIONS.md).
 ///
-/// The format, version 3. Header lines are `# key: value`: `format`, the
-/// commits of `player`, `core`, `recon` and `gfx`, `build`, `device`,
+/// The format, version 4. Header lines are `# key: value`: `format`, the
+/// commits of `player`, `core`, `grid` and `gfx`, `build`, `device`,
 /// `rings`, `stream`, `run`, `timing`, `tile_depth`, `labels`,
 /// `share_vertices` and `utc`, and on a phone `thermal` and `low_power`. Then
 /// one CSV header and the rows:
@@ -62,8 +62,8 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/grid/mesh/device_mesh.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
-#include "volumetric_kit/recon/mesh/device_mesh.hpp"
 
 namespace volumetric_kit::player {
 
@@ -73,9 +73,9 @@ struct BuildInfo {
   /// The player's commit, with "-dirty" for uncommitted changes to tracked
   /// files; "unknown" outside a git checkout. As each below.
   const char* player = "unknown";
-  const char* core = "unknown";   ///< volumetric_kit_core's.
-  const char* recon = "unknown";  ///< volumetric_kit_recon's.
-  const char* gfx = "unknown";    ///< volumetric_kit_gfx's.
+  const char* core = "unknown";  ///< volumetric_kit_core's.
+  const char* grid = "unknown";  ///< volumetric_kit_grid's.
+  const char* gfx = "unknown";   ///< volumetric_kit_gfx's.
   /// The configuration built: CMAKE_BUILD_TYPE, or Xcode's; "none" for none.
   const char* build_type = "none";
 };
@@ -107,7 +107,7 @@ const BuildInfo& build_info() noexcept;
 ///         reads both clocks, with its deviation.
 std::string device_line(const core::Device& device);
 
-/// @brief How recon's rings run on @p device, for a log's `rings` key: by
+/// @brief How grid's rings run on @p device, for a log's `rings` key: by
 ///        the core's `HostRing::in_place` rule, in place where its
 ///        device-mapped memory is cached
 ///        (`core::PhysicalDeviceInfo::device_mapped_cached`), else copied
@@ -214,7 +214,7 @@ class MeasureLog {
   ///                view or while the draw is untimed.
   /// @return OK; `core::Status::Code::IoError` once a write fails, or after
   ///         @ref finish.
-  core::Status add(const FrameStamp& stamp, const recon::mesh::DeviceMesh& mesh,
+  core::Status add(const FrameStamp& stamp, const grid::mesh::DeviceMesh& mesh,
                    const std::vector<core::StageRow>& render = {});
 
   /// @brief Flush, close, and rename `<path>.part` to `<path>`.

@@ -4,7 +4,7 @@
 #pragma once
 
 /// @file mesh_wiring.hpp
-/// @brief What the renderer needs of recon's meshes: the extractor's and the
+/// @brief What the renderer needs of grid's meshes: the extractor's and the
 ///        exchange's configs for one shared device, and whether the exchange
 ///        still hands over meshes it can draw. Player-internal.
 
@@ -12,8 +12,8 @@
 #include <string>
 
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/mesh/mesh_exchange.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/mesh/mesh_exchange.hpp"
 
 namespace volumetric_kit::player {
 
@@ -23,16 +23,16 @@ struct MeshWiring {
   /// deeper than the renderer's frames in flight, one frame counted as two
   /// (one published and not yet taken, one meshed in the next frame's
   /// batch), one more with `holds`, and vertices shared or not, as asked.
-  recon::mesh::MarchingCubesConfig mc;
+  grid::mesh::MarchingCubesConfig mc;
   /// The exchange's: the renderer's frames in flight, and whether it reads
   /// from another family than the extractor writes on.
-  recon::mesh::MeshExchangeConfig exchange;
+  grid::mesh::MeshExchangeConfig exchange;
 };
 
-/// @brief Wire recon's meshes to a renderer that draws them in place.
+/// @brief Wire grid's meshes to a renderer that draws them in place.
 ///
 /// The buffers carry `VERTEX_BUFFER` and `INDEX_BUFFER` usage beside the
-/// storage recon writes through. Both families are named unconditionally, so
+/// storage grid writes through. Both families are named unconditionally, so
 /// the buffers are `CONCURRENT` across two families and `EXCLUSIVE` on one.
 ///
 /// @code
@@ -45,7 +45,7 @@ struct MeshWiring {
 /// @param compute_family    The extractor's queue family.
 /// @param frames_in_flight  The renderer's frames in flight; at least 1.
 /// @param share_vertices    Whether triangles share their vertices
-///                          (recon::mesh::MarchingCubesConfig::share_vertices):
+///                          (grid::mesh::MarchingCubesConfig::share_vertices):
 ///                          true, about a third of the vertices to hold,
 ///                          write and fetch; false, three of its own a
 ///                          triangle, a cheaper extraction.
@@ -72,7 +72,7 @@ MeshWiring mesh_wiring(std::uint32_t graphics_family,
 /// @return OK; or `core::Status::Code::Unsupported` naming why a mesh was
 ///         refused.
 template <typename Payload>
-core::Status drawable(const recon::mesh::MeshExchange<Payload>& exchange) {
+core::Status drawable(const grid::mesh::MeshExchange<Payload>& exchange) {
   if (exchange.refused() == nullptr) {
     return core::Status();
   }

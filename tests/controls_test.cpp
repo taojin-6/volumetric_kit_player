@@ -61,15 +61,15 @@
 #include "test_stream.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
+#include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
-#include "volumetric_kit/recon/stream/session.hpp"
 
 namespace {
 
 namespace core = volumetric_kit::core;
 namespace gfx = volumetric_kit::gfx;
-namespace stream = volumetric_kit::recon::stream;
+namespace stream = volumetric_kit::grid::stream;
 namespace ui = volumetric_kit::gfx::ui;
 using std::chrono::milliseconds;
 using std::chrono::seconds;
@@ -203,7 +203,7 @@ TEST(StatsLines, SayTheDeviceTimeTheIdleTheQueueAndTheLatency) {
             "GPU n/a · idle n/t · queue n/a");
 }
 
-// recon's filter names as they come, T to the micrometre, and the blocks its
+// grid's filter names as they come, T to the micrometre, and the blocks its
 // per-block fallback kept at their exact decode, some, none or all, with
 // their thousands grouped; "off", with no count, for the deblock off and for
 // no filter run.
@@ -324,7 +324,7 @@ TEST(LiveStatusLine, SaysConnectingThenWhyItReconnects) {
             "reconnecting to lab:47801: the sender closed the connection");
 }
 
-// recon's prefix goes, as the line names the address; a message with none,
+// grid's prefix goes, as the line names the address; a message with none,
 // or another address's, is shown whole.
 TEST(LiveReason, DropsStreamClientsPrefixAndKeepsAnyOtherMessageWhole) {
   const auto reason = [](const char* message) {
@@ -394,7 +394,7 @@ TEST(ParseLiveAddress, TakesAHostAndAnOptionalPort) {
   EXPECT_EQ(parsed("1.2.3.4:47801"), "1.2.3.4:47801");
   EXPECT_EQ(parsed("h:65535"), "h:65535");
   EXPECT_EQ(parse_live_address("lab").value().port,
-            volumetric_kit::recon::networking::kDefaultPort);
+            volumetric_kit::grid::networking::kDefaultPort);
 }
 
 TEST(ParseLiveAddress, RefusesNoHostAndAPortOutOfRange) {

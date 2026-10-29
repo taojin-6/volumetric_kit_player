@@ -50,15 +50,15 @@ LiveConnection::LiveConnection(LiveAddress address,
                                std::chrono::milliseconds retry)
     : address_(std::move(address)), retry_(retry) {}
 
-recon::networking::StreamClient* LiveConnection::poll() {
+grid::networking::StreamClient* LiveConnection::poll() {
   if (client_ != nullptr) {
     return client_.get();
   }
   if (std::chrono::steady_clock::now() < retry_at_) {
     return nullptr;
   }
-  core::Result<std::unique_ptr<recon::networking::StreamClient>> client =
-      recon::networking::StreamClient::connect(address_.host, address_.port);
+  core::Result<std::unique_ptr<grid::networking::StreamClient>> client =
+      grid::networking::StreamClient::connect(address_.host, address_.port);
   if (!client.ok()) {
     fail(client.status());
     return nullptr;

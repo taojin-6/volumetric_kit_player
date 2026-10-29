@@ -8,16 +8,16 @@
 /// (CMakeLists.txt): kFrames frames of a sphere moving a block a frame, at 25
 /// fps with a pause before the fourth, an I-frame every third, each record in
 /// the set set_of names, frame kNoSetFrame's in none, each block
-/// of each frame with an unobserved voxel, so masked, which recon's deblock
+/// of each frame with an unobserved voxel, so masked, which grid's deblock
 /// keeps at its exact decode; the same with frame kEmptyFrame meshing
 /// nothing; coded as a true SDF observed far enough out that no voxel is
 /// masked, so the deblock filters every block, its filter "R" (T 1.96 mm);
 /// at twice the voxel size; and with frame kGrownFrame a sphere so large that
-/// its blocks nearly fill the decode grid the first frame's sizes (recon's
+/// its blocks nearly fill the decode grid the first frame's sizes (grid's
 /// make_decode_grid: 8,192 slots), so the table refuses some on the device,
-/// and recon grows the grid and decodes it again at its finish; and with
-/// that frame a sphere of more blocks than those slots, so recon grows the
-/// grid before it records the frame. A copy of one of them, and a stream
+/// and the codec grows the grid and decodes it again at its finish; and with
+/// that frame a sphere of more blocks than those slots, so the codec grows
+/// the grid before it records the frame. A copy of one of them, and a stream
 /// that opens but never decodes, in a scratch directory of the test's own.
 
 #include <gtest/gtest.h>
@@ -30,13 +30,13 @@
 #include <system_error>
 
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/recon/stream/session.hpp"
-#include "volumetric_kit/recon/stream/stream_writer.hpp"
+#include "volumetric_kit/grid/stream/session.hpp"
+#include "volumetric_kit/grid/stream/stream_writer.hpp"
 
 namespace vp_test {
 
 namespace core = volumetric_kit::core;
-namespace recon = volumetric_kit::recon;
+namespace grid = volumetric_kit::grid;
 
 constexpr std::uint64_t kFrames = 6;
 constexpr std::uint32_t kIntraPeriod = 3;
@@ -58,7 +58,7 @@ constexpr const char* kGrowStream = "grow.vrst";
 constexpr const char* kOutgrowStream = "outgrow.vrst";
 constexpr std::uint64_t kEmptyFrame = 1;
 constexpr std::uint64_t kGrownFrame = kGapAt;
-// The decode grid the first frame sizes (recon's make_decode_grid: 1,024
+// The decode grid the first frame sizes (grid's make_decode_grid: 1,024
 // buckets of 8), and the most free blocks below which its table places no
 // block outside its home bucket (an eighth): frame kGrownFrame holds more
 // than the slots less that, and no more than the slots.
@@ -73,10 +73,10 @@ inline std::uint64_t pts_of(std::uint64_t i) {
 // The frame whose record names no set.
 constexpr std::uint64_t kNoSetFrame = 4;
 
-// The set frame i's record names (recon's RecordInfo::set): 500 on from the
-// first, apart from its index and seq; recon's kNoSet for kNoSetFrame.
+// The set frame i's record names (grid's RecordInfo::set): 500 on from the
+// first, apart from its index and seq; grid's kNoSet for kNoSetFrame.
 inline std::uint64_t set_of(std::uint64_t i) {
-  return i == kNoSetFrame ? recon::stream::kNoSet : 500 + i;
+  return i == kNoSetFrame ? grid::stream::kNoSet : 500 + i;
 }
 
 // A directory of the test's own, removed with what it holds.
@@ -124,7 +124,7 @@ class Scratch {
 // track of `records` one-byte key records.
 inline core::Status write_undecodable_stream(const std::string& path,
                                              std::uint64_t records) {
-  namespace stream = recon::stream;
+  namespace stream = grid::stream;
   stream::Session session;
   session.writer = "volumetric_kit_player tests";
   stream::Track track;

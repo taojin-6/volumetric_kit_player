@@ -14,16 +14,16 @@
 #include <string_view>
 
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/recon/networking/stream_client.hpp"
-#include "volumetric_kit/recon/networking/stream_server.hpp"
+#include "volumetric_kit/grid/networking/stream_client.hpp"
+#include "volumetric_kit/grid/networking/stream_server.hpp"
 
 namespace volumetric_kit::player {
 
 /// @brief A live stream's address: a sender's
-///        (recon::networking::StreamServer).
+///        (grid::networking::StreamServer).
 struct LiveAddress {
   std::string host;  ///< A name or a numeric IPv4 address.
-  std::uint16_t port = recon::networking::kDefaultPort;  ///< 1 to 65535.
+  std::uint16_t port = grid::networking::kDefaultPort;  ///< 1 to 65535.
 };
 
 /// @brief Parse a live stream's address, on the host alone.
@@ -32,7 +32,7 @@ struct LiveAddress {
 /// VKC_ASSIGN(const LiveAddress address, parse_live_address("lab:47801"));
 /// @endcode
 /// @param text  "host" or "host:port".
-/// @return The address, on `recon::networking::kDefaultPort` when it names
+/// @return The address, on `grid::networking::kDefaultPort` when it names
 ///         none; `core::Status::Code::InvalidArgument` naming what is wrong
 ///         for an empty host or a port that is not a number from 1 to 65535.
 core::Result<LiveAddress> parse_live_address(std::string_view text);
@@ -50,7 +50,7 @@ std::string to_string(const LiveAddress& address);
 ///         "StreamClient: lab:47801: cannot connect: Connection refused"),
 ///     "lab:47801");
 /// @endcode
-/// @param ended    What ended it: recon's `networking::StreamClient` error, or
+/// @param ended    What ended it: grid's `networking::StreamClient` error, or
 ///                 the player's own.
 /// @param address  to_string() of the address the client was given.
 /// @return @p ended's message less the "StreamClient: <address>: " or
@@ -62,11 +62,11 @@ std::string live_reason(const core::Status& ended, const std::string& address);
 /// that failed, is made again.
 inline constexpr std::chrono::milliseconds kLiveRetry{1000};
 
-/// @brief A sender's connection (recon::networking::StreamClient), made
+/// @brief A sender's connection (grid::networking::StreamClient), made
 ///        again after it ends: at the next @ref poll after a clean end, and
 ///        the retry wait later after an error.
 ///
-/// A new client never blocks (recon's `StreamClient::connect`): it looks the
+/// A new client never blocks (grid's `StreamClient::connect`): it looks the
 /// name up on a thread of its own, and its `next` connects, so a name that
 /// does not resolve or a refused connect is an error of `next`, which the
 /// caller passes to @ref drop.
@@ -74,7 +74,7 @@ inline constexpr std::chrono::milliseconds kLiveRetry{1000};
 /// @code
 /// LiveConnection connection(address);
 /// while (running) {
-///   recon::networking::StreamClient* const client = connection.poll();
+///   grid::networking::StreamClient* const client = connection.poll();
 ///   if (client == nullptr) {  // waiting to retry, or the attempt failed
 ///     show(connection.last_error());
 ///     std::this_thread::sleep_until(connection.retry_at());
@@ -99,7 +99,7 @@ class LiveConnection {
   ///         new one; null while the wait lasts, or when
   ///         `StreamClient::connect` refused the attempt, which then waits
   ///         the retry and keeps why (@ref last_error).
-  recon::networking::StreamClient* poll();
+  grid::networking::StreamClient* poll();
 
   /// @brief Close the connection now, if there is one.
   /// @param why  OK for a clean end (a park, a stop): the next @ref poll
@@ -127,7 +127,7 @@ class LiveConnection {
 
   LiveAddress address_;
   std::chrono::milliseconds retry_;
-  std::unique_ptr<recon::networking::StreamClient> client_;  // null between
+  std::unique_ptr<grid::networking::StreamClient> client_;  // null between
   std::chrono::steady_clock::time_point retry_at_{};  // the epoch: no wait
   std::string last_error_;
 };

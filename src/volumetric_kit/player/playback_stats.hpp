@@ -14,9 +14,9 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/player/playback.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
-#include "volumetric_kit/recon/stream/session.hpp"
 
 namespace volumetric_kit::player {
 
@@ -85,8 +85,7 @@ class PlaybackStats {
   /// @param rate   Its nominal rate. The stage means cover its frames a
   ///               second, rounded, from 1 to @ref kMaxWindow: 30 when
   ///               unknown (@ref kFallbackPeriod).
-  PlaybackStats(const recon::stream::TrackStats& track,
-                recon::stream::Rate rate);
+  PlaybackStats(const grid::stream::TrackStats& track, grid::stream::Rate rate);
 
   /// @brief A frame taken for drawing (MeshExchange's commit), at @p now,
   ///        added once presented (or with no present); a rebuild
@@ -158,7 +157,7 @@ class PlaybackStats {
     FrameFigures figures;
   };
 
-  recon::stream::TrackStats track_;
+  grid::stream::TrackStats track_;
   std::optional<double> nominal_fps_;
   std::size_t window_ = 0;     // frames the stage means cover
   std::deque<Taken> taken_;    // within a second of the newest
