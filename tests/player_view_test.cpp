@@ -38,11 +38,12 @@
 // presents, on the two images its swapchain asks for (checked on the host).
 // A program's device requirements (PlayerViewConfig::device_requirements),
 // merged with grid's on the host (worker_requirements): none leave grid's
-// alone, and a program's add to grid's, which stay. On the device, none leave
-// the device as grid's alone makes it; an optional extension is enabled on the
-// hooks' devices where the GPU offers it and skipped where not; grid's stay
-// enabled under requirements that leave them out, and frames play; and a
-// required extension no GPU offers refuses the view, its hooks never made.
+// alone, a program's add to grid's, which stay, and a host allocation failure
+// in the merge is OutOfMemory. On the device, none leave the device as grid's
+// alone makes it; an optional extension is enabled on the hooks' devices where
+// the GPU offers it and skipped where not; grid's stay enabled under
+// requirements that leave them out, and frames play; and a required extension
+// no GPU offers refuses the view, its hooks never made.
 // The view makes its own shared device, validated as the test policy asks, so
 // the layer's errors fail the test. The tests skip where the loader offers no
 // headless surface (NVIDIA's ICD), but fail on Apple, where MoltenVK has one.
@@ -239,6 +240,35 @@ TEST(WorkerRequirements, AProgramsAddToGridsWhichStay) {
   expect_requirements(*merged, want, "a program's");
   EXPECT_TRUE(merged->scalar_block_layout) << "grid's dropped";
   EXPECT_TRUE(merged->timeline_semaphore) << "grid's dropped";
+}
+
+// A host allocation failure in the merge is OutOfMemory, not an escaped
+// bad_alloc. The name is longer than a short string's buffer, so the merge
+// allocates for it.
+TEST(WorkerRequirements, AnAllocationFailureIsOutOfMemory) {
+  core::DeviceRequirements program;
+  program.optional_extensions = {"VK_VP_test_a_long_optional_extension_name"};
+  auto& failure = vp_test::allocation_failure;
+  failure = {};
+  failure.measure = true;
+  const bool measured = worker_requirements(program).ok();
+  failure.measure = false;
+  ASSERT_TRUE(measured);
+  ASSERT_GT(failure.bytes, 0u);
+  failure.armed = true;
+  core::Result<core::DeviceRequirements> result = core::DeviceRequirements{};
+  bool escaped = false;
+  try {
+    result = worker_requirements(program);
+  } catch (const std::bad_alloc&) {
+    escaped = true;
+  }
+  failure.armed = false;
+  const bool injected = failure.injected;
+  failure = {};
+  ASSERT_TRUE(injected);
+  ASSERT_FALSE(escaped);
+  EXPECT_EQ(result.status().domain(), core::Status::Code::OutOfMemory);
 }
 
 // Hooks with `line` as their stats line; none for an empty one.
