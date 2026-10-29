@@ -4,6 +4,21 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-29 — CI: no outsider's trigger, no token kept, images by digest
+
+The core's CI does the same since its #68 (its DECISIONS.md, 2026-10-28,
+"Setup checks who can trigger CI"), which says why.
+
+- **The lint job runs the core's `check-workflow-triggers` action,** which
+  fails on `pull_request_target`, `workflow_run`, the comment and discussion
+  events, and `schedule`. It is taken at #68's merge (fcbbe0c), the first
+  core commit with it, newer than the core the build pins (a4a6fff) until
+  that pin moves.
+- **No checkout keeps a token** (`persist-credentials: false`): no job
+  pushes.
+- **The Linux legs' images are pinned by digest,** the tag in a comment, so
+  a new image comes only with a commit that moves the pin.
+
 ## 2026-10-29 — Built on grid, not recon
 
 recon's `grid/` is now
