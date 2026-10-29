@@ -4075,10 +4075,15 @@ TEST_F(LivePlayerTest, ARecordIsMeshedOnceNothingNewerHasCome) {
 // medians of 15, as a loaded host delays both (CI run 40822414889). A worker
 // that saw the take only at a slice's end, after a timed wait or the
 // socket's, adds most of a slice to C's alone, 8-11 ms under TSan and in
-// Release; a take that came before the worker began to wait shows none, so
-// the medians. A host that delays B by half a slice could hide one, so the
-// test skips there. Each sample starts from a frame taken, so the worker is
-// idle, and C goes once B's mesh has run, so B is published before C is read.
+// Release. A take that comes before the worker begins to wait shows no delay
+// even with that bug, hence medians rather than every sample. B itself is
+// held a turn after it comes, with the mesh taken: a worker that waits a
+// slice there, on the socket or for a take that has already come, makes
+// every B a slice late, where a loaded host makes only some late, so B's
+// least lateness must be under half a slice. Once B's median is half a slice
+// late, the bound grows past what the bug adds, so the test skips there.
+// Each sample starts from a frame taken, so the worker is idle, and C goes
+// once B's mesh has run, so B is published before C is read.
 TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
   constexpr auto kSlice = 10ms;  // the worker's (stream_player.cpp)
   const std::unique_ptr<networking::StreamServer> server = serve();
@@ -4146,6 +4151,8 @@ TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
   const double half_slice =
       std::chrono::duration<double, std::milli>(kSlice).count() / 2;
+  ASSERT_LT(*std::min_element(late.begin(), late.end()), half_slice)
+      << "ms, B's least lateness: every B waited a slice with the mesh taken";
   const double b_late = median(late);
   if (b_late >= half_slice) {
     GTEST_SKIP() << "B's median lateness, " << b_late
