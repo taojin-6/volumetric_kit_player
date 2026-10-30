@@ -24,6 +24,7 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/ui/docked_panel.hpp"
 #include "volumetric_kit/grid/mesh/device_mesh.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
@@ -224,6 +225,10 @@ struct HookContext {
   const gfx::pipelines::HybridMeshPipeline* pipeline = nullptr;
   std::uint32_t compute_family = 0;   ///< The worker's queue family.
   std::uint32_t graphics_family = 0;  ///< The draw's.
+  /// The view's target layout (PlayerView::target_layout), which
+  /// PanelHooks::record's pass has, so a panel can draw with a pipeline of
+  /// its own; empty with no view.
+  gfx::RenderTargetLayout target_layout{};
 };
 
 /// Makes a run's hooks, once, before its worker starts.

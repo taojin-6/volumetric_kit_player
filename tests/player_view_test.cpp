@@ -2296,13 +2296,15 @@ struct PanelCalls {
   bool fail = false;  // prepare refuses
   // The content's size it gives (PanelHooks::content_size); none, no hook.
   std::optional<gfx::ui::DockedContentSize> content;
+  gfx::RenderTargetLayout layout;  // the hooks' context's
 };
 
 // Hooks with a program's panel, its box labelled vp_test::kPanelLabel and
 // its key P, whose calls `calls` counts: its record clears its content to
 // kPanelInk, and its prepare refuses while `calls->fail`.
 MakeHooks panel_hooks(std::shared_ptr<PanelCalls> calls) {
-  return [calls](const HookContext&) -> core::Result<FrameHooks> {
+  return [calls](const HookContext& context) -> core::Result<FrameHooks> {
+    calls->layout = context.target_layout;
     FrameHooks hooks;
     hooks.panel.title = "Program panel";
     hooks.panel.label = vp_test::kPanelLabel;
@@ -2387,6 +2389,11 @@ TEST_F(PlayerViewTest, AProgramsPanelDocksBesideTheSceneAndDrawsItsContent) {
     ASSERT_TRUE(make_view(/*playing=*/false));
     EXPECT_TRUE(view_->panel_open());
     EXPECT_EQ(view_->panel_key(), 'P');
+    // The hooks know the pass record draws in, for a pipeline of their own.
+    const gfx::RenderTargetLayout target = view_->target_layout();
+    EXPECT_EQ(calls->layout.color_count, 1U);
+    EXPECT_TRUE(calls->layout.compatible_with(target));
+    EXPECT_EQ(calls->layout.color_formats[0], target.color_formats[0]);
     view_->player().step();
     ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
     aim_at(view_->shown()->index);
