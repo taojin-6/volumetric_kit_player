@@ -364,6 +364,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cause or by a schedule (the core's `check-workflow-triggers` action), its
   checkout keeps no token, as the build's already did, and the Linux legs'
   `ubuntu` images are pinned by digest.
+- ci: the plain Mac Debug leg is dropped; the ThreadSanitizer leg is the
+  Mac's one Debug build, and the Mac builds Release besides.
 
 ### Fixed
 
