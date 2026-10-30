@@ -10,10 +10,11 @@ paced by the stream's timestamps or by the sender.
 > which paces frames by their timestamps with play, pause and step; the
 > stream player (`src/volumetric_kit/player/stream_player.hpp`), which decodes
 > and meshes each frame on the GPU on a worker thread, from a file or live
-> from a sender; the audio outputs and the feeder
+> from a sender; the audio outputs and the feeders
 > (`src/volumetric_kit/player/audio_out.hpp`, `device_audio_out.hpp`,
-> `audio_feeder.hpp`), which play a file's audio beside its frames, through
-> AVAudioEngine on macOS and iOS and silently elsewhere; the view
+> `audio_feeder.hpp`, `live_audio.hpp`), which play a file's audio beside
+> its frames and a live stream's on its playout clock, through AVAudioEngine
+> on macOS and iOS and silently elsewhere; the view
 > (`src/volumetric_kit/player/player_view.hpp`), which draws each mesh under
 > an orbit camera, a controls panel and a stats panel on any window system;
 > the per-frame hooks (`src/volumetric_kit/player/frame_hooks.hpp`), a
@@ -182,8 +183,19 @@ refuse it (`FrameHooks::data_ready`), while the frame before stays shown. The
 stats show D and the need that set it ("delay 123 ms · program"), and the
 latency's legs begin with "buffer", the wait as bytes.
 
+A sender's Audio track (served beside the geometry by grid's
+`StreamServer`) plays on that clock (`live_audio.hpp`), as a file's plays
+through the system's output on macOS and iOS and silently elsewhere, and M
+mutes it. Its need for D is a frame period, the output's latency and 20 ms,
+at least 80 ms, raised by underruns; while it plays, frames are shown by
+the audio heard, D changes gently, and the audio's drift is trimmed by
+10 ms without moving D. D stays at most 1 s, so Bluetooth and AirPlay are
+not supported: a route that needs more plays its audio late, and the status
+line says "audio late by N ms" (DECISIONS.md).
+
 `"$root/build/tests/vp_probe" --connect host[:port]` plays a live stream
-with no window, and prints the status and stats lines once a second (below).
+with no window, and prints the status and stats lines once a second, with
+D's target, which the stats leave out (below).
 
 ## iOS
 
@@ -229,8 +241,9 @@ about every second until Source chooses another. While nothing plays, a
 label says why, and a tap on it opens the dialog.
 
 A file's audio plays as on the desktop, through the phone's route, Mute in
-the panel. It stops while the app is not active, with no background audio,
-and plays again when it is.
+the panel; a sender's plays on its playout clock, with no Mute box. Audio
+stops while the app is not active, with no background audio, and plays again
+when it is.
 
 To give it a file, launch it once, then copy a `.vrst` into its folder: in
 the Files app under On My iPhone (or iPad) › Player, in Finder under the

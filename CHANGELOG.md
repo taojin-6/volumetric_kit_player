@@ -238,9 +238,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `audio <n> ms` or `audio off` (`audio_status_text`). `tests/vp_audio_check`
   checks the output by hand on a Mac, with no window (`clock_fit`,
   `DeviceAudioOut::runs`).
+- Live audio: a live session's first Audio track on the geometry's clock
+  plays on the live playout clock (`LiveAudio`, `live_audio.hpp`;
+  `StreamPlayer::live_audio`), its records read as they arrive and placed
+  so each is heard at its present time, through the output
+  `StreamPlayer::connect`'s new `AudioOutMaker` makes (the null output by
+  default; `open_source` passes the apps'). Audio's need for D
+  (`DelayNeed::kAudio`, `audio_need`): a geometry period, the output's
+  latency and 20 ms, at least 80 ms, raised by underruns up to 300 ms
+  (`LiveClock::arrived` takes it). While it plays in step, what is heard is
+  the clock's master (`AudioMaster`, `LiveClock::set_audio_master`,
+  `set_audio_playing`) and the applied D slews (`slew_point`); the audio
+  follows the point once it has moved 10 ms (`kFollowBand`) and trims its
+  drift by shifts (`AudioOut::shift`, `shifting`, `Rendered::silence_before`,
+  `drift_trim`), never moving D.
+  The live status line ends "audio late by N ms" where a route's latency
+  needs D past 1 s (`LiveStatus::audio_late`); vp_probe's report adds D's
+  target (`probe_delay_text`); the measure log's `need` may be `audio`, which
+  `tools/measure/summarize.py` reads. `find_audio_track` takes a live
+  session, with no counts. An Audio record of more than a second is passed
+  over unread (`LiveAudio::takes`), and a connection's end drops what the
+  output holds. A live stream with no Audio track plays as before.
 
 ### Changed
 
+- build: grid at #11's merge (cf7c99a, 0.6.0), whose `StreamServer` serves
+  every track of a session, track 0's keys starting each GOP; since 0.4.0,
+  `CodecStream` also writes and serves Audio tracks muxed by pts (0.5.0).
+  The player requires 0.6.0; the core pin and floor stay at 0.30.0.
+- `NullAudioOut::position` runs on from its last render by its clock,
+  through the frames it holds, as a device output's is mapped to now.
 - `StreamPlayer::open` with no audio output maker plays through the null
   output, not `AudioOut::open_default`; `open_source` takes a maker, which the
   desktop and iOS apps give as `AudioOut::open_default`. The player library

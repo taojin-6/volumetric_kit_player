@@ -130,9 +130,10 @@ bool draw_source(const UiArea& area);
 /// @return "connecting to <address>", or with a `last_error`
 ///         "reconnecting to <address>: <last_error>";
 ///         "connected · the sender has no I-frame yet"; "live · seq <seq>",
-///         with " · set <set>" when the newest record names one, and
+///         with " · set <set>" when the newest record names one,
 ///         " · nothing for <n> s" once no record has come for over a second,
-///         n in whole seconds.
+///         n in whole seconds, and " · audio late by <n> ms" while the
+///         audio plays late (LiveStatus::audio_late), n to the nearest ms.
 std::string live_status_line(const LiveStatus& status,
                              Playback::Clock::time_point now);
 

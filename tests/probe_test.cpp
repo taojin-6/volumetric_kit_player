@@ -29,7 +29,9 @@
 // --live-delay MS is a floor under a live program's need: the larger of MS
 // and the program's own, or MS with none, its other hooks kept; 0 and 1000
 // are taken, and past 1000, below 0, not a number, given twice or with
-// --file it is the usage. The device tests skip with no device,
+// --file it is the usage. Its report adds a live frame's D target
+// (probe_delay_text), after D where no stats lines show it, and nothing for
+// a file's frame. The device tests skip with no device,
 // and fail without one under VKC_REQUIRE_VULKAN_DEVICE. run_probe validates
 // as the core's test policy asks, its exit code failing on any error the
 // layer reports.
@@ -701,6 +703,23 @@ TEST(RunProbe, ALiveDelayOutOfRangeOrForAFileIsTheUsage) {
   }
   EXPECT_TRUE(view_of({"--connect", "127.0.0.1", "--live-delay", "1000"}, {})
                   .has_value());
+}
+
+// The report's live part: D's target, after D where no stats lines show it;
+// nothing for a file's frame or before the first.
+TEST(RunProbe, ItsReportAddsALiveFramesTargetAfterItsDelay) {
+  EXPECT_EQ(vkp::probe_delay_text(std::nullopt, true), "");
+  vkp::FrameStamp shown;
+  EXPECT_EQ(vkp::probe_delay_text(shown, true), "") << "a file's frame";
+  vkp::Playout playout;
+  playout.offset = std::chrono::seconds(5);
+  playout.point = playout.offset + std::chrono::milliseconds(80);
+  playout.target = std::chrono::milliseconds(200);
+  playout.need = vkp::DelayNeed::kAudio;
+  shown.playout = playout;
+  EXPECT_EQ(vkp::probe_delay_text(shown, false), " | target 200 ms");
+  EXPECT_EQ(vkp::probe_delay_text(shown, true),
+            " | delay 80 ms · audio | target 200 ms");
 }
 
 }  // namespace

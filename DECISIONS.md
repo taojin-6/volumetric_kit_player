@@ -4,6 +4,74 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-30 — Live audio on the live clock
+
+A live session's first Audio track on the geometry's clock plays on the
+live playout clock (`LiveAudio`, `live_audio.hpp`), through the output the
+player's maker makes (`StreamPlayer::connect`), now that grid 0.6.0's
+`StreamServer` serves every track, track 0's keys starting each GOP. The
+owner chose live first.
+
+- **Written as they arrive, placed by the clock.** `pass_other` reads each
+  of the track's records from the client into the feeder; a connection's
+  first record, and the first after the audio fell out of step, flushes the
+  output to the pts due as its next frame is heard,
+  `pts_at(point, arrival + latency)`, and the records after follow by pts as
+  a file's do. Why: the output then holds about D of audio, so audio needs
+  only what its records come late by.
+- **Audio's need (`DelayNeed::kAudio`):** one geometry period, the output's
+  latency and 20 ms, at least 80 ms; an underrun raises it 20 ms, at most
+  once per 100 ms of audio played and to 300 ms, and 10 s without one
+  lowers it 20 ms. Why: grid's mux sends an Audio record right behind the
+  first frame at or past its pts, so it comes up to a period after that
+  frame's earliest.
+- **Audio records never feed the offset.** Why: riding behind geometry they
+  could only raise the arrival need, and one stamped ahead would pull every
+  frame's present time early.
+- **What is heard is the master while the audio plays in step**:
+  `LiveClock::now_pts` takes `AudioOut::position` (plus any lateness, below)
+  through `AudioMaster`, so release, the mesh rule and the take's gate go by
+  it. Out of step (over 60 ms off the clock, run dry, or before its flush is
+  applied), steady_clock is. Why: lip sync is frames shown by the audio
+  heard, and a stall must not hold the picture.
+- **While audio plays the applied point slews** (`slew_point`): the target
+  still rises at once, the point at most 20 ms per 100 ms and 20 ms a step;
+  it falls only once the target has not risen for 10 s, at most 10 ms a
+  second and a step. Without audio it steps as before. Why: each change of
+  the point is a gap or a skip in what is heard.
+- **The audio follows the point by shifts** (`AudioOut::shift`): silence
+  inserted as it rises, frames dropped as it falls, at the render thread's
+  next render, with a 5 ms fade or crossfade; the frames keep their pts. A
+  change past 60 ms (a join's settling) places the audio afresh. Why: a
+  change at the read point is heard within a render; at the write head it
+  would be heard only D later.
+- **A follow waits for 10 ms of change** (`kFollowBand`), smaller ones
+  adding up. Why: the slew moves the point at every write and the offset
+  drifts by microseconds; following each move faded the audio about 300
+  times in the simulation's minute, and 9 times with the band. Meanwhile
+  the picture goes by what is heard.
+- **The drift trim:** once what is heard is more than 20 ms off the clock,
+  and the last shift has been heard (its latency plus 50 ms), a 10 ms insert
+  or drop. It never moves D. Why: the sender's mic and the viewer's output
+  differ by up to about 200 ppm, and D is set by needs alone.
+- **An underrun places the audio afresh**, its late frames dropped. Why: it
+  stays in sync rather than playing late.
+- **A connection's end drops what the output holds.** Why: a parked output
+  keeps its ring and an unpark starts it at once, so each return to the
+  iOS app would play up to D of the last connection's audio.
+- **The null output's position runs on from its last render by its clock**,
+  through what it holds, as a device output's is mapped to now. Why: as the
+  master it would lag up to a render and step.
+- **No Bluetooth or AirPlay (owner).** D's 1 s clamp stays: a route whose
+  latency needs more plays its audio late by the excess, and the live status
+  line ends "audio late by N ms", the only text audio adds on screen. The
+  stats are uncluttered (owner): the delay line, unchanged, names `audio`
+  when it sets D, and D's target is in the measure log (`target_ms`, its
+  `need` now possibly `audio`, format 5 still) and vp_probe's report. There
+  is no Mute box live; the desktop's M mutes.
+- **A live stream with no Audio track is as before:** no output, no need,
+  no slew, no master.
+
 ## 2026-10-30 — CI: the Mac's one Debug leg is ThreadSanitizer's
 
 The plain Mac Debug leg is gone. The Mac now builds Release and, under
@@ -117,8 +185,10 @@ frame waits for it; the latency grows instead.
 - **One clock: present(pts) = pts + offset + D.** The offset is the least
   `arrival − pts` over 10 s of the played track's records, never another
   track's. D is the largest need stated: the arrival need (the records'
-  lateness over that window, plus the worker's lead) or a program's. There
-  is no fixed floor, and D is clamped at 1 s; a frame that needed more is
+  lateness over that window, plus the worker's lead) or a program's (*and
+  since 2026-10-30 the stream's audio's: "Live audio on the live
+  clock"*). There is no fixed floor, and D is clamped at 1 s; a frame that
+  needed more is
   late by the excess: the stats flag it ("over 1 s"), and the log's
   `target_ms` reads 1000. Why from pts and not
   from each record's arrival: a wait counted from arrival carries the
@@ -140,7 +210,8 @@ frame waits for it; the latency grows instead.
   them. 25 ms a second is 1 ms a record at 25 Hz. While the least is still
   being found, a slow fall of the offset would leave a joined GOP a second
   late for 40 s; a program's need that falls then is still stepped, so its
-  records come due one by one.
+  records come due one by one. *While audio plays it slews instead ("Live
+  audio on the live clock").*
 - **The wait is as host bytes, before the decode,** in one 16 MiB ring the
   player reuses, its records' headers in a fixed ring: nothing is allocated
   per record. A record is released at present − lead, the lead the largest
@@ -185,10 +256,12 @@ frame waits for it; the latency grows instead.
 - **Measure format 5** adds `buffer_ms`, `delay_ms`, `target_ms`, `need` and
   `late_ms`, empty for a file. `vp_probe --live-delay MS` sets a floor under
   a program's need, so a delay is measured with no program.
-- **Ready for an audio master, which is not built:** `point()` is one
-  lock-free atomic for a realtime thread, `now_pts` the one place another
-  master would take over, `step_point` the one rule a slew would replace,
-  and other tracks' records pass `pass_other`, which touches no clock.
+- **Ready for an audio master:** `point()` is one lock-free atomic for a
+  realtime thread, `now_pts` the one place another master would take over,
+  `step_point` the one rule a slew would replace, and other tracks' records
+  pass `pass_other`, which touches no clock. *Built 2026-10-30 ("Live audio
+  on the live clock"): `now_pts` takes what is heard, and `slew_point`
+  replaces `step_point`, while audio plays.*
 - **A file is unchanged:** paced by its pts, released when due, asked no
   live hook, with no playout; its log rows end with five empty fields.
 - **Measured** on the M5 Max: Rafa2 (30 fps) served on loopback by grid's

@@ -36,6 +36,7 @@
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/player/audio_feeder.hpp"
 #include "volumetric_kit/player/audio_out.hpp"
+#include "volumetric_kit/player/live_audio.hpp"
 #include "volumetric_kit/player/live_clock.hpp"
 #include "volumetric_kit/player/live_connection.hpp"
 #include "volumetric_kit/player/playback.hpp"
@@ -62,6 +63,10 @@ struct LiveStatus {
   std::uint64_t seq = 0;                      ///< The newest record received.
   std::uint64_t set = grid::stream::kNoSet;   ///< The newest record's.
   Playback::Clock::time_point last_record{};  ///< When it arrived.
+  /// How late the stream's audio plays behind the picture (LiveAudio::late):
+  /// its need past kMaxLiveDelay, as of the newest record; 0 within it, and
+  /// without audio.
+  std::chrono::nanoseconds audio_late{0};
 };
 
 /// @brief A file's audio, for its status line (@ref audio_status_text).
@@ -238,7 +243,9 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 /// device output and the unpark starts it again; an output that asks to
 /// pause (an interruption, a device gone) pauses the player at
 /// @ref follow_audio. A file without one has no feeder and no output. Live,
-/// there is no audio.
+/// the session's first Audio track on the geometry's clock plays on the live
+/// clock (LiveAudio, @ref connect), muted and parked with the player; with
+/// none, a live player plays as it would without audio.
 ///
 /// **Timing.** Each frame's stamp has its stages' host and wait times, and
 /// the worker's device counts, always; its device times only as
@@ -323,7 +330,11 @@ class StreamPlayer {
   /// rule (mesh_now), asks FrameHooks::data_ready, then runs after_mesh and
   /// publishes. While the ring is full, or a released record waits for the
   /// decoder, it reads nothing more, so a worker that falls behind still
-  /// backs up the socket. Records of other tracks are passed over unread. A
+  /// backs up the socket. Records of the session's first Audio track on the
+  /// geometry's clock (find_audio_track) are read as they arrive into its
+  /// live feeder (LiveAudio), which never feeds the clock's offset, plays
+  /// them on the clock and states audio's need; the worker lets it look
+  /// between its steps. Records of other tracks are passed over unread. A
   /// park, a stop or a connection's end drops the held records and a frame
   /// waiting for its program. It drains available input before waiting for a
   /// take, which wakes it immediately, and again after each release, so a
@@ -333,11 +344,15 @@ class StreamPlayer {
   /// the worker shows why (@ref live_status), and @ref kLiveRetry later
   /// connects again (@ref LiveConnection), with a new grid, until stopped.
   /// Play, pause, step and loop do nothing.
-  /// @param address  The sender's.
+  /// @param address     The sender's.
+  /// @param make_audio  What makes the output a connection's Audio track
+  ///                    plays through, at its session, as @ref open takes
+  ///                    it; empty for the null output. An output that cannot
+  ///                    be made leaves that connection silent.
   /// @return The player; `core::Status::Code::InvalidArgument` for an empty
   ///         host or port 0.
   static core::Result<std::unique_ptr<StreamPlayer>> connect(
-      LiveAddress address);
+      LiveAddress address, AudioOutMaker make_audio = {});
 
   /// @brief @ref stop, then destroy the extractor, the grid and the decoder.
   /// @pre The consumer reads no mesh of this player's any more.
@@ -367,6 +382,10 @@ class StreamPlayer {
   const LiveClock* live_clock() const noexcept {
     return live_clock_ ? &*live_clock_ : nullptr;
   }
+  /// @return A live player's audio feeder (live_audio.hpp), which lives as
+  ///         long as the player, with no track until a session has one; null
+  ///         for a file.
+  const LiveAudio* live_audio() const noexcept { return live_audio_.get(); }
   /// @return Whether a file's Audio track plays beside its geometry; false
   ///         live.
   bool has_audio() const noexcept { return audio_track_.has_value(); }
@@ -410,9 +429,9 @@ class StreamPlayer {
   void set_muted(bool on);
   /// @return Whether the audio is muted: false until @ref set_muted.
   bool muted() const;
-  /// @return The pts the audio output is playing (AudioOut::position);
-  ///         none without audio, before @ref start, or until the output
-  ///         has taken the feeder's first flush.
+  /// @return The pts the audio output is playing (AudioOut::position), live
+  ///         the live feeder's; none without audio, before @ref start, or
+  ///         until the output has taken the feeder's first flush.
   std::optional<std::uint64_t> audio_position() const;
   /// @return Whether the audio is muted and where it goes (AudioOut::route),
   ///         for the status line; not audible before @ref start; none
@@ -521,7 +540,7 @@ class StreamPlayer {
   StreamPlayer(std::unique_ptr<grid::stream::StreamReader> reader,
                std::uint16_t track, std::optional<AudioTrackChoice> audio,
                AudioOutMaker make_audio);
-  explicit StreamPlayer(LiveAddress address);
+  StreamPlayer(LiveAddress address, AudioOutMaker make_audio);
 
   // A step of the worker's, as park counts them: its build, a record's read,
   // a frame from its recording to its finish (its batch in flight included),
@@ -611,11 +630,13 @@ class StreamPlayer {
   // held record's release, at most a slice, or kAskEvery while a frame
   // waits for its program.
   std::chrono::milliseconds idle_wait(const Connection& connection) const;
-  // Live: a record of a track other than the one played, at its arrival.
-  // It is passed over unread, and touches no clock: a consumer of another
-  // track, such as audio, would be fed from here.
-  void pass_other(const grid::stream::Record& record,
-                  Playback::Clock::time_point arrived);
+  // Live: a record of a track other than the one played, at its arrival,
+  // which touches no clock: the connection's Audio track's read into the
+  // live feeder, any other passed over unread. A failed read is returned.
+  core::Status pass_other(grid::networking::StreamClient& client,
+                          const Connection& connection,
+                          const grid::stream::Record& record,
+                          Playback::Clock::time_point arrived);
   // Live: release the front held record when the clock lets it go, the
   // decode before it finished first, into a decode of its own.
   core::Result<Release> release_front(Connection& connection);
@@ -731,6 +752,11 @@ class StreamPlayer {
   std::uint16_t track_ = 0;
   LiveAddress address_;                  // live
   std::optional<LiveClock> live_clock_;  // live alone; the worker writes it
+  // Live alone: the audio feeder, the clock's master while it plays, so
+  // destroyed first; the worker feeds it, an Audio record's payload read
+  // into other_payload_.
+  std::unique_ptr<LiveAudio> live_audio_;
+  std::vector<std::uint8_t> other_payload_;
   // Live: the played track's records held as host bytes until released,
   // the worker's, made at need and reused across connections.
   std::unique_ptr<HeldRecords> held_;

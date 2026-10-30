@@ -56,6 +56,20 @@ std::optional<AudioTrackChoice> find_audio_track(
     const grid::stream::Session& session,
     const std::vector<grid::stream::TrackStats>& stats, std::uint16_t geometry);
 
+/// @brief A live session's Audio track to play beside @p geometry, as the
+///        file's overload chooses it, with no counts: a live track's records
+///        are still to come (live_audio.hpp).
+///
+/// @code
+/// const std::optional<AudioTrackChoice> audio =
+///     find_audio_track(*client.session(), geometry);
+/// @endcode
+/// @param session   A sender's session.
+/// @param geometry  The geometry track's index.
+/// @return The track and its params; none without one.
+std::optional<AudioTrackChoice> find_audio_track(
+    const grid::stream::Session& session, std::uint16_t geometry);
+
 /// @param channels  A track's channels.
 /// @return The channels an output plays of a track of @p channels: up to
 ///         the first two.

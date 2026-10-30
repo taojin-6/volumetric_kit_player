@@ -676,6 +676,8 @@ core::Status run_view(const Args& args, const vkp::PlayerViewConfig& config,
         for (const std::string& stat : view->stats_panel().lines()) {
           line += " | " + stat;
         }
+        // The stats' lines hold the delay's.
+        line += vkp::probe_delay_text(view->shown(), /*with_delay=*/false);
         line += " | per stream frame:";
         for (const core::StageRow& row : view->stats_panel().rows()) {
           line += row_text(row);
@@ -771,7 +773,9 @@ core::Status run_worker(const Args& args, const vkp::PlayerViewConfig& config,
         return run.take(*shown, exchange.live());
       },
       [&] {
-        std::string line = status_text(*player, shown) + " | per stream frame:";
+        std::string line = status_text(*player, shown) +
+                           vkp::probe_delay_text(shown, /*with_delay=*/true) +
+                           " | per stream frame:";
         for (const core::StageRow& row : stats.stage_means()) {
           line += row_text(row);
         }
@@ -881,4 +885,17 @@ volumetric_kit::player::probe_view_config(const AppConfig& config, int argc,
     return std::nullopt;
   }
   return view_config(*args, config);
+}
+
+std::string volumetric_kit::player::probe_delay_text(
+    const std::optional<FrameStamp>& shown, bool with_delay) {
+  if (!shown || !shown->playout) {
+    return {};
+  }
+  char target[48];
+  std::snprintf(
+      target, sizeof target, " | target %.0f ms",
+      std::chrono::duration<double, std::milli>(shown->playout->target)
+          .count());
+  return (with_delay ? " | " + delay_line(shown) : std::string()) + target;
 }

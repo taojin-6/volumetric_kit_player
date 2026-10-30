@@ -30,8 +30,9 @@ namespace volumetric_kit::player {
 /// @endcode
 /// @param source      A source the core loaded for `Application::Player`, or
 ///                    one of @ref parse_live_source's or @ref folder_source's.
-/// @param make_audio  A file's audio output (StreamPlayer::open): the apps
-///                    give AudioOut::open_default; empty for the null output.
+/// @param make_audio  The audio output (StreamPlayer::open and
+///                    StreamPlayer::connect): the apps give
+///                    AudioOut::open_default; empty for the null output.
 /// @return With no `host`, StreamPlayer::open of its `path`; else
 ///         StreamPlayer::connect, which does no I/O, to `host` on `port`, or
 ///         for 0 on LiveAddress's default, the sender's; or their refusal.

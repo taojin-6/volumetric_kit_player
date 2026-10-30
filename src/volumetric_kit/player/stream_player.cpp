@@ -221,6 +221,7 @@ struct StreamPlayer::Waiting {
 
 struct StreamPlayer::Connection {
   std::optional<std::uint16_t> track;         // the session's, once it is in
+  std::optional<AudioTrackChoice> audio;      // its Audio track played
   std::optional<InFlight> decoding;           // a record's decode in flight
   std::chrono::nanoseconds decoding_took{0};  // the worker's time on it
   bool pending = false;             // newest holds a frame not yet meshed
@@ -259,14 +260,15 @@ core::Result<std::unique_ptr<StreamPlayer>> StreamPlayer::open(
 }
 
 core::Result<std::unique_ptr<StreamPlayer>> StreamPlayer::connect(
-    LiveAddress address) {
+    LiveAddress address, AudioOutMaker make_audio) {
   if (address.host.empty() || address.port == 0) {
     return core::Status::invalid_argument(
         "StreamPlayer::connect needs a host and a port from 1: '" +
         to_string(address) + "'");
   }
   try {
-    return std::unique_ptr<StreamPlayer>(new StreamPlayer(std::move(address)));
+    return std::unique_ptr<StreamPlayer>(
+        new StreamPlayer(std::move(address), std::move(make_audio)));
   } catch (...) {
     return core::exception_status("StreamPlayer::connect",
                                   core::Status::Code::IoError);
@@ -284,10 +286,13 @@ StreamPlayer::StreamPlayer(std::unique_ptr<stream::StreamReader> reader,
       clock_(reader_->session().tracks[track].rate.num,
              reader_->session().tracks[track].rate.den) {}
 
-StreamPlayer::StreamPlayer(LiveAddress address)
+StreamPlayer::StreamPlayer(LiveAddress address, AudioOutMaker make_audio)
     : address_(std::move(address)), clock_(0, 0) {
   live_status_.address = to_string(address_);
   live_clock_.emplace();
+  live_audio_ =
+      std::make_unique<LiveAudio>(*live_clock_, std::move(make_audio));
+  live_clock_->set_audio_master(live_audio_.get());
 }
 
 StreamPlayer::~StreamPlayer() { stop(); }
@@ -446,6 +451,9 @@ void StreamPlayer::set_muted(bool on) {
     if (audio_) {
       audio_->set_gain(on ? 0.0f : 1.0f);
     }
+    if (live_audio_) {
+      live_audio_->set_gain(on ? 0.0f : 1.0f);
+    }
   });
 }
 
@@ -455,6 +463,9 @@ bool StreamPlayer::muted() const {
 }
 
 std::optional<std::uint64_t> StreamPlayer::audio_position() const {
+  if (live_audio_) {
+    return live_audio_->position();
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   return audio_ ? audio_->position() : std::nullopt;
 }
@@ -503,6 +514,9 @@ bool StreamPlayer::park(std::chrono::milliseconds timeout) {
     if (audio_) {
       audio_->park();
     }
+    if (live_audio_) {
+      live_audio_->park();
+    }
     changed_.notify_all();  // ends a wait to retry, and wakes a frame's pacing
     if (!changed_.wait_until(lock, deadline, [this] { return busy_ == 0; })) {
       return false;
@@ -526,6 +540,9 @@ void StreamPlayer::unpark() {
   control([this] {
     if (parked_ && audio_) {
       audio_->unpark();
+    }
+    if (parked_ && live_audio_) {
+      live_audio_->unpark();
     }
     parked_ = false;
   });
@@ -851,7 +868,7 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
   Connection connection;
   // The connection's end, for `why`: a frame waiting for its program is
   // abandoned, a decode in flight is waited out, submitting nothing, and
-  // dropped, as are the records held and one unread.
+  // dropped, as are the records held and one unread; its audio ends.
   const auto end = [&](core::Status why) {
     if (connection.waiting) {
       extractor_->abandon(connection.waiting->extract);
@@ -863,6 +880,7 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
       connection.decoding.reset();
     }
     held_->clear();
+    live_audio_->end();
     *ended = std::move(why);
     return core::Status();
   };
@@ -875,6 +893,8 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
     if (stopping) {
       return end({});
     }
+    // The audio follows the clock, between the worker's steps.
+    live_audio_->look(Clock::now());
     // A frame its program held, asked again.
     if (connection.waiting) {
       VKC_ASSIGN(const bool going, ask_program(connection));
@@ -1016,10 +1036,20 @@ core::Result<bool> StreamPlayer::read_records(networking::StreamClient& client,
     // A whole record arrived now: its due time, and the clock's sample.
     const Clock::time_point arrived = Clock::now();
     if (!connection.track && client.session() != nullptr) {
-      connection.track = first_geometry_track(*client.session());
+      const stream::Session& session = *client.session();
+      connection.track = first_geometry_track(session);
       if (!connection.track) {
         return core::Status::not_found(
             "the sender's session has no geometry track");
+      }
+      // Its audio, if any; an output that cannot be made leaves it silent.
+      connection.audio = find_audio_track(session, *connection.track);
+      if (!live_audio_
+               ->begin(connection.audio,
+                       std::chrono::nanoseconds(stream::nominal_period_ns(
+                           session.tracks[*connection.track].rate)))
+               .ok()) {
+        connection.audio.reset();
       }
       std::lock_guard<std::mutex> lock(mutex_);
       live_status_.state = LiveState::kConnected;
@@ -1034,7 +1064,7 @@ core::Result<bool> StreamPlayer::read_records(networking::StreamClient& client,
       connection.unread = HeldRecords::Held{record, arrived, 0};
       VKC_TRY(hold_unread(client, connection));
     } else {
-      pass_other(record, arrived);
+      VKC_TRY(pass_other(client, connection, record, arrived));
     }
   }
   return true;
@@ -1048,6 +1078,7 @@ bool StreamPlayer::note_arrival(const stream::Record& record,
     live_status_.seq = record.info.seq;
     live_status_.set = record.info.set;
     live_status_.last_record = arrived;
+    live_status_.audio_late = live_audio_->late();
   }
   std::chrono::nanoseconds need(0);
   if (hooks_ != nullptr && hooks_->live_delay) {
@@ -1059,7 +1090,7 @@ bool StreamPlayer::note_arrival(const stream::Record& record,
     }
     need = hooks_->live_delay();
   }
-  live_clock_->arrived(record.info.pts_ns, arrived, need);
+  live_clock_->arrived(record.info.pts_ns, arrived, need, live_audio_->need());
   return true;
 }
 
@@ -1077,11 +1108,27 @@ core::Status StreamPlayer::hold_unread(networking::StreamClient& client,
   return {};
 }
 
-void StreamPlayer::pass_other(const stream::Record& /*record*/,
-                              Clock::time_point /*arrived*/) {
-  // Passed over unread: StreamClient::next skips its payload.
-  // TODO: live audio, on the live playout clock: today every record of
-  // another track is passed over.
+core::Status StreamPlayer::pass_other(networking::StreamClient& client,
+                                      const Connection& connection,
+                                      const stream::Record& record,
+                                      Clock::time_point arrived) {
+  // Another track's is passed over unread: StreamClient::next skips its
+  // payload.
+  if (!connection.audio || record.info.track != connection.audio->index) {
+    return {};
+  }
+  // Grown to the largest record, at most a second of audio, then reused: no
+  // allocation per record. A larger one is passed over unread.
+  const auto size = static_cast<std::size_t>(record.size);
+  if (!live_audio_->takes(size)) {
+    return {};
+  }
+  if (other_payload_.size() < size) {
+    other_payload_.resize(size);
+  }
+  VKC_TRY(client.read(record, other_payload_.data(), size));
+  live_audio_->arrived(record.info, other_payload_.data(), size, arrived);
+  return {};
 }
 
 core::Result<StreamPlayer::Release> StreamPlayer::release_front(
@@ -1694,6 +1741,7 @@ void StreamPlayer::show_connecting(const std::string& last_error) {
   std::lock_guard<std::mutex> lock(mutex_);
   live_status_.state = LiveState::kConnecting;
   live_status_.last_error = last_error;
+  live_status_.audio_late = std::chrono::nanoseconds(0);
 }
 
 bool StreamPlayer::wait_to_retry(std::chrono::steady_clock::time_point at) {

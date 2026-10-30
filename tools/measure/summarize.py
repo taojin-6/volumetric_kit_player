@@ -116,7 +116,9 @@ COLUMNS_3 = COLUMNS_2 + ["vertices", "set"]
 PLAYOUT = ("delay_ms", "target_ms", "late_ms")
 COLUMNS_5 = COLUMNS_3 + ["buffer_ms", "delay_ms", "target_ms", "need",
                          "late_ms"]
-NEEDS = ("none", "arrival", "program")
+# The needs that set D (live_clock.hpp's to_string); a live stream's audio
+# names "audio" in format 5 too.
+NEEDS = ("none", "arrival", "program", "audio")
 DEVICES = ("none", "measured", "not_timed", "unavailable")
 COUNTS = ("submits", "host_waits", "blocked_ns", "staging_buffers")
 COUNTS_2 = COUNTS + ("dispatches", "barriers")

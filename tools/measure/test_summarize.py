@@ -241,6 +241,12 @@ class Summarize(unittest.TestCase):
         self.assertIn("| playout delay ms (live, as taken) | 120.500 "
                       "| 120.000 | 121.000 |", rows)
         self.assertIn("- delay set by: arrival: 1, program: 1 frames", rows)
+        # A live stream's audio names its need too.
+        with open(path, encoding="utf-8") as file:
+            audio = self.write(file.read().replace(",program,", ",audio,"))
+        self.assertIn("- delay set by: arrival: 1, audio: 1 frames",
+                      summarize.summary(summarize.read_log(audio))
+                      .splitlines())
         # Diffed against format 3, which has none of it.
         diffed = summarize.summarize([UNSHARED, path]).split(
             "## Before -> after (means)")[1].splitlines()

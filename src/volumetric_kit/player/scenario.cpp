@@ -46,7 +46,7 @@ core::Result<std::unique_ptr<StreamPlayer>> open_source(
   if (source.port != 0) {
     address.port = source.port;
   }
-  return StreamPlayer::connect(std::move(address));
+  return StreamPlayer::connect(std::move(address), std::move(make_audio));
 }
 
 core::Result<cfg::Source> parse_live_source(std::string_view host,
