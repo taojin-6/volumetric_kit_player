@@ -9,6 +9,12 @@
 
 namespace volumetric_kit::player {
 
+namespace {
+
+constexpr std::uint64_t kMaxSide = 16384;  // parse_size's, pixels
+
+}  // namespace
+
 std::optional<std::uint64_t> parse_count(std::string_view text) {
   std::uint64_t count = 0;
   const auto [end, error] =
@@ -49,6 +55,20 @@ std::optional<bool> parse_switch(std::string_view text) {
   return std::nullopt;
 }
 
+std::optional<VkExtent2D> parse_size(std::string_view text) {
+  const std::size_t x = text.find('x');
+  if (x == std::string_view::npos) {
+    return std::nullopt;
+  }
+  const std::optional<std::uint64_t> width = parse_count(text.substr(0, x));
+  const std::optional<std::uint64_t> height = parse_count(text.substr(x + 1));
+  if (!width || !height || *width > kMaxSide || *height > kMaxSide) {
+    return std::nullopt;
+  }
+  return VkExtent2D{static_cast<std::uint32_t>(*width),
+                    static_cast<std::uint32_t>(*height)};
+}
+
 core::Result<std::optional<MeasureArgs>> parse_measure_args(
     const std::vector<std::string>& args) {
   MeasureArgs measure;
@@ -58,7 +78,7 @@ core::Result<std::optional<MeasureArgs>> parse_measure_args(
     const std::string& arg = args[i];
     if (arg != "--measure" && arg != "--passes" && arg != "--frames" &&
         arg != "--timing" && arg != "--tile-depth" && arg != "--labels" &&
-        arg != "--share-vertices") {
+        arg != "--share-vertices" && arg != "--panel") {
       continue;  // the system's
     }
     if (i + 1 == args.size()) {
@@ -104,21 +124,24 @@ core::Result<std::optional<MeasureArgs>> parse_measure_args(
       measure.tile_depth = *depth;
       other = true;
     } else {
-      // --labels or --share-vertices: a switch.
+      // --labels, --share-vertices or --panel: a switch.
       const std::optional<bool> on = parse_switch(value);
       if (!on) {
         return core::Status::invalid_argument(arg + " '" + value +
                                               "': on or off");
       }
-      (arg == "--labels" ? measure.debug_labels : measure.share_vertices) = *on;
+      bool& to = arg == "--labels"           ? measure.debug_labels
+                 : arg == "--share-vertices" ? measure.share_vertices
+                                             : measure.panel;
+      to = *on;
       other = true;
     }
   }
   if (!named) {
     if (other) {
       return core::Status::invalid_argument(
-          "--passes, --frames, --timing, --tile-depth, --labels and "
-          "--share-vertices need --measure");
+          "--passes, --frames, --timing, --tile-depth, --labels, "
+          "--share-vertices and --panel need --measure");
     }
     return std::optional<MeasureArgs>();
   }

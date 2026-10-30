@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
 namespace volumetric_kit::player {
@@ -57,6 +58,15 @@ std::optional<std::uint32_t> parse_tile_depth(std::string_view text);
 /// @return Whether on; none for any other text.
 std::optional<bool> parse_switch(std::string_view text);
 
+/// @brief Parse `--size`'s value: a drawable's width and height, in pixels.
+///
+/// @code
+/// const std::optional<VkExtent2D> size = parse_size("3456x2234");
+/// @endcode
+/// @param text  `WxH`, each side decimal digits alone, from 1 to 16384.
+/// @return The size; none for any other text.
+std::optional<VkExtent2D> parse_size(std::string_view text);
+
 /// @brief A measurement the iOS app's launch arguments ask for (README.md,
 ///        tools/measure/).
 struct MeasureArgs {
@@ -75,13 +85,16 @@ struct MeasureArgs {
   /// Vertex sharing (PlayerViewConfig::share_vertices),
   /// `--share-vertices on|off`.
   bool share_vertices = true;
+  /// A program's panel open at start (PlayerViewConfig::panel),
+  /// `--panel on|off`.
+  bool panel = false;
 };
 
 /// @brief Parse the iOS app's launch arguments: `--measure <name>`, with
 ///        `--passes P`, `--frames N`, `--timing off|sampled|all`,
-///        `--tile-depth 0|1`, `--labels on|off` and `--share-vertices on|off`,
-///        in any order, on the host alone. Arguments it does not name are
-///        left to the system, which adds its own.
+///        `--tile-depth 0|1`, `--labels on|off`, `--share-vertices on|off`
+///        and `--panel on|off`, in any order, on the host alone. Arguments it
+///        does not name are left to the system, which adds its own.
 ///
 /// @code
 /// VKC_ASSIGN(const std::optional<MeasureArgs> measure,

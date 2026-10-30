@@ -247,7 +247,10 @@ worker alone on the GPU the core picks, for a GPU with no headless surface
 "mesh" alone (0, every scope, by default); `--labels off` asks for no debug
 labels; `--share-vertices off` gives each triangle three vertices of its
 own (shared by default); `--frames N` stops after N frames;
-`--connect host[:port]` plays a sender.
+`--connect host[:port]` plays a sender. Through the view, `--panel on` opens
+a program's panel at start, and `--size WxH` draws at that size in pixels
+(640x480 by default), so the panel's cost shows at a screen's size; the
+log's `run` names both.
 
 Two options run the player's per-frame hooks, as a caller would, so the
 cost of that path shows too (a batch more a frame, which the log's `run`
@@ -265,8 +268,9 @@ the grid's blocks.
 
 The iOS app writes one when launched with `-- --measure <name in Documents>
 [--passes P] [--frames N] [--timing T] [--tile-depth D] [--labels on|off]
-[--share-vertices on|off]`:
-it plays that stream, logs into `Documents/measure/<utc>-<commit>.csv`, and
+[--share-vertices on|off] [--panel on|off]`:
+it plays that stream (with a program's panel open from the start for
+`--panel on`), logs into `Documents/measure/<utc>-<commit>.csv`, and
 shows "measure done"; a launch that cannot log writes why into a `.failed`
 file there instead.
 

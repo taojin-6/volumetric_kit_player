@@ -326,10 +326,11 @@ TEST(MeasureArgs, NoneWithoutMeasureAndTheSystemsAreLeftAlone) {
   EXPECT_EQ(plain.value()->tile_depth, 0u) << "every scope";
   EXPECT_TRUE(plain.value()->debug_labels);
   EXPECT_TRUE(plain.value()->share_vertices);
+  EXPECT_FALSE(plain.value()->panel) << "a program's panel closed";
   const core::Result<std::optional<MeasureArgs>> full = vkp::parse_measure_args(
       {"--timing", "sampled", "-AppleLanguages", "(en)", "--frames", "300",
        "--labels", "off", "--measure", "rafa2.vrst", "--passes", "2",
-       "--share-vertices", "off", "--tile-depth", "1"});
+       "--share-vertices", "off", "--tile-depth", "1", "--panel", "on"});
   ASSERT_TRUE(full.ok() && full.value().has_value()) << full.status().message();
   EXPECT_EQ(full.value()->stream, "rafa2.vrst");
   EXPECT_EQ(full.value()->passes, 2u);
@@ -338,7 +339,9 @@ TEST(MeasureArgs, NoneWithoutMeasureAndTheSystemsAreLeftAlone) {
   EXPECT_EQ(full.value()->tile_depth, 1u);
   EXPECT_FALSE(full.value()->debug_labels);
   EXPECT_FALSE(full.value()->share_vertices);
-  // Each switch apart: --share-vertices leaves the labels alone.
+  EXPECT_TRUE(full.value()->panel);
+  // Each switch apart: --share-vertices leaves the labels and the panel
+  // alone.
   const core::Result<std::optional<MeasureArgs>> unshared =
       vkp::parse_measure_args(
           {"--measure", "rafa2.vrst", "--share-vertices", "off"});
@@ -346,6 +349,7 @@ TEST(MeasureArgs, NoneWithoutMeasureAndTheSystemsAreLeftAlone) {
       << unshared.status().message();
   EXPECT_FALSE(unshared.value()->share_vertices);
   EXPECT_TRUE(unshared.value()->debug_labels);
+  EXPECT_FALSE(unshared.value()->panel);
   const core::Result<std::optional<MeasureArgs>> shared =
       vkp::parse_measure_args(
           {"--measure", "rafa2.vrst", "--share-vertices", "on"});
@@ -372,6 +376,10 @@ TEST(MeasureArgs, WhatIsWrongIsNamed) {
             "--share-vertices '1'"},
            {{"--measure", "a.vrst", "--share-vertices"},
             "--share-vertices needs a value"},
+           {{"--measure", "a.vrst", "--panel", "open"},
+            "--panel 'open': on or off"},
+           {{"--measure", "a.vrst", "--panel"}, "--panel needs a value"},
+           {{"--panel", "on"}, "need --measure"},
            {{"--frames", "10"}, "need --measure"},
            {{"--passes", "2"}, "need --measure"},
            {{"--tile-depth", "1"}, "need --measure"},
@@ -406,6 +414,26 @@ TEST(TileDepthAndSwitch, TakeTheirNamesAlone) {
   EXPECT_EQ(vkp::parse_switch("off"), false);
   for (const char* text : {"On", "", "1", "yes"}) {
     EXPECT_FALSE(vkp::parse_switch(text).has_value()) << "'" << text << "'";
+  }
+}
+
+TEST(Size, IsWidthByHeightInPixelsTo16384) {
+  const std::optional<VkExtent2D> screen = vkp::parse_size("3456x2234");
+  ASSERT_TRUE(screen.has_value());
+  EXPECT_EQ(screen->width, 3456u);
+  EXPECT_EQ(screen->height, 2234u);
+  const std::optional<VkExtent2D> least = vkp::parse_size("1x1");
+  ASSERT_TRUE(least.has_value());
+  EXPECT_EQ(least->width, 1u);
+  EXPECT_EQ(least->height, 1u);
+  const std::optional<VkExtent2D> most = vkp::parse_size("16384x16384");
+  ASSERT_TRUE(most.has_value());
+  EXPECT_EQ(most->width, 16384u);
+  EXPECT_EQ(most->height, 16384u);
+  for (const char* text :
+       {"", "640", "640x", "x480", "0x480", "640x0", "16385x8", "8x16385",
+        "640X480", "640x480x2", " 640x480", "-640x480", "640*480"}) {
+    EXPECT_FALSE(vkp::parse_size(text).has_value()) << "'" << text << "'";
   }
 }
 
