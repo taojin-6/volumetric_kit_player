@@ -42,11 +42,9 @@ jobs:
         include:
           - os: macos-26
             runner: mac
-            build_type: Debug
-          - os: macos-26
-            runner: mac
             build_type: Release
-          # ThreadSanitizer, for StreamPlayer's worker (DECISIONS.md, CI).
+          # ThreadSanitizer, for StreamPlayer's worker (DECISIONS.md, CI), in
+          # Debug: the Mac's one Debug leg (DECISIONS.md, 2026-10-30).
           - os: macos-26
             runner: mac
             build_type: Debug
