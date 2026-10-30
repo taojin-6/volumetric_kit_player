@@ -150,8 +150,8 @@ vkc::Result<std::optional<cfg::Source>> MeasureSource(
 // and detents, and the deblock and the panel as `deblock` and `panel`, if
 // set, as a view before had them; the worker's device timing,
 // its tile depth, the labels and the vertex sharing as a `measure` launch
-// fixes them, or else timed while the stats panel is open. No validation: iOS
-// has no layer to load (DECISIONS.md).
+// fixes them, or else timed while the stats panel is open, and the panel open
+// at start as it asks. No validation: iOS has no layer to load (DECISIONS.md).
 vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
     CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source,
     const std::optional<vkp::MeasureArgs>& measure, std::optional<bool> deblock,
@@ -179,6 +179,9 @@ vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
     config.panel.state = *panel;
   }
   if (measure) {
+    if (!panel) {  // at start; a view rebuilt keeps the panel as it was
+      config.panel.state.open = measure->panel;
+    }
     config.device_timing = measure->timing;
     config.tile_depth = measure->tile_depth;
     config.debug_labels = measure->debug_labels;
@@ -437,6 +440,9 @@ glm::vec2 Pixels(CGPoint at, UIView* view) {
   context.run = "ios --passes " + std::to_string(_measure->passes);
   if (_measure->frames) {
     context.run += " --frames " + std::to_string(*_measure->frames);
+  }
+  if (_measure->panel) {
+    context.run += " --panel on";
   }
   context.timing = _measure->timing;
   context.tile_depth = _measure->tile_depth;

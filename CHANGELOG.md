@@ -189,6 +189,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the worker's device beyond grid's. The view's device, and vp_probe's by
   the worker alone, are made with them merged with grid's
   (`worker_requirements`, the core's `merge`).
+- vp_probe's `--panel on|off`, which opens a program's panel from the start,
+  and `--size WxH`, the view's drawable in pixels (`parse_size`; 640x480 by
+  default), so a panel's cost is measured at a screen's size; the iOS
+  measure launch's `--panel on|off` (`MeasureArgs::panel`). The log's `run`
+  names them.
 
 ### Changed
 

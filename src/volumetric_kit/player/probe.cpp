@@ -60,7 +60,8 @@ constexpr const char* kUsage =
     "usage: vp_probe (--file PATH | --connect HOST[:PORT]) [--frames N]\n"
     "                [--passes P] [--timing off|sampled|all]\n"
     "                [--tile-depth 0|1] [--labels on|off]\n"
-    "                [--share-vertices on|off] [--csv PATH] [--latency]\n"
+    "                [--share-vertices on|off] [--panel on|off]\n"
+    "                [--size WxH] [--csv PATH] [--latency]\n"
     "                [--save-meshes DIR] [--worker]\n"
     "  --file PATH            play a .vrst file\n"
     "  --connect HOST[:PORT]  play a sender's live stream\n"
@@ -70,11 +71,13 @@ constexpr const char* kUsage =
     "  --tile-depth D         its timed batches' tile depth (default 0)\n"
     "  --labels on|off        debug labels on the instance (default on)\n"
     "  --share-vertices on|off  triangles share vertices (default on)\n"
+    "  --panel on|off         a program's panel open at start (default off)\n"
+    "  --size WxH             the view's drawable, pixels (default 640x480)\n"
     "  --csv PATH             log each frame taken into PATH\n"
     "  --latency              time each mesh to its commit and its draws\n"
     "  --save-meshes DIR      write each mesh as DIR/<frame>.ply\n"
     "  --worker               the worker alone, with no view\n";
-constexpr VkExtent2D kExtent{640, 480};
+constexpr VkExtent2D kExtent{640, 480};             // the view's, unless --size
 constexpr std::chrono::microseconds kTick{16'667};  // a 60 Hz display's
 constexpr std::chrono::seconds kReport{1};
 constexpr std::uint32_t kFramesInFlight =
@@ -89,6 +92,8 @@ struct Args {
   std::uint32_t tile_depth = 0;
   bool labels = true;
   bool share_vertices = true;
+  bool panel = false;
+  std::optional<VkExtent2D> size;
   std::string csv;
   bool latency = false;
   std::string save_meshes;
@@ -154,12 +159,21 @@ std::optional<Args> parse(int argc, char** argv) {
         return std::nullopt;
       }
       args.tile_depth = *depth;
-    } else if (arg == "--labels" || arg == "--share-vertices") {
+    } else if (arg == "--labels" || arg == "--share-vertices" ||
+               arg == "--panel") {
       const std::optional<bool> on = vkp::parse_switch(value);
       if (!on) {
         return std::nullopt;
       }
-      (arg == "--labels" ? args.labels : args.share_vertices) = *on;
+      bool& to = arg == "--labels"           ? args.labels
+                 : arg == "--share-vertices" ? args.share_vertices
+                                             : args.panel;
+      to = *on;
+    } else if (arg == "--size" && !args.size) {
+      args.size = vkp::parse_size(value);
+      if (!args.size) {
+        return std::nullopt;
+      }
     } else if (arg == "--csv" && args.csv.empty() && !value.empty()) {
       args.csv = value;
     } else if (arg == "--save-meshes" && args.save_meshes.empty() &&
@@ -169,8 +183,9 @@ std::optional<Args> parse(int argc, char** argv) {
       return std::nullopt;
     }
   }
-  // One source; passes are a file's.
-  if (args.file.empty() == !args.address || (args.address && args.passes)) {
+  // One source; passes are a file's; an open panel and a size are the view's.
+  if (args.file.empty() == !args.address || (args.address && args.passes) ||
+      (args.worker && (args.panel || args.size))) {
     return std::nullopt;
   }
   return args;
@@ -185,6 +200,7 @@ vkp::PlayerViewConfig view_config(const Args& args, const vkp::AppConfig& app) {
   config.tile_depth = args.tile_depth;
   config.debug_labels = args.labels;
   config.share_vertices = args.share_vertices;
+  config.panel.state.open = args.panel;
   return config;
 }
 
@@ -196,6 +212,13 @@ std::string run_text(const Args& args) {
   std::string text = "vp_probe";
   if (args.worker) {
     text += " --worker";
+  }
+  if (args.panel) {
+    text += " --panel on";
+  }
+  if (args.size) {
+    text += " --size " + std::to_string(args.size->width) + "x" +
+            std::to_string(args.size->height);
   }
   if (args.latency) {
     text += " --latency";
@@ -588,9 +611,10 @@ core::Status run_view(const Args& args, const vkp::PlayerViewConfig& config,
              gfx::windowing::headless_surface());
   const std::chrono::system_clock::time_point started =
       std::chrono::system_clock::now();
+  const VkExtent2D extent = args.size.value_or(kExtent);
   VKC_ASSIGN(
       const std::unique_ptr<vkp::PlayerView> view,
-      vkp::PlayerView::create(surface, kExtent, std::move(player), config));
+      vkp::PlayerView::create(surface, extent, std::move(player), config));
   VKC_ASSIGN(const std::unique_ptr<gfx::ui::ImGuiTouch> touch,
              gfx::ui::ImGuiTouch::create(view->ui_context()));
   VKC_TRY(run.open_log(view->compute_device(), stream, started));
@@ -598,11 +622,11 @@ core::Status run_view(const Args& args, const vkp::PlayerViewConfig& config,
   VKC_TRY(loop(
       [&](Clock::duration since) -> core::Result<bool> {
         gfx::ui::DisplayFrame display;
-        display.pixels = kExtent;
+        display.pixels = extent;
         display.pixels_per_point = 1.0f;
         display.seconds = std::chrono::duration<double>(since).count();
         touch->new_frame(display);
-        VKC_TRY(view->frame(kExtent).status());
+        VKC_TRY(view->frame(extent).status());
         if (view->frames_taken() == seen) {
           return true;
         }

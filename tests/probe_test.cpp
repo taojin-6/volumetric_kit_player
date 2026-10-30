@@ -17,13 +17,16 @@
 // offers is enabled on the hooks' devices, one it lacks skipped, and grid's
 // stay enabled under requirements that leave them out, the run passing; with
 // none, the device is grid's alone; and a required extension no GPU offers
-// fails the run, its hooks never made. On the host: --latency and
+// fails the run, its hooks never made. Through the view, --panel on opens a
+// program's panel from the start, drawn at --size's extent. On the host:
+// --latency and
 // --save-meshes exit 2 when a program set make_hooks, which is never made,
 // and without it pass to the stream's refusal; and the view's settings
 // run_probe plays with (probe_view_config) are the program's, make_hooks and
 // device requirements included, with the command line's validation, timing,
-// tile depth, labels and vertex sharing, its defaults included, and none for
-// its usage. The device tests skip with no device,
+// tile depth, labels, vertex sharing and open panel, its defaults included,
+// and none for its usage (an open panel or a size with --worker among it).
+// The device tests skip with no device,
 // and fail without one under VKC_REQUIRE_VULKAN_DEVICE. run_probe validates
 // as the core's test policy asks, its exit code failing on any error the
 // layer reports.
@@ -217,6 +220,32 @@ class DeviceHooks {
   core::Status grids_ = core::Status::invalid_argument("never made");
 };
 
+// A program's hooks with a panel that notes, as the view records it on the
+// thread that calls run_probe, how often and the pass's extent.
+class PanelHooks {
+ public:
+  vkp::MakeHooks make_hooks() {
+    return [this](const vkp::HookContext&) {
+      vkp::FrameHooks hooks;
+      hooks.panel.title = "Probe test";
+      hooks.panel.record = [this](VkCommandBuffer,
+                                  const vkp::PanelFrame& frame) {
+        ++records_;
+        drawable_ = frame.drawable;
+      };
+      return core::Result<vkp::FrameHooks>(std::move(hooks));
+    };
+  }
+
+  int records() const { return records_; }
+  // The pass's extent at the last record.
+  VkExtent2D drawable() const { return drawable_; }
+
+ private:
+  int records_ = 0;
+  VkExtent2D drawable_{};
+};
+
 // `call(argc, argv)` with `args` after the program's name, as main has them.
 template <typename Call>
 auto with_argv(std::vector<std::string> args, Call&& call) {
@@ -406,6 +435,29 @@ TEST_F(RunProbeViewTest, TheViewMakesAProgramsHooksOnceAndRunsThemEachFrame) {
   EXPECT_EQ(logged_run(csv), "vp_probe with the program's make_hooks");
 }
 
+// --panel on opens a program's panel from the start, recorded into a pass of
+// --size's extent, and the log's run names both; by default it stays closed.
+TEST_F(RunProbeViewTest, PanelOnOpensAProgramsPanelAtTheSizeGiven) {
+  PanelHooks open;
+  vkp::AppConfig config;
+  config.view.make_hooks = open.make_hooks();
+  const std::string csv = scratch_.file("panel.csv");
+  EXPECT_EQ(run({"--frames", "2", "--file", path_, "--panel", "on", "--size",
+                 "320x200", "--csv", csv},
+                config),
+            0);
+  EXPECT_GT(open.records(), 0);
+  EXPECT_EQ(open.drawable().width, 320u);
+  EXPECT_EQ(open.drawable().height, 200u);
+  EXPECT_EQ(logged_run(csv),
+            "vp_probe --panel on --size 320x200 --frames 2 with the "
+            "program's make_hooks");
+  PanelHooks closed;
+  config.view.make_hooks = closed.make_hooks();
+  EXPECT_EQ(run(args(/*worker=*/false), config), 0);
+  EXPECT_EQ(closed.records(), 0) << "closed by default";
+}
+
 // A program's hooks keep a mesh more of the ring (SkippingHooks), which the
 // worker alone, as the view, reserves for them.
 TEST_F(RunProbeTest, TheWorkerKeepsAMeshMoreForAProgramsHooks) {
@@ -491,6 +543,8 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
   config.view.share_vertices = false;
   config.view.make_hooks = hooks.make_hooks();
   config.view.device_requirements.optional_extensions = {"VK_VP_test_kept"};
+  config.view.panel.state.open = true;
+  config.view.panel.state.right_share = 0.3f;
 #ifdef NDEBUG
   const bool validation = test::requested_validation() != test::Validation::Off;
 #else
@@ -507,6 +561,7 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
     EXPECT_TRUE(static_cast<bool>(view.make_hooks)) << "make_hooks dropped";
     EXPECT_EQ(view.device_requirements.optional_extensions,
               std::vector<std::string>{"VK_VP_test_kept"});
+    EXPECT_EQ(view.panel.state.right_share, 0.3f) << "the panel's share";
   };
   const std::optional<vkp::PlayerViewConfig> defaults =
       view_of({"--worker", "--file", "s.vrst"}, config);
@@ -518,9 +573,11 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
   EXPECT_EQ(defaults->tile_depth, 0u);
   EXPECT_TRUE(defaults->debug_labels);
   EXPECT_TRUE(defaults->share_vertices);
+  EXPECT_FALSE(defaults->panel.state.open) << "closed unless --panel on";
   const std::optional<vkp::PlayerViewConfig> given =
       view_of({"--file", "s.vrst", "--timing", "sampled", "--tile-depth", "1",
-               "--labels", "off", "--share-vertices", "off"},
+               "--labels", "off", "--share-vertices", "off", "--panel", "on",
+               "--size", "3456x2234"},
               config);
   ASSERT_TRUE(given.has_value());
   expect_programs(*given);
@@ -530,10 +587,26 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
   EXPECT_EQ(given->tile_depth, 1u);
   EXPECT_FALSE(given->debug_labels);
   EXPECT_FALSE(given->share_vertices);
+  EXPECT_TRUE(given->panel.state.open);
   EXPECT_FALSE(view_of({}, config).has_value()) << "no source";
   EXPECT_FALSE(
       view_of({"--file", "s.vrst", "--tile-depth", "2"}, config).has_value())
       << "a tile depth it refuses";
+  EXPECT_TRUE(
+      view_of({"--worker", "--file", "s.vrst", "--panel", "off"}, config)
+          .has_value())
+      << "a closed panel needs no view";
+  for (const std::vector<std::string>& args :
+       std::vector<std::vector<std::string>>{
+           {"--worker", "--file", "s.vrst", "--panel", "on"},
+           {"--worker", "--file", "s.vrst", "--size", "640x480"},
+           {"--file", "s.vrst", "--panel", "yes"},
+           {"--file", "s.vrst", "--size", "640"},
+           {"--file", "s.vrst", "--size", "0x480"},
+           {"--file", "s.vrst", "--size", "8x8", "--size", "8x8"}}) {
+    EXPECT_FALSE(view_of(args, config).has_value())
+        << args[args.size() - 2] << " " << args.back();
+  }
   EXPECT_EQ(hooks.makes(), 0);
 }
 
