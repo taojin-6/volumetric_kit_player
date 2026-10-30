@@ -72,6 +72,21 @@ owner chose live first.
 - **A live stream with no Audio track is as before:** no output, no need,
   no slew, no master.
 
+## 2026-10-30 — CI: the Mac's one Debug leg is ThreadSanitizer's
+
+The plain Mac Debug leg is gone. The Mac now builds Release and, under
+ThreadSanitizer, Debug (the 2026-10-18 entry below listed both plain legs).
+
+- **Why:** the ThreadSanitizer leg is a Debug build of every target, so the
+  assertions and the Debug-only validation it runs are the plain Debug leg's,
+  under a sanitizer as well. The one test it skips, the view's rerun on
+  MoltenVK's specialized families, still runs on the Release leg. Three Mac
+  legs shared the family's two Mac runners,
+  so the third queued about 150 s a run (246 s at most), for no check of its
+  own.
+- **Not chosen:** a third Mac runner. It ties up a machine for a leg that adds
+  nothing the TSan leg lacks.
+
 ## 2026-10-30 — The Apple audio output: its clock and lifecycle
 
 On macOS and iOS a file's audio plays through `open_apple_audio`
@@ -1335,7 +1350,8 @@ How `StreamPlayer` plays a stream; its header says what each call does.
 `.github/workflows/ci.yml` is the only workflow.
 
 - **Build and test on self-hosted runners with a GPU,** as gfx and recon do:
-  the family's Mac (label `mac`; Debug and Release, on MoltenVK) and its Linux
+  the family's Mac (label `mac`; Release, and Debug until 2026-10-30, when
+  ThreadSanitizer's Debug leg took its place; on MoltenVK) and its Linux
   GPU hosts (label `vk-linux-gpu`; Release, in `ubuntu:24.04` and
   `ubuntu:26.04` containers with `--gpus all`, on the NVIDIA driver). Why:
   every tier past the clock needs a Vulkan device, and these are the family's
