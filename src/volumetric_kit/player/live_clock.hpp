@@ -40,6 +40,15 @@ inline constexpr std::chrono::nanoseconds kPointFall{
 /// (@ref mesh_now), so a join's backlog shows as it drains.
 inline constexpr std::chrono::nanoseconds kMeshEvery{
     std::chrono::milliseconds{100}};
+/// While audio plays (@ref slew_point): the applied point rises at most
+/// kSlewRise a step and per kSlewEvery elapsed; and once D's target has not
+/// risen for kLiveWindow, falls at most kSlewFall a step and per second.
+inline constexpr std::chrono::nanoseconds kSlewRise{
+    std::chrono::milliseconds{20}};
+inline constexpr std::chrono::nanoseconds kSlewEvery{
+    std::chrono::milliseconds{100}};
+inline constexpr std::chrono::nanoseconds kSlewFall{
+    std::chrono::milliseconds{10}};
 
 /// @brief A need for D, and so what set its target: the largest.
 enum class DelayNeed : std::uint8_t {
@@ -47,6 +56,7 @@ enum class DelayNeed : std::uint8_t {
   kArrival,  ///< The played track's records: the latest after its
              ///< earliest, over the window, plus the lead (LiveClock).
   kProgram,  ///< A program's own (FrameHooks::live_delay).
+  kAudio,    ///< The stream's audio (live_audio.hpp: audio_need).
 };
 
 /// @brief The name of a need, as the stats and the log show it.
@@ -55,7 +65,7 @@ enum class DelayNeed : std::uint8_t {
 /// std::printf("delay set by %s\n", to_string(playout.need));  // "program"
 /// @endcode
 /// @param need  The need.
-/// @return "none", "arrival" or "program".
+/// @return "none", "arrival", "program" or "audio".
 const char* to_string(DelayNeed need) noexcept;
 
 /// @brief The clock at one moment (LiveClock::time), and as a frame was
@@ -131,8 +141,7 @@ bool mesh_now(bool free, std::optional<std::chrono::nanoseconds> since_publish,
               std::optional<std::uint64_t> next_pts_ns, std::int64_t now_pts,
               std::chrono::nanoseconds lead) noexcept;
 
-/// @brief The applied point's step toward its target: the one rule an
-///        audio master would replace with a slew of its own.
+/// @brief The applied point's step toward its target while no audio plays.
 /// @param applied  The applied point, carried by the offset's fall while
 ///                 settling (LiveClock).
 /// @param target   The offset plus D's target.
@@ -142,6 +151,57 @@ bool mesh_now(bool free, std::optional<std::chrono::nanoseconds> since_publish,
 std::chrono::nanoseconds step_point(std::chrono::nanoseconds applied,
                                     std::chrono::nanoseconds target,
                                     std::chrono::nanoseconds elapsed) noexcept;
+
+/// @brief The applied point's slew toward its target while audio plays, in
+///        place of @ref step_point: each change of the point is a gap or a
+///        skip in what is heard (live_audio.hpp), so it rises in steps the
+///        ear barely notices and falls more slowly still.
+///
+/// @code
+/// next = slew_point(applied, offset + target, at - stepped_at,
+///                   at - target_rose_at);
+/// @endcode
+/// @param applied     The applied point.
+/// @param target      The offset plus D's target.
+/// @param elapsed     The time since the last step.
+/// @param stable_for  The time since D's target last rose.
+/// @return Toward @p target and never past it: up by at most kSlewRise, and
+///         kSlewRise a kSlewEvery of @p elapsed; down only once
+///         @p stable_for reaches kLiveWindow, by at most kSlewFall, and
+///         kSlewFall a second of @p elapsed.
+std::chrono::nanoseconds slew_point(
+    std::chrono::nanoseconds applied, std::chrono::nanoseconds target,
+    std::chrono::nanoseconds elapsed,
+    std::chrono::nanoseconds stable_for) noexcept;
+
+/// @brief What is heard, for a live clock whose audio plays
+///        (LiveClock::set_audio_master): the master its now_pts takes.
+///
+/// @code
+/// class Heard final : public AudioMaster {
+///   std::optional<std::int64_t> heard_pts(
+///       Playback::Clock::time_point) const noexcept override {
+///     return pts;  // what the output plays now
+///   }
+///   std::int64_t pts = 0;
+/// };
+/// @endcode
+class AudioMaster {
+ public:
+  /// @brief The pts being heard at @p now, on the clock's pts, while it
+  ///        plays in step with the clock; any thread.
+  /// @param now  The time, near now.
+  /// @return The pts; none while nothing is heard in step (the picture is
+  ///         then the master).
+  virtual std::optional<std::int64_t> heard_pts(
+      Playback::Clock::time_point now) const noexcept = 0;
+
+ protected:
+  AudioMaster() = default;
+  ~AudioMaster() = default;
+  AudioMaster(const AudioMaster&) = default;
+  AudioMaster& operator=(const AudioMaster&) = default;
+};
 
 /// @brief A live player's playout clock (StreamPlayer::live_clock).
 ///
@@ -158,14 +218,19 @@ std::chrono::nanoseconds step_point(std::chrono::nanoseconds applied,
 /// record entering or leaving the window leaves the target point
 /// (offset + target) where it was. A join's burst adds nothing, as each
 /// record of it is a new least. The program's need is its answer at each
-/// record (FrameHooks::live_delay). The target is the largest need, clamped
-/// to [0, kMaxLiveDelay].
+/// record (FrameHooks::live_delay), and audio's its feeder's (LiveAudio). The
+/// target is the largest need, clamped to [0, kMaxLiveDelay].
 ///
 /// **Point.** At each write, the applied point steps toward the offset plus
-/// the target (@ref step_point), with the time since the last step. Within
+/// the target (@ref step_point), with the time since the last step; while
+/// audio plays (@ref set_audio_playing), it slews (@ref slew_point). Within
 /// kLiveWindow of the connection's first record, while the least is still
 /// being found, the offset's fall carries the point with it at once, so a
 /// join's backlog lands at the live edge; a fall of D is stepped as ever.
+///
+/// **Master.** Now in pts space (@ref now_pts) is the picture's,
+/// `pts_at(point, now)`, or while audio plays what is heard
+/// (@ref set_audio_master), whenever it is heard in step.
 ///
 /// **Lead.** The largest time over the window that the worker took from a
 /// record's release to its frame's publish. The waits for the consumer's take
@@ -176,9 +241,10 @@ std::chrono::nanoseconds step_point(std::chrono::nanoseconds applied,
 /// record:** the samples sit in fixed rings of kLiveSamples.
 ///
 /// **Threads.** The worker alone writes (@ref arrived, @ref published,
-/// @ref reset). @ref time copies the clock under a mutex, for the worker, the
-/// take, a program and the stats. @ref point reads one atomic: it is
-/// lock-free and never blocks, so it serves a realtime thread.
+/// @ref reset, @ref set_audio_playing). @ref time copies the clock under a
+/// mutex, for the worker, the take, a program and the stats. @ref point
+/// reads one atomic: it is lock-free and never blocks, so it serves a
+/// realtime thread.
 ///
 /// @code
 /// clock.arrived(record.info.pts_ns, arrived, program_need);
@@ -201,14 +267,34 @@ class LiveClock {
   std::optional<std::chrono::nanoseconds> point() const noexcept;
 
   /// @brief Now in pts space, from the one snapshot a decision reads, for
-  ///        the release rule, the mesh rule and the take's gate. With the
-  ///        picture as master it is `pts_at(playout.point, now)`: the one
-  ///        place another master, such as audio's, would take over.
+  ///        the release rule, the mesh rule and the take's gate: the one
+  ///        place the master is chosen.
   /// @param playout  The snapshot (@ref time).
   /// @param now      The time.
-  /// @return Now as a pts.
+  /// @return While audio plays and is heard in step, the pts heard
+  ///         (AudioMaster::heard_pts); else the picture's,
+  ///         `pts_at(playout.point, now)`.
   std::int64_t now_pts(const Playout& playout,
                        Clock::time_point now) const noexcept;
+
+  /// @brief What is heard while audio plays: @ref now_pts's master then.
+  ///        Set once, before the worker starts.
+  /// @param audio  It, which must outlive this clock's readers; null for
+  ///               none.
+  void set_audio_master(const AudioMaster* audio) noexcept {
+    audio_.store(audio, std::memory_order_release);
+  }
+  /// @brief The worker: whether audio plays in step with the clock. While
+  ///        it does, the point slews (@ref slew_point) and @ref now_pts
+  ///        takes what is heard. False at first and after @ref reset.
+  /// @param playing  Whether it plays.
+  void set_audio_playing(bool playing) noexcept {
+    audio_playing_.store(playing, std::memory_order_release);
+  }
+  /// @return What @ref set_audio_playing last set.
+  bool audio_playing() const noexcept {
+    return audio_playing_.load(std::memory_order_acquire);
+  }
 
   /// @brief The worker: a record of the played track arrived whole at
   ///        @p at. The offset and the arrival need take it, samples past
@@ -216,8 +302,11 @@ class LiveClock {
   /// @param pts_ns        Its pts.
   /// @param at            When; no earlier than the last write's.
   /// @param program_need  FrameHooks::live_delay's answer; 0 for none.
-  void arrived(std::uint64_t pts_ns, Clock::time_point at,
-               std::chrono::nanoseconds program_need);
+  /// @param audio_need    The stream's audio's (LiveAudio::need); 0 for none.
+  void arrived(
+      std::uint64_t pts_ns, Clock::time_point at,
+      std::chrono::nanoseconds program_need,
+      std::chrono::nanoseconds audio_need = std::chrono::nanoseconds(0));
 
   /// @brief The worker: a frame was published at @p at, @p took after its
   ///        record's release, waits left out. The lead takes it, and the
@@ -257,10 +346,14 @@ class LiveClock {
   std::array<Lead, kLiveSamples> leads_{};  // a ring, oldest first
   std::size_t leads_head_ = 0, leads_size_ = 0;
   std::chrono::nanoseconds program_need_{0};
+  std::chrono::nanoseconds audio_need_{0};
   std::optional<Playout> state_;
   Clock::time_point first_at_{};    // the connection's first record
   Clock::time_point stepped_at_{};  // the last step
+  Clock::time_point rose_at_{};     // when D's target last rose
   std::atomic<std::int64_t> point_ns_{kNoPoint};  // state_->point, for point()
+  std::atomic<const AudioMaster*> audio_{nullptr};
+  std::atomic<bool> audio_playing_{false};
 };
 
 }  // namespace volumetric_kit::player

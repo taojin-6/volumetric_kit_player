@@ -59,7 +59,9 @@ void DeviceAudioOut::render_at(float* out, std::size_t frames,
   const Rendered rendered = render(out, frames);
   RenderTime time;
   time.frames = frames;
-  time.host_ns = host_ns;
+  // Its first frame taken passes the output after an insert's silence.
+  time.host_ns =
+      host_ns + audio_ns(rendered.silence_before, format().sample_rate);
   time.restarted = ready != seen_starts_;
   time.latency_ns = latency_ns_.load(std::memory_order_relaxed);
   seen_starts_ = ready;

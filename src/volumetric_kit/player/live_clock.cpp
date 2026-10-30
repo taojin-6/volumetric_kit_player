@@ -21,13 +21,17 @@ nanoseconds pts_ns_of(std::uint64_t pts_ns) {
   return nanoseconds(static_cast<std::int64_t>(pts_ns));
 }
 
-// kPointFall a second of `elapsed`, exactly and with no overflow: whole
-// seconds, then the rest, under a second, scaled.
-nanoseconds fall_over(nanoseconds elapsed) {
-  constexpr std::int64_t kSecond = 1'000'000'000;
+// `rate` a `per` of `elapsed`, exactly and with no overflow: whole `per`s,
+// then the rest, under one, scaled.
+nanoseconds rate_over(nanoseconds elapsed, nanoseconds rate, nanoseconds per) {
   const std::int64_t ns = std::max<std::int64_t>(elapsed.count(), 0);
-  return nanoseconds((ns / kSecond) * kPointFall.count() +
-                     (ns % kSecond) * kPointFall.count() / kSecond);
+  return nanoseconds((ns / per.count()) * rate.count() +
+                     (ns % per.count()) * rate.count() / per.count());
+}
+
+// kPointFall a second of `elapsed`.
+nanoseconds fall_over(nanoseconds elapsed) {
+  return rate_over(elapsed, kPointFall, std::chrono::seconds(1));
 }
 
 // The ring entry `i` places after the oldest at `head`.
@@ -68,6 +72,8 @@ const char* to_string(DelayNeed need) noexcept {
       return "arrival";
     case DelayNeed::kProgram:
       return "program";
+    case DelayNeed::kAudio:
+      return "audio";
   }
   return "none";
 }
@@ -113,6 +119,22 @@ nanoseconds step_point(nanoseconds applied, nanoseconds target,
   return std::max(target, applied - fall_over(elapsed));
 }
 
+nanoseconds slew_point(nanoseconds applied, nanoseconds target,
+                       nanoseconds elapsed, nanoseconds stable_for) noexcept {
+  if (target >= applied) {
+    return std::min(
+        target, applied + std::min(kSlewRise,
+                                   rate_over(elapsed, kSlewRise, kSlewEvery)));
+  }
+  if (stable_for < kLiveWindow) {
+    return applied;
+  }
+  return std::max(
+      target,
+      applied - std::min(kSlewFall, rate_over(elapsed, kSlewFall,
+                                              std::chrono::seconds(1))));
+}
+
 std::optional<Playout> LiveClock::time() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return state_;
@@ -128,11 +150,19 @@ std::optional<nanoseconds> LiveClock::point() const noexcept {
 
 std::int64_t LiveClock::now_pts(const Playout& playout,
                                 Clock::time_point now) const noexcept {
+  if (audio_playing_.load(std::memory_order_acquire)) {
+    if (const AudioMaster* const audio =
+            audio_.load(std::memory_order_acquire)) {
+      if (const std::optional<std::int64_t> heard = audio->heard_pts(now)) {
+        return *heard;
+      }
+    }
+  }
   return pts_at(playout.point, now);
 }
 
 void LiveClock::arrived(std::uint64_t pts_ns, Clock::time_point at,
-                        nanoseconds program_need) {
+                        nanoseconds program_need, nanoseconds audio_need) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!state_) {
     first_at_ = at;  // the connection's first record
@@ -142,6 +172,7 @@ void LiveClock::arrived(std::uint64_t pts_ns, Clock::time_point at,
   // Its offset as it arrived: update's.
   push(arrivals_, &arrivals_head_, &arrivals_size_, Arrival{at, ahead, ahead});
   program_need_ = std::max(program_need, nanoseconds(0));
+  audio_need_ = std::max(audio_need, nanoseconds(0));
   update(at, /*arrival=*/true);
 }
 
@@ -158,10 +189,11 @@ void LiveClock::reset() {
   std::lock_guard<std::mutex> lock(mutex_);
   arrivals_head_ = arrivals_size_ = 0;
   leads_head_ = leads_size_ = 0;
-  program_need_ = nanoseconds(0);
+  program_need_ = audio_need_ = nanoseconds(0);
   state_.reset();
-  first_at_ = stepped_at_ = Clock::time_point{};
+  first_at_ = stepped_at_ = rose_at_ = Clock::time_point{};
   point_ns_.store(kNoPoint, std::memory_order_release);
+  audio_playing_.store(false, std::memory_order_release);
 }
 
 void LiveClock::update(Clock::time_point at, bool arrival) {
@@ -207,18 +239,28 @@ void LiveClock::update(Clock::time_point at, bool arrival) {
   } else if (arrival_need > nanoseconds(0)) {
     next.need = DelayNeed::kArrival;
   }
+  if (audio_need_ > need) {
+    need = audio_need_;
+    next.need = DelayNeed::kAudio;
+  }
   next.clamped = need > kMaxLiveDelay;
   next.target = std::min(need, kMaxLiveDelay);
+  if (!state_ || next.target > state_->target) {
+    rose_at_ = at;
+  }
   const nanoseconds target_point = next.offset + next.target;
   if (!state_) {
     next.point = target_point;
   } else {
-    // Settling, the offset's fall carries the point at once; D's is stepped.
+    // Settling, the offset's fall carries the point at once; D's is stepped,
+    // or slewed while audio plays.
     nanoseconds applied = state_->point;
     if (at - first_at_ < kLiveWindow && next.offset < state_->offset) {
       applied -= state_->offset - next.offset;
     }
-    next.point = step_point(applied, target_point, elapsed);
+    next.point = audio_playing_.load(std::memory_order_acquire)
+                     ? slew_point(applied, target_point, elapsed, at - rose_at_)
+                     : step_point(applied, target_point, elapsed);
   }
   stepped_at_ = at;
   state_ = next;

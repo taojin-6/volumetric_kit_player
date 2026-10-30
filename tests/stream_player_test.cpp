@@ -121,7 +121,14 @@
 // joining at the key; a full ring of records held stops the reads until they
 // are released; records that come while a backlog drains are stamped as they
 // come; and a park waits for a program's live hook, on_park overlapping
-// none. A file asks no live hook and is released when due, with no playout.
+// none. Live with an Audio track, served beside the geometry by one
+// StreamServer, through the null output: every frame comes in order, one
+// output is made, the audio's records reach it on the live clock, audio's
+// need sets D and what is heard is the clock's master, near the picture's
+// now; audio records riding ahead of their pts never feed the offset; and a
+// stream with no Audio track makes no output, states no need and never plays
+// audio on the clock. A file asks no live hook and is released when due,
+// with no playout.
 // On the host: open refuses what it cannot play, and connect an empty host
 // or port 0. The device tests
 // skip with no device. A stop that no control can wake fails only on ctest's
@@ -4041,6 +4048,61 @@ class Publisher {
   std::thread thread_;  // last: it uses the above
 };
 
+// Publishes the tests' stream and an Audio track (track 1) to a server of
+// both on a thread of its own, until destroyed: record n of the stream each
+// `period`, its pts n periods, then the Audio chunks it carries, muxed by
+// pts as grid's CodecStream does: every chunk of kAudioChunk silent frames
+// at or before the record's pts, each chunk's pts then moved by `shift`.
+class TwoTrackSender {
+ public:
+  TwoTrackSender(networking::StreamServer& server, const Recording& recording,
+                 std::chrono::milliseconds period,
+                 std::chrono::nanoseconds shift = {})
+      : start_(SteadyClock::now()),
+        thread_([this, &server, &recording, period, shift] {
+          const Bytes pcm(kAudioChunk * 2, 0);
+          SteadyClock::time_point due = start_;
+          std::uint64_t chunk = 0;
+          for (std::uint64_t n = 0; !stop_; ++n) {
+            const std::uint64_t i = n % kFrames;
+            stream::RecordInfo info = recording.infos[i];
+            info.seq = n;
+            info.pts_ns = n * static_cast<std::uint64_t>(
+                                  std::chrono::nanoseconds(period).count());
+            EXPECT_TRUE(server
+                            .publish(info, recording.payloads[i].data(),
+                                     recording.payloads[i].size())
+                            .ok());
+            for (; chunk * kAudioChunkNs <= info.pts_ns; ++chunk) {
+              stream::RecordInfo audio;
+              audio.track = 1;
+              audio.key = true;
+              audio.seq = chunk;
+              audio.pts_ns = chunk * kAudioChunkNs +
+                             static_cast<std::uint64_t>(shift.count());
+              EXPECT_TRUE(server.publish(audio, pcm.data(), pcm.size()).ok());
+            }
+            due += period;
+            std::this_thread::sleep_until(due);
+          }
+        }) {}
+  ~TwoTrackSender() {
+    stop_ = true;
+    thread_.join();
+  }
+  TwoTrackSender(const TwoTrackSender&) = delete;
+  TwoTrackSender& operator=(const TwoTrackSender&) = delete;
+
+  // Before its first publish: record n is published no earlier than this
+  // plus n periods.
+  SteadyClock::time_point start() const { return start_; }
+
+ private:
+  const SteadyClock::time_point start_;
+  std::atomic<bool> stop_{false};
+  std::thread thread_;  // last: it uses the above
+};
+
 class LivePlayerTest : public StreamPlayerTest {
  protected:
   void SetUp() override {
@@ -4093,12 +4155,14 @@ class LivePlayerTest : public StreamPlayerTest {
     ASSERT_TRUE(published.ok()) << published.message();
   }
 
-  // A live player of `host`:`port`, started on the test's device, with
+  // A live player of `host`:`port`, its audio through what `make_audio`
+  // makes (the null output by default), started on the test's device, with
   // hooks_ when set; the fixture owns it.
-  StreamPlayer* start_live(std::uint16_t port,
-                           const std::string& host = "127.0.0.1") {
+  StreamPlayer* start_live(
+      std::uint16_t port, const std::string& host = "127.0.0.1",
+      volumetric_kit::player::AudioOutMaker make_audio = {}) {
     core::Result<std::unique_ptr<StreamPlayer>> connected =
-        StreamPlayer::connect({host, port});
+        StreamPlayer::connect({host, port}, std::move(make_audio));
     EXPECT_TRUE(connected.ok()) << connected.status().message();
     if (!connected.ok()) {
       return nullptr;
@@ -4337,6 +4401,34 @@ class LivePlayerTest : public StreamPlayerTest {
                       std::uint64_t step_ns = kLiveStepNs) {
     publish_at(server, n, n * step_ns);
   }
+  // The stream's session with an Audio track after its geometry, on its
+  // clock: kAudioRate mono, kAudioChunk frames a record.
+  stream::Session two_track_session() const {
+    stream::Session session = recording_.session;
+    stream::Track audio;
+    audio.kind = stream::TrackKind::Audio;
+    audio.clock = session.tracks[0].clock;
+    audio.rate = {kAudioRate, static_cast<std::uint32_t>(kAudioChunk)};
+    stream::AudioParams params;
+    params.sample_rate = kAudioRate;
+    audio.params = stream::encode_audio_params(params);
+    session.tracks.push_back(audio);
+    return session;
+  }
+
+  // An audio output maker that counts what it made: null outputs on
+  // steady_clock, each on a thread of its own.
+  volumetric_kit::player::AudioOutMaker counting_maker(
+      std::shared_ptr<std::atomic<int>> made) {
+    return [made](const AudioFormat& format)
+               -> core::Result<std::unique_ptr<AudioOut>> {
+      ++*made;
+      VKC_ASSIGN(std::unique_ptr<NullAudioOut> out,
+                 NullAudioOut::create(format));
+      return std::unique_ptr<AudioOut>(std::move(out));
+    };
+  }
+
   // Publish record `n` of the stream looped, at `pts_ns`.
   void publish_at(networking::StreamServer& server, std::uint64_t n,
                   std::uint64_t pts_ns) {
@@ -5783,6 +5875,141 @@ TEST_F(LivePlayerTest, AParkWaitsForAProgramsLiveHookAndOnParkOverlapsNone) {
   }
   EXPECT_EQ(seen->overlaps, 0);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// An in-process sender of two tracks (grid's StreamServer serves both),
+// played with the null output: every frame comes, in order; one output is
+// made, of the track's format; the Audio track's records reach it, placed
+// on the live clock; audio's need sets D; and what is heard is the clock's
+// master, near the picture's now.
+TEST_F(LivePlayerTest, ATwoTrackStreamPlaysItsAudioOnTheLiveClock) {
+  const std::unique_ptr<networking::StreamServer> server =
+      serve(two_track_session());
+  ASSERT_NE(server, nullptr);
+  const auto made = std::make_shared<std::atomic<int>>(0);
+  StreamPlayer* player =
+      start_live(server->port(), "127.0.0.1", counting_maker(made));
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  std::vector<FrameStamp> frames;
+  bool mastered = false;
+  {
+    const TwoTrackSender sender(*server, recording_, 40ms);
+    FrameTaker taker(*player, exchange_, kFramesInFlight);
+    const SteadyClock::time_point until = SteadyClock::now() + 3s;
+    while (SteadyClock::now() < until) {
+      const std::optional<FrameStamp> frame = take_with(taker);
+      ASSERT_TRUE(frame.has_value()) << player->status().message();
+      frames.push_back(*frame);
+      mastered = mastered || player->live_clock()->audio_playing();
+    }
+    // What is heard, against the picture's now, while records still come.
+    const std::optional<Playout> playout = player->live_clock()->time();
+    const std::optional<std::uint64_t> heard = player->audio_position();
+    ASSERT_TRUE(playout && heard);
+    const std::int64_t off =
+        static_cast<std::int64_t>(*heard) -
+        volumetric_kit::player::pts_at(playout->point, SteadyClock::now());
+    EXPECT_LE(
+        std::abs(off),
+        std::chrono::nanoseconds(volumetric_kit::player::kAudioReach).count())
+        << "heard " << off / 1'000'000 << " ms off the picture's now";
+  }
+  EXPECT_EQ(made->load(), 1);
+  for (std::size_t i = 1; i < frames.size(); ++i) {
+    EXPECT_GT(frames[i].index, frames[i - 1].index);
+  }
+  const volumetric_kit::player::LiveAudioStats stats =
+      player->live_audio()->stats();
+  EXPECT_GT(stats.records, 100u) << "10 ms chunks over 3 s";
+  EXPECT_GE(stats.placements, 1u);
+  EXPECT_TRUE(mastered) << "what is heard never the master";
+  EXPECT_TRUE(std::any_of(frames.begin(), frames.end(),
+                          [](const FrameStamp& frame) {
+                            return frame.playout &&
+                                   frame.playout->need == DelayNeed::kAudio &&
+                                   frame.playout->target >=
+                                       volumetric_kit::player::kAudioNeedLeast;
+                          }))
+      << "audio's need never set D";
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Audio records never feed the clock's offset: each riding 500 ms ahead of
+// its pts, the offset stays the geometry's, no lower than the sender's
+// start. Mutant: audio arrivals feeding the offset.
+TEST_F(LivePlayerTest, AudioRecordsNeverFeedTheOffset) {
+  const std::unique_ptr<networking::StreamServer> server =
+      serve(two_track_session());
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  std::vector<FrameStamp> frames;
+  SteadyClock::time_point started;
+  {
+    const TwoTrackSender sender(*server, recording_, 40ms, 500ms);
+    started = sender.start();
+    FrameTaker taker(*player, exchange_, kFramesInFlight);
+    const SteadyClock::time_point until = SteadyClock::now() + 1500ms;
+    while (SteadyClock::now() < until) {
+      const std::optional<FrameStamp> frame = take_with(taker);
+      ASSERT_TRUE(frame.has_value()) << player->status().message();
+      frames.push_back(*frame);
+    }
+  }
+  ASSERT_FALSE(frames.empty());
+  EXPECT_GT(player->live_audio()->stats().records, 0u) << "audio came";
+  for (const FrameStamp& frame : frames) {
+    SCOPED_TRACE(::testing::Message() << "frame " << frame.index);
+    ASSERT_TRUE(frame.playout.has_value());
+    // Record n is published at the sender's start plus n periods at the
+    // earliest, its pts n periods: its arrival less its pts is no less.
+    EXPECT_GE(frame.playout->offset, started.time_since_epoch() - 1ms);
+    EXPECT_LE(
+        frame.playout->offset,
+        frame.due.time_since_epoch() - std::chrono::nanoseconds(frame.pts_ns));
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
+}
+
+// A live stream with no Audio track plays as before: no output is made,
+// there is no audio need, audio never plays on the clock, and D is set by
+// arrival alone.
+TEST_F(LivePlayerTest, AStreamWithNoAudioTrackMakesNoOutputAndNoNeed) {
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  const auto made = std::make_shared<std::atomic<int>>(0);
+  StreamPlayer* player =
+      start_live(server->port(), "127.0.0.1", counting_maker(made));
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  std::vector<FrameStamp> frames;
+  bool ever_playing = false;
+  {
+    const Publisher publisher(*server, recording_, 40ms);
+    FrameTaker taker(*player, exchange_, kFramesInFlight);
+    const SteadyClock::time_point until = SteadyClock::now() + 1500ms;
+    while (SteadyClock::now() < until) {
+      const std::optional<FrameStamp> frame = take_with(taker);
+      ASSERT_TRUE(frame.has_value()) << player->status().message();
+      frames.push_back(*frame);
+      ever_playing = ever_playing || player->live_clock()->audio_playing();
+    }
+  }
+  EXPECT_EQ(made->load(), 0);
+  EXPECT_FALSE(ever_playing);
+  EXPECT_EQ(player->live_audio()->need(), std::chrono::nanoseconds(0));
+  EXPECT_EQ(player->live_audio()->stats().records, 0u);
+  EXPECT_FALSE(player->audio_position().has_value());
+  EXPECT_EQ(player->live_status().audio_late, std::chrono::nanoseconds(0));
+  for (const FrameStamp& frame : frames) {
+    ASSERT_TRUE(frame.playout.has_value());
+    EXPECT_NE(frame.playout->need, DelayNeed::kAudio) << frame.index;
+    EXPECT_NE(frame.playout->need, DelayNeed::kProgram) << frame.index;
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
 }
 
 TEST(StreamPlayerConnect, RefusesNoHostOrPortAndHasNoTrack) {

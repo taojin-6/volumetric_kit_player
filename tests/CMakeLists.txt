@@ -48,6 +48,8 @@ vp_add_test(audio_out volumetric_kit::player)
 vp_add_test(audio_clock volumetric_kit::player)
 vp_add_test(device_audio_out volumetric_kit::player)
 vp_add_test(audio_feeder volumetric_kit::player)
+# A live stream's audio on the live clock, simulated on a manual clock.
+vp_add_test(live_audio volumetric_kit::player)
 # The decode and mesh worker, on a device (the core's fixtures), over the tests'
 # streams.
 vp_add_test(stream_player STREAMS volumetric_kit::player

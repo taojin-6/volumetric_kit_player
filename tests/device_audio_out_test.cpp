@@ -13,7 +13,9 @@
 // interruption stops it and asks the player to pause, once; its end starts
 // it unless parked, and an unpark ends one that never ended, trying a start.
 // A configuration change starts it again, re-reading the route; a device
-// gone asks the player to pause. Onto a route of longer latency the
+// gone asks the player to pause. A shift's insert holds what is heard
+// through its silence, the frames after it heard as they pass the output.
+// Onto a route of longer latency the
 // position never goes back; a restart begins a new run even where its
 // frames follow on; and a start's renders before its route is read play
 // silence and take nothing. The route is read while a start is under way
@@ -291,6 +293,31 @@ TEST_F(DeviceAudioOutTest, ARouteChangeToALongerLatencyNeverMovesItBack) {
 // A restart begins a new run even where its first render follows on, at the
 // old run's end with the pts after it, so the new frames are heard at the
 // new route's latency. Mutant: render_at that misses the restart.
+// A shift's insert of 10 ms, begun in the render at 20 ms and leading the
+// next: what is heard holds through its silence, then the frames after it
+// are heard from when they pass the output, a new run.
+TEST_F(DeviceAudioOutTest, AnInsertHoldsWhatIsHeardThroughItsSilence) {
+  fill();
+  const std::uint64_t start = now();
+  render_now();
+  advance(10 * kMs);
+  render_now();
+  advance(10 * kMs);
+  out_->shift(static_cast<std::int64_t>(kFrames));
+  render_now();  // 5 ms of frames, faded out, then 5 ms of silence
+  advance(10 * kMs);
+  render_now();  // 5 ms of silence, then 5 ms of frames
+  EXPECT_EQ(out_->position(), kPts + 20 * kMs);
+  advance(10 * kMs);
+  EXPECT_EQ(out_->position(), kPts + 25 * kMs) << "held through the silence";
+  advance(5 * kMs);
+  EXPECT_EQ(out_->position(), kPts + 25 * kMs);
+  advance(2 * kMs);
+  EXPECT_EQ(out_->position(), kPts + 27 * kMs);
+  EXPECT_EQ(now(), start + 47 * kMs);
+  EXPECT_EQ(out_->stats().underruns, 0u);
+}
+
 TEST_F(DeviceAudioOutTest, ARestartBeginsANewRunThoughItsFramesFollowOn) {
   fill();
   const std::uint64_t start = now();

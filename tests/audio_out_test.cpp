@@ -12,10 +12,18 @@
 // position holds; a short ring renders silence, counted as an underrun once
 // flushed, the position stopping at its last frame; a render says what it
 // took, from which pts, and whether it flushed; the gain scales what
-// goes out, and at 0 the position runs on. The null output renders what its
+// goes out, and at 0 the position runs on. A shift's insert plays silence,
+// the frames before it fading out and those after fading back in, the
+// position holding, over the renders after it when longer than one, which
+// say so; a drop crossfades at a render's start into the frames it skips
+// to, a step a render, waiting for the frames it needs, the position
+// jumping; shifts add up, a flush cancels them, paused none is made, and
+// none is an underrun. The null output renders what its
 // clock says played, carrying the remainder of a frame, at most a second a
 // tick, on a manual clock by the caller's ticks or on steady_clock by its
-// own thread, and refuses a rate of 0 or other than 1 or 2 channels; it is
+// own thread, its position running on between ticks through what it holds
+// and held while paused or inserting, and refuses a rate of 0 or other than
+// 1 or 2 channels; it is
 // the platform's output off Apple, and on Apple under the tests' backstop,
 // where the Apple output refuses. The conversions between frames and time
 // round as stated and do not overflow.
@@ -359,6 +367,156 @@ TEST(AudioOut, TheGainScalesWhatGoesOutAndAtZeroThePositionRunsOn) {
   EXPECT_EQ(out.next(1), std::vector<float>{12.0f});
 }
 
+// At kRate, kShiftFade is 40 frames and kDropStep 80.
+constexpr std::size_t kFade = 40;
+constexpr std::size_t kStep = 80;
+
+// A fade's gain at frame `i`, as the output's: from near 0 to near 1.
+float faded_in(std::size_t i) {
+  return (static_cast<float>(i) + 0.5f) / static_cast<float>(kFade);
+}
+
+// An insert inside one render: the frames before it fade out, its silence
+// ends the render, the position holding, and the next frames fade back in.
+// None of it is an underrun.
+TEST(AudioOutShift, AnInsertPlaysSilenceThePositionHolding) {
+  TestOut out({kRate, 1});
+  out.flush(kStart);
+  const std::vector<float> ones(1000, 1.0f);
+  out.write(ones.data(), ones.size());
+  out.play();
+  EXPECT_EQ(out.next(100), std::vector<float>(100, 1.0f));
+  out.shift(160);  // 20 ms
+  EXPECT_EQ(out.shifting(), 160);
+  std::vector<float> samples(200);
+  const Rendered took = out.render(samples.data(), 200);
+  EXPECT_EQ(took.frames, kFade) << "a fade's frames, then its silence";
+  EXPECT_EQ(took.silence_before, 0u);
+  for (std::size_t i = 0; i < kFade; ++i) {
+    EXPECT_FLOAT_EQ(samples[i], 1.0f - faded_in(i)) << i;
+  }
+  EXPECT_EQ(std::vector<float>(samples.begin() + kFade, samples.end()),
+            std::vector<float>(160, 0.0f));
+  EXPECT_EQ(out.shifting(), 0);
+  EXPECT_EQ(out.position(), kStart + audio_ns(140, kRate))
+      << "held through the silence";
+  const std::vector<float> after = out.next(100);
+  for (std::size_t i = 0; i < kFade; ++i) {
+    EXPECT_FLOAT_EQ(after[i], faded_in(i)) << i;
+  }
+  EXPECT_EQ(std::vector<float>(after.begin() + kFade, after.end()),
+            std::vector<float>(60, 1.0f));
+  EXPECT_EQ(out.position(), kStart + audio_ns(240, kRate));
+  EXPECT_EQ(out.stats().underruns, 0u);
+}
+
+// An insert longer than a render leads the renders after it, which say so
+// (Rendered::silence_before), its silence exactly what was asked.
+TEST(AudioOutShift, AnInsertLongerThanARenderLeadsTheNext) {
+  TestOut out({kRate, 1});
+  out.flush(kStart);
+  const std::vector<float> ones(1000, 1.0f);
+  out.write(ones.data(), ones.size());
+  out.play();
+  out.next(0);  // the flush applied: it cancels shifts asked before
+  out.shift(300);
+  std::vector<float> samples(100);
+  std::size_t silence = 0;
+  std::size_t taken = 0;
+  std::vector<Rendered> renders;
+  for (int i = 0; i < 4; ++i) {
+    renders.push_back(out.render(samples.data(), 100));
+    silence += 100 - renders.back().frames;
+    taken += renders.back().frames;
+  }
+  EXPECT_EQ(silence, 300u);
+  EXPECT_EQ(renders[0].frames, kFade);
+  EXPECT_EQ(renders[0].silence_before, 0u);
+  EXPECT_EQ(renders[1].frames, 0u);
+  EXPECT_EQ(renders[1].silence_before, 100u);
+  EXPECT_EQ(renders[2].silence_before, 100u);
+  EXPECT_EQ(renders[3].silence_before, 40u);
+  EXPECT_EQ(renders[3].frames, 60u);
+  EXPECT_EQ(renders[3].pts_ns, kStart + audio_ns(kFade, kRate))
+      << "the frames after the silence follow on";
+  EXPECT_EQ(out.position(), kStart + audio_ns(taken, kRate));
+  EXPECT_EQ(out.shifting(), 0);
+  EXPECT_EQ(out.stats().underruns, 0u);
+}
+
+// A drop crossfades at a render's start from the frames at the read index
+// into those it skips to, the position jumping past them; a drop past
+// kDropStep takes a crossfade a render; and one waits for the frames it
+// needs. None of it is an underrun.
+TEST(AudioOutShift, ADropCrossfadesPastItsFramesThePositionJumping) {
+  TestOut out({kRate, 1});
+  out.flush(kStart);
+  const std::vector<float> a = ramp(0.0f, 2000);
+  out.write(a.data(), a.size());
+  out.play();
+  out.next(100);
+  out.shift(-static_cast<std::int64_t>(kStep));
+  std::vector<float> samples(100);
+  const Rendered took = out.render(samples.data(), 100);
+  for (std::size_t i = 0; i < kFade; ++i) {
+    const float in = faded_in(i);
+    EXPECT_FLOAT_EQ(samples[i],
+                    a[100 + i] * (1.0f - in) + a[100 + kStep + i] * in)
+        << i;
+  }
+  for (std::size_t i = kFade; i < 100; ++i) {
+    EXPECT_EQ(samples[i], a[100 + kStep + i]) << i;
+  }
+  EXPECT_EQ(took.frames, 100u);
+  EXPECT_EQ(took.pts_ns, kStart + audio_ns(100 + kStep, kRate))
+      << "the frames it fades into";
+  EXPECT_EQ(out.position(), kStart + audio_ns(200 + kStep, kRate));
+  EXPECT_EQ(out.shifting(), 0);
+  // Past a step: a crossfade a render.
+  out.shift(-200);
+  out.next(100);
+  EXPECT_EQ(out.shifting(), -120);
+  out.next(100);
+  EXPECT_EQ(out.shifting(), -40);
+  out.next(100);
+  EXPECT_EQ(out.shifting(), 0);
+  EXPECT_EQ(out.position(), kStart + audio_ns(500 + kStep + 200, kRate));
+  EXPECT_EQ(out.stats().underruns, 0u);
+  // Too few frames held: it waits, the frames playing meanwhile.
+  TestOut short_out({kRate, 1});
+  short_out.flush(kStart);
+  short_out.write(a.data(), 100);
+  short_out.play();
+  short_out.next(0);
+  short_out.shift(-static_cast<std::int64_t>(kStep));
+  EXPECT_EQ(short_out.next(50), std::vector<float>(a.begin(), a.begin() + 50));
+  EXPECT_EQ(short_out.shifting(), -static_cast<std::int64_t>(kStep));
+  short_out.write(a.data() + 100, 200);
+  short_out.next(50);
+  EXPECT_EQ(short_out.shifting(), 0);
+  EXPECT_EQ(short_out.position(), kStart + audio_ns(100 + kStep, kRate));
+}
+
+// Shifts add up; a flush cancels those not yet made; paused, none is made.
+TEST(AudioOutShift, ShiftsAddUpAFlushCancelsThemAndPausedNoneIsMade) {
+  TestOut out({kRate, 1});
+  out.flush(kStart);
+  const std::vector<float> ones(1000, 1.0f);
+  out.write(ones.data(), ones.size());
+  out.next(0);  // the flush applied
+  out.shift(100);
+  out.shift(-30);
+  EXPECT_EQ(out.shifting(), 70);
+  out.next(50);  // paused: nothing taken, nothing made
+  EXPECT_EQ(out.shifting(), 70);
+  out.flush(kStart + 1'000'000);
+  out.write(ones.data(), ones.size());
+  out.play();
+  EXPECT_EQ(out.next(100), std::vector<float>(100, 1.0f))
+      << "the flush cancelled the insert";
+  EXPECT_EQ(out.shifting(), 0);
+}
+
 std::unique_ptr<NullAudioOut> by_caller(const ManualClock& clock,
                                         std::uint16_t channels = 1) {
   core::Result<std::unique_ptr<NullAudioOut>> out = NullAudioOut::create(
@@ -390,6 +548,34 @@ TEST(NullAudioOut, ThePositionFollowsItsClock) {
     out->tick();
   }
   EXPECT_EQ(out->position(), kStart + 35'000'000);
+}
+
+// Between ticks its position runs on by its clock, as a device's does,
+// through the frames it holds and no further; paused, and through an
+// insert, it holds.
+TEST(NullAudioOut, BetweenTicksThePositionRunsOnThroughWhatItHolds) {
+  ManualClock clock;
+  std::unique_ptr<NullAudioOut> out = by_caller(clock);
+  ASSERT_NE(out, nullptr);
+  const std::vector<float> a(800, 0.25f);  // 100 ms
+  out->flush(kStart);
+  ASSERT_EQ(out->write(a.data(), 400), 400u);  // 50 ms
+  out->play();
+  out->tick();
+  clock.advance(7ms);
+  EXPECT_EQ(out->position(), kStart + 7'000'000) << "run on by its clock";
+  clock.advance(93ms);
+  EXPECT_EQ(out->position(), kStart + 50'000'000) << "no further than held";
+  out->tick();
+  EXPECT_EQ(out->position(), kStart + 50'000'000);
+  ASSERT_EQ(out->write(a.data(), 800), 800u);
+  out->tick();
+  out->pause();
+  clock.advance(10ms);
+  EXPECT_EQ(out->position(), kStart + 50'000'000) << "paused: held";
+  out->play();
+  out->shift(80);
+  EXPECT_EQ(out->position(), kStart + 50'000'000) << "an insert: held";
 }
 
 TEST(NullAudioOut, PausedItsPositionHolds) {

@@ -20,16 +20,25 @@
 // need sets the target, a tie named arrival; the clamp at kMaxLiveDelay; the
 // lead is the largest over the window; point() is time()'s point after each
 // write; reset forgets everything; and after a warm-up, ten thousand records
-// and publishes allocate nothing.
+// and publishes allocate nothing. While audio plays the point slews, up
+// kSlewRise a kSlewEvery and at most that a step, down only once the target
+// has not risen for kLiveWindow, kSlewFall a second and at most that a step,
+// never past its target; a clock told of audio that does not play is the
+// clock it was; audio's need sets the target when it is the largest, named
+// audio and clamped; now_pts is what is heard while audio plays and is heard;
+// and point() is read on another thread while the worker writes, under
+// ThreadSanitizer.
 
 #include "volumetric_kit/player/live_clock.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <thread>
 
 #include "test_allocation_failure.hpp"
 
@@ -129,10 +138,41 @@ TEST(LiveClockTimes, ThePointRisesAtOnceAndFallsAtKPointFallASecond) {
   EXPECT_EQ(vkp::kPointFall, ms(25));
 }
 
+TEST(LiveClockTimes, WhileAudioPlaysThePointRisesByStepsAndFallsOnceStable) {
+  EXPECT_EQ(vkp::kSlewRise, ms(20));
+  EXPECT_EQ(vkp::kSlewEvery, ms(100));
+  EXPECT_EQ(vkp::kSlewFall, ms(10));
+  const nanoseconds unstable(0);
+  // Up: kSlewRise a kSlewEvery, at most kSlewRise a step, never past.
+  EXPECT_EQ(vkp::slew_point(ms(100), ms(300), ms(40), unstable), ms(108));
+  EXPECT_EQ(vkp::slew_point(ms(100), ms(300), ms(100), unstable), ms(120));
+  EXPECT_EQ(vkp::slew_point(ms(100), ms(300), seconds(2), unstable), ms(120))
+      << "a step at most, however long since the last";
+  EXPECT_EQ(vkp::slew_point(ms(100), ms(105), ms(100), unstable), ms(105));
+  EXPECT_EQ(vkp::slew_point(ms(100), ms(100), ms(100), unstable), ms(100));
+  EXPECT_EQ(vkp::slew_point(ms(100), ms(300), nanoseconds(0), unstable),
+            ms(100));
+  EXPECT_EQ(vkp::slew_point(ms(100), ms(300), seconds(3'600), unstable),
+            ms(120))
+      << "no overflow";
+  // Down: not until D's target has not risen for kLiveWindow; then
+  // kSlewFall a second, at most kSlewFall a step, never past.
+  const nanoseconds stable = vkp::kLiveWindow;
+  EXPECT_EQ(
+      vkp::slew_point(ms(300), ms(100), seconds(1), stable - nanoseconds(1)),
+      ms(300));
+  EXPECT_EQ(vkp::slew_point(ms(300), ms(100), seconds(1), stable), ms(290));
+  EXPECT_EQ(vkp::slew_point(ms(300), ms(100), ms(40), stable), ms(299.6));
+  EXPECT_EQ(vkp::slew_point(ms(300), ms(100), seconds(5), stable), ms(290))
+      << "a step at most";
+  EXPECT_EQ(vkp::slew_point(ms(105), ms(100), seconds(1), stable), ms(100));
+}
+
 TEST(LiveClockNames, EachNeedHasItsName) {
   EXPECT_STREQ(vkp::to_string(DelayNeed::kNone), "none");
   EXPECT_STREQ(vkp::to_string(DelayNeed::kArrival), "arrival");
   EXPECT_STREQ(vkp::to_string(DelayNeed::kProgram), "program");
+  EXPECT_STREQ(vkp::to_string(DelayNeed::kAudio), "audio");
 }
 
 // Record `k` of a steady stream, its pts k periods from 0, arriving `late`
@@ -473,6 +513,154 @@ TEST(LiveClock, PointIsTimesPointAfterEachWrite) {
                     t0 + kPeriod * static_cast<std::int64_t>(k) + ms(9));
     ASSERT_EQ(clock.point(), clock.time()->point) << "publish " << k;
   }
+}
+
+// What a test says is heard (LiveClock::set_audio_master).
+class Heard final : public vkp::AudioMaster {
+ public:
+  std::optional<std::int64_t> heard_pts(
+      Clock::time_point) const noexcept override {
+    return pts;
+  }
+  std::optional<std::int64_t> pts;
+};
+
+// While audio plays, a need rising 200 ms at once raises D's target at once
+// and the applied D 8 ms a record (kSlewRise a kSlewEvery, at 25 Hz); its
+// fall holds it until the target has not risen for kLiveWindow, then lowers
+// it 0.4 ms a record (kSlewFall a second). Without audio, the same records
+// step it: up at once, down 1 ms a record. Mutant: the slew bypassed.
+TEST(LiveClock, WhileAudioPlaysTheAppliedDSlews) {
+  for (const bool audio : {true, false}) {
+    SCOPED_TRACE(audio ? "audio plays" : "no audio");
+    LiveClock clock;
+    clock.set_audio_playing(audio);
+    std::uint64_t k = 0;
+    steady(clock, k++);
+    EXPECT_EQ(now_of(clock).delay(), nanoseconds(0));
+    for (; k <= 30; ++k) {
+      steady(clock, k, {}, ms(200));
+      const Playout playout = now_of(clock);
+      ASSERT_EQ(playout.target, ms(200)) << "record " << k;
+      ASSERT_EQ(playout.need, DelayNeed::kProgram);
+      const nanoseconds slewed = std::min(
+          nanoseconds(8'000'000 * static_cast<std::int64_t>(k)), ms(200));
+      ASSERT_EQ(playout.delay(), audio ? slewed : ms(200)) << "record " << k;
+    }
+    for (; k <= 300; ++k) {
+      steady(clock, k);
+      const Playout playout = now_of(clock);
+      ASSERT_EQ(playout.target, nanoseconds(0)) << "record " << k;
+      // The target last rose at record 1, kLiveWindow before record 251.
+      const auto past = [](std::uint64_t from, std::uint64_t k) {
+        return static_cast<std::int64_t>(k > from ? k - from : 0);
+      };
+      const nanoseconds want =
+          audio ? ms(200) - nanoseconds(400'000 * past(250, k))
+                : std::max(ms(200) - ms(1) * past(30, k), nanoseconds(0));
+      ASSERT_EQ(playout.delay(), want) << "record " << k;
+    }
+  }
+}
+
+// A clock told of audio that does not play, as a live stream with no Audio
+// track, is the clock it was: the same playout at every write, over jittered
+// records with a program's needs and publishes, and the picture's now.
+TEST(LiveClock, WithNoAudioPlayingItIsTheClockItWas) {
+  Heard heard;
+  heard.pts = 123;
+  LiveClock plain;
+  LiveClock told;
+  told.set_audio_master(&heard);
+  for (std::uint64_t k = 0; k < 600; ++k) {
+    const nanoseconds late = ms(static_cast<double>(k % 7 * 3));
+    const nanoseconds program = ms(static_cast<double>(k / 50 % 3 * 40));
+    const Clock::time_point at =
+        t0 + kPeriod * static_cast<std::int64_t>(k) + late;
+    plain.arrived(k * kPeriodNs, at, program);
+    told.arrived(k * kPeriodNs, at, program, nanoseconds(0));
+    plain.published(ms(static_cast<double>(k % 4)), at + ms(5));
+    told.published(ms(static_cast<double>(k % 4)), at + ms(5));
+    const Playout a = now_of(plain);
+    const Playout b = now_of(told);
+    ASSERT_EQ(a.offset, b.offset) << "record " << k;
+    ASSERT_EQ(a.point, b.point) << "record " << k;
+    ASSERT_EQ(a.target, b.target) << "record " << k;
+    ASSERT_EQ(a.need, b.need) << "record " << k;
+    ASSERT_EQ(a.clamped, b.clamped) << "record " << k;
+    ASSERT_EQ(a.lead, b.lead) << "record " << k;
+    ASSERT_EQ(told.now_pts(b, at), plain.now_pts(a, at)) << "record " << k;
+  }
+  EXPECT_FALSE(told.audio_playing());
+}
+
+// Audio's need sets the target as any need does: named audio when it is the
+// largest, a larger program's winning, and clamped at kMaxLiveDelay.
+TEST(LiveClock, AudiosNeedSetsTheTargetWhenItIsTheLargest) {
+  LiveClock clock;
+  clock.arrived(0, t0, ms(30), ms(80));
+  EXPECT_EQ(now_of(clock).target, ms(80));
+  EXPECT_EQ(now_of(clock).need, DelayNeed::kAudio);
+  clock.arrived(kPeriodNs, t0 + kPeriod, ms(100), ms(80));
+  EXPECT_EQ(now_of(clock).target, ms(100));
+  EXPECT_EQ(now_of(clock).need, DelayNeed::kProgram);
+  clock.arrived(2 * kPeriodNs, t0 + 2 * kPeriod, ms(100), ms(1'200));
+  EXPECT_EQ(now_of(clock).target, vkp::kMaxLiveDelay);
+  EXPECT_TRUE(now_of(clock).clamped);
+  EXPECT_EQ(now_of(clock).need, DelayNeed::kAudio);
+}
+
+// now_pts is what is heard while audio plays and is heard in step; else
+// the picture's. A reset ends the audio's play.
+TEST(LiveClock, WhileAudioPlaysNowIsWhatIsHeard) {
+  LiveClock clock;
+  steady(clock, 0);
+  const Playout playout = now_of(clock);
+  const std::int64_t picture = vkp::pts_at(playout.point, t0);
+  Heard heard;
+  heard.pts = picture + 7'000'000;
+  EXPECT_EQ(clock.now_pts(playout, t0), picture) << "no master";
+  clock.set_audio_master(&heard);
+  EXPECT_EQ(clock.now_pts(playout, t0), picture) << "not playing";
+  clock.set_audio_playing(true);
+  EXPECT_TRUE(clock.audio_playing());
+  EXPECT_EQ(clock.now_pts(playout, t0), picture + 7'000'000);
+  heard.pts.reset();
+  EXPECT_EQ(clock.now_pts(playout, t0), picture) << "nothing heard in step";
+  clock.reset();
+  EXPECT_FALSE(clock.audio_playing());
+}
+
+// point() read on another thread, as an output's render thread reads it,
+// while the worker writes with audio playing: under ThreadSanitizer no race,
+// and every point read is one the clock could hold, never a torn value.
+TEST(LiveClock, PointIsReadOnAnotherThreadWhileTheWorkerWrites) {
+  LiveClock clock;
+  clock.set_audio_playing(true);
+  std::atomic<bool> done{false};
+  std::atomic<std::uint64_t> reads{0};
+  std::atomic<std::uint64_t> strays{0};
+  const nanoseconds low = t0.time_since_epoch() - ms(50);
+  const nanoseconds high = t0.time_since_epoch() + seconds(2);
+  std::thread reader([&] {
+    while (!done.load()) {
+      if (const std::optional<nanoseconds> point = clock.point()) {
+        if (*point < low || *point > high) {
+          ++strays;
+        }
+      }
+      ++reads;
+    }
+  });
+  for (std::uint64_t k = 0; k < 5'000; ++k) {
+    steady(clock, k, ms(static_cast<double>(k % 5)),
+           ms(k % 100 < 50 ? 120 : 0));
+    clock.published(ms(3), t0 + kPeriod * static_cast<std::int64_t>(k));
+  }
+  done = true;
+  reader.join();
+  EXPECT_GT(reads.load(), 0u);
+  EXPECT_EQ(strays.load(), 0u);
 }
 
 TEST(LiveClock, RecordsAndPublishesAllocateNothing) {

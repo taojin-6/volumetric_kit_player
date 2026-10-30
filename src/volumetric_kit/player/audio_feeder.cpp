@@ -18,19 +18,21 @@ std::uint64_t ns_of(std::chrono::milliseconds ms) {
       std::chrono::duration_cast<std::chrono::nanoseconds>(ms).count());
 }
 
-}  // namespace
-
-std::optional<AudioTrackChoice> find_audio_track(
+// The first Audio track beside `geometry` the player plays, with records by
+// `stats` when given (a file's).
+std::optional<AudioTrackChoice> choose_audio_track(
     const stream::Session& session,
-    const std::vector<stream::TrackStats>& stats, std::uint16_t geometry) {
+    const std::vector<stream::TrackStats>* stats, std::uint16_t geometry) {
   if (geometry >= session.tracks.size()) {
     return std::nullopt;
   }
   const std::uint16_t clock = session.tracks[geometry].clock;
-  for (std::size_t i = 0; i < session.tracks.size() && i < stats.size(); ++i) {
+  for (std::size_t i = 0; i < session.tracks.size(); ++i) {
     const stream::Track& track = session.tracks[i];
-    if (track.kind != stream::TrackKind::Audio || track.clock != clock ||
-        stats[i].records == 0) {
+    if (stats != nullptr && (i >= stats->size() || (*stats)[i].records == 0)) {
+      continue;
+    }
+    if (track.kind != stream::TrackKind::Audio || track.clock != clock) {
       continue;
     }
     const core::Result<stream::AudioParams> params =
@@ -43,6 +45,19 @@ std::optional<AudioTrackChoice> find_audio_track(
     return AudioTrackChoice{static_cast<std::uint16_t>(i), *params};
   }
   return std::nullopt;
+}
+
+}  // namespace
+
+std::optional<AudioTrackChoice> find_audio_track(
+    const stream::Session& session,
+    const std::vector<stream::TrackStats>& stats, std::uint16_t geometry) {
+  return choose_audio_track(session, &stats, geometry);
+}
+
+std::optional<AudioTrackChoice> find_audio_track(const stream::Session& session,
+                                                 std::uint16_t geometry) {
+  return choose_audio_track(session, nullptr, geometry);
 }
 
 std::uint16_t played_channels(std::uint16_t channels) noexcept {

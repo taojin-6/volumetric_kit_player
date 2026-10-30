@@ -56,16 +56,26 @@ struct AudioOutStats {
   std::uint64_t flushes = 0;    ///< Flushes the render thread has applied.
 };
 
-/// @brief What one render took from the ring: the first @ref frames frames
-///        of what went out, the rest silence.
+/// @brief What one render took from the ring: @ref frames frames after
+///        @ref silence_before frames of silence, the rest silence.
 struct Rendered {
   std::size_t frames = 0;  ///< Taken from the ring.
-  bool based = false;      ///< A flush has been applied: the pts are known.
-  bool flushed = false;    ///< This render applied one.
+  /// Silence before the first frame taken: an insert's (AudioOut::shift).
+  std::size_t silence_before = 0;
+  bool based = false;    ///< A flush has been applied: the pts are known.
+  bool flushed = false;  ///< This render applied one.
   /// With @ref based: the first frame taken's pts, or with none the next's.
+  /// After a drop's crossfade, the pts of the frames it fades into.
   std::uint64_t pts_ns = 0;
   std::uint64_t end_pts_ns = 0;  ///< With @ref based: past the last taken.
 };
+
+/// How long each shift fades (AudioOut::shift): an insert fades out over it
+/// and back in after, and a drop crossfades over it.
+inline constexpr std::chrono::milliseconds kShiftFade{5};
+/// The most of a drop one crossfade takes; a larger drop is several in a
+/// row.
+inline constexpr std::chrono::milliseconds kDropStep{10};
 
 /// @brief Where an output's sound goes, as of a moment.
 struct AudioRoute {
@@ -92,15 +102,20 @@ struct AudioRoute {
 /// nothing, so @ref position holds. @ref set_gain scales what goes out; at 0
 /// the frames still go, so @ref position runs on (mute).
 ///
+/// **Shifts** (@ref shift) move what is heard against time without a flush,
+/// at the render thread's next render: an insert plays silence, the
+/// position holding, and a drop skips frames, the position jumping past
+/// them. The frames keep their pts, so the producer places them as before.
+///
 /// **A device output** (DeviceAudioOut) also stops at @ref park and starts
 /// again at @ref unpark, says where its sound goes (@ref route), and asks
 /// its player to pause when the system interrupts it or its device goes
 /// away (@ref take_pause_request). The null output does none of these.
 ///
 /// **Threads.** One producer calls @ref write and @ref flush. The controls,
-/// @ref position, @ref queued, @ref stats and the device calls are safe from
-/// any thread. The render thread, an output's own, calls render(), which
-/// neither locks nor allocates.
+/// @ref shift, @ref shifting, @ref position, @ref queued, @ref stats and the
+/// device calls are safe from any thread. The render thread, an output's
+/// own, calls render(), which neither locks nor allocates.
 ///
 /// @code
 /// VKC_ASSIGN(std::unique_ptr<AudioOut> out, AudioOut::open_default(format));
@@ -168,10 +183,36 @@ class AudioOut {
   /// @return What @ref set_gain last set.
   float gain() const noexcept { return gain_.load(std::memory_order_relaxed); }
 
+  /// @brief Move what is heard by @p frames, from the next render on, while
+  ///        playing: a positive count plays that much silence before the
+  ///        next frame (an insert), @ref position holding meanwhile; a
+  ///        negative one drops that many frames (a drop), @ref position
+  ///        jumping past them. An insert fades out over kShiftFade and back
+  ///        in after; a drop crossfades over kShiftFade, at most kDropStep a
+  ///        crossfade, each once the ring holds the frames it needs. Neither
+  ///        counts as an underrun. Shifts add up, and a flush cancels those
+  ///        not yet made.
+  ///
+  /// @code
+  /// out.shift(audio_frames(10'000'000, rate));    // 10 ms later
+  /// out.shift(-static_cast<std::int64_t>(480));   // 480 frames sooner
+  /// @endcode
+  /// @param frames  Frames: positive to insert, negative to drop.
+  void shift(std::int64_t frames) noexcept {
+    shift_.fetch_add(frames, std::memory_order_acq_rel);
+  }
+  /// @return The frames of shifts not yet made, signed as @ref shift; 0
+  ///         once each has been.
+  std::int64_t shifting() const noexcept {
+    return shift_.load(std::memory_order_acquire) +
+           shift_left_.load(std::memory_order_acquire);
+  }
+
   /// @return The pts of the frame being heard now, on the stream's clock;
-  ///         none until the render thread has applied a @ref flush. The
-  ///         null output's is as of its last render; a device output's is
-  ///         mapped from its renders' times to now (DeviceAudioOut).
+  ///         none until the render thread has applied a @ref flush. Here,
+  ///         as of the last render; the null output's runs on from it by its
+  ///         clock (NullAudioOut::position), and a device output's is mapped
+  ///         from its renders' times to now (DeviceAudioOut).
   virtual std::optional<std::uint64_t> position() const noexcept;
   /// @return What it counted so far.
   AudioOutStats stats() const noexcept;
@@ -196,7 +237,9 @@ class AudioOut {
   /// @brief The render thread's: the next @p frames frames to go out into
   ///        @p out, silence where the ring runs short or while paused,
   ///        scaled by the gain; a @ref flush the producer made first is
-  ///        applied first. It neither locks nor allocates.
+  ///        applied first, then the shifts asked for (@ref shift): an
+  ///        insert's silence leads a render or ends one, and a drop
+  ///        crossfades at a render's start. It neither locks nor allocates.
   /// @param out     Room for @p frames interleaved frames.
   /// @param frames  How many.
   /// @return What it took.
@@ -204,13 +247,29 @@ class AudioOut {
 
  private:
   // The render thread's: apply the producer's last flush, if it has not
-  // been, and is not being written; whether it did.
+  // been, and is not being written; whether it did. It cancels the shifts
+  // not yet made.
   bool apply_flush() noexcept;
+  // The render thread's: a drop's next crossfade into `out`, once the ring
+  // holds its frames: the frames it put out (kShiftFade's), or 0.
+  std::size_t crossfade_drop(float* out) noexcept;
 
   static constexpr std::uint64_t kNoPosition = ~std::uint64_t{0};
 
   AudioFormat format_;
   AudioRing ring_;
+  // kShiftFade and kDropStep in frames, and the render thread's room for a
+  // drop's frames (a step and a fade).
+  std::size_t fade_frames_;
+  std::size_t drop_frames_;
+  std::vector<float> drop_scratch_;
+  // Shifts asked for and not yet taken by the render thread, and those it
+  // took and has not made (its own, published for shifting()); an insert
+  // under way, and the frames still to fade in after one.
+  std::atomic<std::int64_t> shift_{0};
+  std::atomic<std::int64_t> shift_left_{0};
+  bool inserting_ = false;
+  std::size_t fade_in_left_ = 0;
   // The producer's last flush, under a sequence lock: mark_seq_ is odd while
   // the producer writes mark_index_ and mark_pts_.
   std::atomic<std::uint64_t> mark_seq_{0};
@@ -292,10 +351,18 @@ class NullAudioOut final : public AudioOut {
   ///        time.
   void tick() noexcept;
 
+  /// @return The pts heard now, as a device's is: the last tick's
+  ///         position, run on by the time its clock has moved since,
+  ///         through the frames it holds; held while paused and through an
+  ///         insert (AudioOut::shift). None before a flush is applied.
+  std::optional<std::uint64_t> position() const noexcept override;
+
  private:
   NullAudioOut(const AudioFormat& format, Clock clock);
 
-  Clock clock_;
+  Clock clock_;  // read by position() on any thread
+  // The clock's time as the last tick began, ns since its epoch.
+  std::atomic<std::int64_t> ticked_ns_;
   // The render thread's.
   std::chrono::steady_clock::time_point last_;
   std::uint64_t carry_ = 0;     // ns * rate not yet a whole frame

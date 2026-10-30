@@ -6,7 +6,8 @@
 // records and params the player plays; one on another clock, of a codec
 // other than PcmS16, with params that do not decode, of a rate outside the
 // played range or with no record is skipped, as is every Audio track after
-// it. Samples become f32 over 32768, and frames of more than two channels
+// it; live, with no counts, one with no record yet is chosen too. Samples
+// become f32 over 32768, and frames of more than two channels
 // their first two. A record within one chunk of the running position
 // follows on; past it, a forward jump is silence and an overlap is dropped;
 // the first record after a flush is placed exactly. The feeder, on a file:
@@ -306,6 +307,24 @@ TEST(FindAudioTrack, NoneWithoutOne) {
   stats.push_back(stats[0]);
   EXPECT_FALSE(find_audio_track(session, stats, 7).has_value())
       << "no geometry track there";
+}
+
+// Live, with no counts: the same choice, a track with no record yet
+// included, as a sender's records are still to come.
+TEST(FindAudioTrack, LiveTakesTheFirstPlayableTrackWithNoCounts) {
+  stream::Session session;
+  session.tracks = {
+      geometry_track(),         audio_track(1, 2),  // another clock
+      audio_track(0),                               // params that do not decode
+      audio_track(2, 1, 48000), audio_track(1),
+  };
+  std::optional<AudioTrackChoice> chosen = find_audio_track(session, 0);
+  ASSERT_TRUE(chosen.has_value());
+  EXPECT_EQ(chosen->index, 3u);
+  EXPECT_EQ(chosen->params.channels, 2u);
+  session.tracks = {geometry_track(), geometry_track()};
+  EXPECT_FALSE(find_audio_track(session, 0).has_value());
+  EXPECT_FALSE(find_audio_track(session, 5).has_value());
 }
 
 TEST(ToPlayed, SamplesAreOver32768) {

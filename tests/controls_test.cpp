@@ -4,7 +4,8 @@
 // The controls and the stats panel on the host: status_line's,
 // live_status_line's and stats_lines' wording, file and live, a frame's set
 // only where its record names one, a file's audio muted, its latency or off,
-// the deblock's
+// a live stream's audio late while it is and the need it sets D by, the
+// deblock's
 // for each filter with some, none or all of its blocks exact, and off;
 // live_reason; parse_live_address; and
 // draw_controls and StatsPanel on a CPU-only ImGui context fed by gfx's
@@ -377,6 +378,13 @@ TEST(StatsLines, LiveTheDelayLineSaysDAndTheNeedThatSetIt) {
   EXPECT_EQ(delay_line(shown), "delay 1000 ms · arrival · over 1 s");
   shown.playout = Playout{};
   EXPECT_EQ(delay_line(shown), "delay 0 ms · none");
+  // Audio's need names itself, the line as it was.
+  Playout heard;
+  heard.point = milliseconds(80);
+  heard.target = milliseconds(200);  // the stats leave the target out
+  heard.need = DelayNeed::kAudio;
+  shown.playout = heard;
+  EXPECT_EQ(delay_line(shown), "delay 80 ms · audio");
   PlaybackStats live({}, {});
   shown.playout = playout;
   shown.due = t0;
@@ -516,6 +524,24 @@ TEST(LiveStatusLine, NamesTheNewestRecordsSetWhenItHasOne) {
   EXPECT_EQ(live_status_line(status, t0 + milliseconds(3500)),
             "live · seq 1234 · set 77 · nothing for 3 s");
   status.set = stream::kNoSet;
+  EXPECT_EQ(live_status_line(status, t0), "live · seq 1234");
+}
+
+// The only text the audio adds on screen: how late it plays, while it does
+// (a route whose latency needs D past 1 s), to the nearest ms.
+TEST(LiveStatusLine, SaysHowLateTheAudioPlaysWhileItDoes) {
+  LiveStatus status;
+  status.state = LiveState::kLive;
+  status.address = "lab:47801";
+  status.seq = 1234;
+  status.last_record = t0;
+  EXPECT_EQ(live_status_line(status, t0), "live · seq 1234");
+  status.audio_late = std::chrono::microseconds(119'600);
+  EXPECT_EQ(live_status_line(status, t0),
+            "live · seq 1234 · audio late by 120 ms");
+  EXPECT_EQ(live_status_line(status, t0 + milliseconds(3500)),
+            "live · seq 1234 · nothing for 3 s · audio late by 120 ms");
+  status.audio_late = std::chrono::nanoseconds(0);
   EXPECT_EQ(live_status_line(status, t0), "live · seq 1234");
 }
 

@@ -274,6 +274,12 @@ std::string live_status_line(const LiveStatus& status,
   if (now - status.last_record > std::chrono::seconds(1)) {
     line += " · nothing for " + std::to_string(quiet.count()) + " s";
   }
+  if (status.audio_late > std::chrono::nanoseconds(0)) {
+    // To the nearest ms.
+    line += " · audio late by " +
+            std::to_string((status.audio_late.count() + 500'000) / 1'000'000) +
+            " ms";
+  }
   return line;
 }
 

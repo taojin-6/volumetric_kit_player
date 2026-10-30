@@ -40,10 +40,10 @@
 ///   mesh's vertices; its record's set (`FrameStamp::set`); and live, its
 ///   wait as bytes (`buffer_ms`, due to released), then its playout as it
 ///   was taken (`FrameStamp::playout`): the applied D (`delay_ms`), D's
-///   target (`target_ms`), the need that set it (`need`: `none`, `arrival`
-///   or `program`) and `late_ms`, taken less its present time. A figure the
-///   frame lacks is empty, as the set of a record that names none, and a
-///   file's last five.
+///   target (`target_ms`), the need that set it (`need`: `none`, `arrival`,
+///   `program` or `audio`) and `late_ms`, taken less its present time. A
+///   figure the frame lacks is empty, as the set of a record that names
+///   none, and a file's last five.
 /// - `type` is `I` or `P`; `frame` is `FrameStamp::index` and `pass`
 ///   `FrameStamp::pass`.
 /// - `share_vertices` is `on` or `off` (PlayerViewConfig::share_vertices).

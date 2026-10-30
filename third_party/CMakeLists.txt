@@ -48,7 +48,11 @@ vkc_require_core(0.30.0 VULKAN CONFIG)
 # and the tests' stream writer the PLY writer and the mesh integrator. Its tests
 # and examples are off, as is its -Werror in a subproject, so its library's core
 # floor is the one checked; its own core pin is the player's. The pin is grid
-# main at #9's merge (01bdc64, 0.4.0), for TrackKind::Audio and
+# main at #11's merge (cf7c99a, 0.6.0), whose StreamServer serves every track of
+# a session, track 0's keys starting each GOP, so a sender serves its Audio
+# track beside the geometry (live_audio.hpp); #10 (0.5.0) muxes a CodecStream's
+# Audio tracks by pts, so each record rides right after the first frame at or
+# past its pts. #9's merge (0.4.0) brought TrackKind::Audio and
 # stream/audio.hpp, the Audio track the player plays (audio_feeder.hpp). Since
 # its first commits (cbf7a6e), recon #309's grid/ under grid's names
 # (DECISIONS.md, 2026-10-29), it has also brought marching-cubes vertex normals
@@ -71,11 +75,11 @@ set(VGRID_BUILD_EXAMPLES OFF)
 FetchContent_Declare(
   volumetric_kit_grid
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
-  GIT_TAG 01bdc64cec96f8dbd0a107e55bfff6fec9d213a3)
+  GIT_TAG cf7c99a0ca74839eb5c2d1afb5f58132cdf636b4)
 FetchContent_MakeAvailable(volumetric_kit_grid)
 vkc_require_sibling(
   volumetric_kit::grid
-  0.4.0
+  0.6.0
   TARGETS
   volumetric_kit::grid_codec
   volumetric_kit::grid_mesh
