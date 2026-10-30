@@ -45,6 +45,11 @@ owner chose live first.
   change past 60 ms (a join's settling) places the audio afresh. Why: a
   change at the read point is heard within a render; at the write head it
   would be heard only D later.
+- **A follow waits for 10 ms of change** (`kFollowBand`), smaller ones
+  adding up. Why: the slew moves the point at every write and the offset
+  drifts by microseconds; following each move faded the audio about 300
+  times in the simulation's minute, and 9 times with the band. Meanwhile
+  the picture goes by what is heard.
 - **The drift trim:** once what is heard is more than 20 ms off the clock,
   and the last shift has been heard (its latency plus 50 ms), a 10 ms insert
   or drop. It never moves D. Why: the sender's mic and the viewer's output

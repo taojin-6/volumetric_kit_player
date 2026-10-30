@@ -49,6 +49,10 @@ inline constexpr std::chrono::nanoseconds kTrimBand{
     std::chrono::milliseconds{20}};
 inline constexpr std::chrono::nanoseconds kTrimStep{
     std::chrono::milliseconds{10}};
+/// The least change of the clock's point a follow shifts in: smaller ones
+/// add up until they reach it, as each shift is faded.
+inline constexpr std::chrono::nanoseconds kFollowBand{
+    std::chrono::milliseconds{10}};
 /// The most what is heard may be off the clock and still be in step: the
 /// clock's master. Past it, as after a stall, the audio is placed afresh.
 inline constexpr std::chrono::nanoseconds kAudioReach{
@@ -116,9 +120,10 @@ struct LiveAudioStats {
 /// its ring: a record it refuses is placed afresh.
 ///
 /// **Looks** (@ref look, on the worker between its steps). Each follows the
-/// clock: a change of its point is shifted into the output at once (an
-/// insert as it rises, a drop as it falls), and a change past kAudioReach,
-/// as a join's settling carries, places the audio afresh. Once each shift
+/// clock: a change of its point that reaches kFollowBand is shifted into the
+/// output at once (an insert as it rises, a drop as it falls), smaller ones
+/// adding up until they do, and a change past kAudioReach, as a join's
+/// settling carries, places the audio afresh. Once each shift
 /// has been heard, what is heard is trimmed toward the clock (@ref
 /// drift_trim), and past kAudioReach, as when its device stopped, the audio
 /// is placed afresh. The trims never touch D. An underrun, the audio having

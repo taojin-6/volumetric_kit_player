@@ -233,14 +233,16 @@ void LiveAudio::look(Clock::time_point now) {
     set_playing(false);
     return;
   }
-  // Follow the clock: its point's change, shifted in at once; past
-  // kAudioReach, placed afresh.
+  // Follow the clock: its point's change, shifted in once it reaches
+  // kFollowBand, so the slew's and the offset's slight moves add up rather
+  // than each fading the audio; past kAudioReach, placed afresh.
   const nanoseconds moved = *point - placed_point_;
   if (magnitude(moved) > kAudioReach) {
     unplace();
     return;
   }
-  if (const std::int64_t frames = frames_of(moved); frames != 0) {
+  if (magnitude(moved) >= kFollowBand) {
+    const std::int64_t frames = frames_of(moved);
     out.shift(frames);
     const nanoseconds shifted(static_cast<std::int64_t>(
         audio_ns(static_cast<std::uint64_t>(frames < 0 ? -frames : frames),

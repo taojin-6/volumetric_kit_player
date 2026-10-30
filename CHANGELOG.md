@@ -249,8 +249,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`LiveClock::arrived` takes it). While it plays in step, what is heard is
   the clock's master (`AudioMaster`, `LiveClock::set_audio_master`,
   `set_audio_playing`) and the applied D slews (`slew_point`); the audio
-  follows the point and trims its drift by shifts (`AudioOut::shift`,
-  `shifting`, `Rendered::silence_before`, `drift_trim`), never moving D.
+  follows the point once it has moved 10 ms (`kFollowBand`) and trims its
+  drift by shifts (`AudioOut::shift`, `shifting`, `Rendered::silence_before`,
+  `drift_trim`), never moving D.
   The live status line ends "audio late by N ms" where a route's latency
   needs D past 1 s (`LiveStatus::audio_late`); vp_probe's report adds D's
   target; the measure log's `need` may be `audio`, which

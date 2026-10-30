@@ -13,7 +13,8 @@
 // geometry and audio records muxed by pts, with network jitter, the
 // sender's clock, its mic and the viewer's output each up to 100 ppm off,
 // and a 200 ms stall: the audio is heard within its band of the clock
-// before the stall and again soon after it, the applied D rising by at most
+// before the stall and again soon after it, following the clock's point in
+// moves of kFollowBand or more, few a minute, the applied D rising by at most
 // kSlewRise a kSlewEvery while audio plays and falling back slowly, the
 // stall's underruns raising audio's need; an output 1000 ppm fast or slow
 // is trimmed back into the band, D never moving; underruns raise the need a
@@ -236,6 +237,13 @@ struct Scenario {
   nanoseconds length = 60s;
 };
 
+// A follow (LiveAudio::look): when, and how far the point it followed had
+// moved since the audio was placed or last followed it.
+struct Follow {
+  nanoseconds at;  // since the start
+  nanoseconds moved;
+};
+
 // One sample, after each render of the output.
 struct Sample {
   nanoseconds at;        // since the start
@@ -273,7 +281,13 @@ class Sim {
         deliver(events_[next], now);
       }
       if (step % 5 == 0) {
+        const std::uint64_t before = audio_.stats().follows;
         audio_.look(now);
+        if (audio_.stats().follows > before) {
+          const nanoseconds point = followed();
+          follows_.push_back({since_start(), point - followed_});
+          followed_ = point;
+        }
       }
       if (step % 10 == 0) {
         out.tick();
@@ -285,6 +299,7 @@ class Sim {
   const LiveAudio& audio() const { return audio_; }
   const LiveClock& clock() const { return clock_; }
   std::uint64_t chunks_delivered() const { return chunks_; }
+  const std::vector<Follow>& follows() const { return follows_; }
 
  private:
   struct Event {
@@ -304,6 +319,10 @@ class Sim {
   };
 
   nanoseconds since_start() const { return now_() - start_; }
+  // The point the audio follows: the clock's, plus any lateness.
+  nanoseconds followed() const {
+    return clock_.point().value_or(0ns) + audio_.late();
+  }
   nanoseconds drifted(nanoseconds since) const {
     return since + nanoseconds(static_cast<std::int64_t>(
                        static_cast<double>(since.count()) *
@@ -366,7 +385,11 @@ class Sim {
     info.key = true;
     info.pts_ns = event.pts;
     info.seq = event.seq;
+    const std::uint64_t placements = audio_.stats().placements;
     audio_.arrived(info, pcm_.data(), pcm_.size(), now);
+    if (audio_.stats().placements > placements) {
+      followed_ = followed();  // placed at the point as it is
+    }
     ++chunks_;
   }
 
@@ -396,6 +419,8 @@ class Sim {
   std::vector<std::uint8_t> pcm_;
   std::vector<Event> events_;
   std::uint64_t chunks_ = 0;
+  nanoseconds followed_{0};  // the point as placed or last followed
+  std::vector<Follow> follows_;
 };
 
 TEST(LiveAudioSim, JitterDriftAndAStallStayInStep) {
@@ -453,6 +478,20 @@ TEST(LiveAudioSim, JitterDriftAndAStallStayInStep) {
         << "D back at audio's need once the stall's lateness and raise expire";
     const vkp::LiveAudioStats stats = sim.audio().stats();
     EXPECT_EQ(stats.records + stats.dropped, sim.chunks_delivered());
+    // The point's slight moves (the slew at each write, the offset's drift)
+    // add up: each follow is at least kFollowBand, less a frame's rounding,
+    // and few come a minute, none in the steady run before the stall. D's
+    // fall after it is a 10 ms drop a second.
+    std::size_t steady = 0;
+    for (const Follow& follow : sim.follows()) {
+      const nanoseconds moved =
+          follow.moved < 0ns ? -follow.moved : follow.moved;
+      EXPECT_GE(moved, vkp::kFollowBand - 50us) << "at " << follow.at.count();
+      steady += follow.at >= 2s && follow.at < 20s ? 1 : 0;
+    }
+    EXPECT_EQ(steady, 0u);
+    EXPECT_LE(sim.follows().size(), 12u);
+    EXPECT_EQ(stats.follows, sim.follows().size());
   }
 }
 
