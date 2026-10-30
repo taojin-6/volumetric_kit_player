@@ -65,6 +65,13 @@
 // holds the build; one before start or after stop returns at once; and a stop
 // while parked is prompt, at a step's start too.
 //
+// With an Audio track muxed in by pts, through a null output on the test's
+// clock: every geometry frame plays as without, stepped or played; with no
+// Audio track no output is made; the audio starts at the first geometry pts
+// and follows its clock; a pause holds it, a step leaves it paused, a loop
+// flushes it back to the first pts and feeds it again, and a mute is gain 0
+// with its clock running; an output that cannot be made fails start.
+//
 // Live, from a grid StreamServer on 127.0.0.1 publishing the stream (looped
 // and restamped for a steady flow), or a raw peer: frames arrive with their
 // seq as their index and their set, the status's too, a mesh of their own
@@ -118,6 +125,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -136,6 +144,7 @@
 #include <utility>
 #include <vector>
 
+#include "manual_clock.hpp"
 #include "test_stream.hpp"
 #include "volumetric_kit/core/base/unique_fd.hpp"
 #include "volumetric_kit/core/testing/vulkan_fixture.hpp"
@@ -147,6 +156,7 @@
 #include "volumetric_kit/grid/base/device_requirements.hpp"
 #include "volumetric_kit/grid/mesh/mesh.hpp"
 #include "volumetric_kit/grid/networking/stream_server.hpp"
+#include "volumetric_kit/grid/stream/audio.hpp"
 #include "volumetric_kit/grid/stream/chunks.hpp"
 #include "volumetric_kit/grid/stream/stream_writer.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
@@ -161,6 +171,9 @@ namespace grid = volumetric_kit::grid;
 namespace networking = grid::networking;
 namespace stream = grid::stream;
 using namespace std::chrono_literals;
+using volumetric_kit::player::audio_frames;
+using volumetric_kit::player::AudioFormat;
+using volumetric_kit::player::AudioOut;
 using volumetric_kit::player::DeviceTiming;
 using volumetric_kit::player::FrameCommit;
 using volumetric_kit::player::FrameExchange;
@@ -169,6 +182,7 @@ using volumetric_kit::player::FrameStamp;
 using volumetric_kit::player::FrameTaker;
 using volumetric_kit::player::LiveState;
 using volumetric_kit::player::LiveStatus;
+using volumetric_kit::player::NullAudioOut;
 using volumetric_kit::player::PlaybackStats;
 using volumetric_kit::player::StreamPlayer;
 using vp_test::kFrames;
@@ -362,7 +376,7 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   StreamPlayer* start(bool playing,
                       std::uint32_t slot_count = kFramesInFlight + 2) {
     core::Result<std::unique_ptr<StreamPlayer>> opened =
-        StreamPlayer::open(path_);
+        StreamPlayer::open(path_, make_audio_);
     EXPECT_TRUE(opened.ok()) << opened.status().message();
     if (!opened.ok()) {
       return nullptr;
@@ -1008,6 +1022,9 @@ class StreamPlayerTest : public core::test::VulkanDeviceTest {
   std::optional<std::uint64_t> empty_frame_;
   // The device timing start() sets.
   DeviceTiming timing_ = DeviceTiming::kOff;
+  // What makes the audio output of a stream with audio, which start() gives
+  // open; empty for the player's default.
+  volumetric_kit::player::AudioOutMaker make_audio_;
   FrameExchange exchange_;
   std::uint32_t slot_ = 0;
   // The hooks start() gives the worker, when set, and what they note.
@@ -3194,6 +3211,347 @@ TEST_F(StreamPlayerTest, ATakerKeepsAnExtraUntilTheSlotsThatDrewItTakeAgain) {
   }
   EXPECT_FALSE(extras->was_released(1)) << "frame 1 is live";
   EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// --- Audio: the tests' stream with an Audio track beside it ------------------
+
+// The Audio track's: mono at 8 kHz, a record every 10 ms.
+constexpr std::uint32_t kAudioRate = 8000;
+constexpr std::uint64_t kAudioChunk = 80;
+constexpr std::uint64_t kAudioChunkNs = 10'000'000;
+
+// The tests' stream with an Audio track muxed in by pts, as grid's
+// CodecStream writes one: each audio record after the first geometry frame
+// whose pts is at or past its own. A 440 Hz tone from the first frame's pts
+// to a period past the last's, on the geometry's clock. It plays through a
+// null output on a clock the test moves, and ticks: the output's render
+// thread is the test's.
+class AudioPlayerTest : public StreamPlayerTest {
+ protected:
+  void SetUp() override {
+    StreamPlayerTest::SetUp();
+    if (base_setup_incomplete()) {
+      return;
+    }
+    ASSERT_NO_FATAL_FAILURE(add_audio());
+    make_audio_ = [this](const AudioFormat& format)
+        -> core::Result<std::unique_ptr<AudioOut>> {
+      ++outputs_made_;
+      VKC_ASSIGN(std::unique_ptr<NullAudioOut> out,
+                 NullAudioOut::create(
+                     format, [this] { return clock_(); },
+                     NullAudioOut::Ticks::kByCaller));
+      out_ = out.get();
+      return std::unique_ptr<AudioOut>(std::move(out));
+    };
+  }
+
+  // path_, its stream rewritten with the Audio track.
+  void add_audio() {
+    const std::string from = path_;
+    path_ = scratch_.file("two_tracks.vrst");
+    core::Result<std::unique_ptr<stream::StreamReader>> reader =
+        stream::StreamReader::open(from);
+    ASSERT_TRUE(reader.ok()) << reader.status().message();
+    stream::Session session = (*reader)->session();
+    ASSERT_EQ(session.tracks.size(), 1u);
+    stream::Track audio;
+    audio.kind = stream::TrackKind::Audio;
+    audio.clock = session.tracks[0].clock;
+    audio.rate = {kAudioRate, static_cast<std::uint32_t>(kAudioChunk)};
+    stream::AudioParams params;
+    params.sample_rate = kAudioRate;
+    audio.params = stream::encode_audio_params(params);
+    session.tracks.push_back(audio);
+    core::Result<std::unique_ptr<stream::StreamWriter>> writer =
+        stream::StreamWriter::create(path_, session);
+    ASSERT_TRUE(writer.ok()) << writer.status().message();
+    const std::uint64_t end = pts_of(kFrames - 1) + kPeriodNs;
+    std::uint64_t next_audio = 0;  // its index
+    const auto audio_through = [&](std::uint64_t pts) {
+      for (; next_audio * kAudioChunkNs <= pts &&
+             next_audio * kAudioChunkNs < end;
+           ++next_audio) {
+        Bytes pcm;
+        for (std::uint64_t i = 0; i < kAudioChunk; ++i) {
+          const double t =
+              static_cast<double>(next_audio * kAudioChunk + i) / kAudioRate;
+          const auto sample = static_cast<std::int16_t>(
+              8192.0 * std::sin(2.0 * 3.14159265358979 * 440.0 * t));
+          const auto bits = static_cast<std::uint16_t>(sample);
+          pcm.push_back(static_cast<std::uint8_t>(bits & 0xff));
+          pcm.push_back(static_cast<std::uint8_t>(bits >> 8));
+        }
+        stream::RecordInfo info;
+        info.track = 1;
+        info.key = true;
+        info.pts_ns = pts_of(0) + next_audio * kAudioChunkNs;
+        info.seq = next_audio;
+        const core::Status appended =
+            (*writer)->append(info, pcm.data(), pcm.size());
+        ASSERT_TRUE(appended.ok()) << appended.message();
+      }
+    };
+    stream::Position pos = (*reader)->begin();
+    stream::Record record;
+    Bytes payload;
+    for (;;) {
+      const core::Result<bool> more = (*reader)->next(&pos, &record);
+      ASSERT_TRUE(more.ok()) << more.status().message();
+      if (!*more) {
+        break;
+      }
+      ASSERT_TRUE((*reader)->read(record, &payload).ok());
+      const core::Status appended =
+          (*writer)->append(record.info, payload.data(), payload.size());
+      ASSERT_TRUE(appended.ok()) << appended.message();
+      ASSERT_NO_FATAL_FAILURE(audio_through(record.info.pts_ns));
+    }
+    ASSERT_NO_FATAL_FAILURE(audio_through(end));
+    ASSERT_TRUE((*writer)->finish().ok());
+  }
+
+  // Ticks the output until it has taken the feeder's flush and holds at
+  // least `ahead` of audio: whether it did within kArrival.
+  bool fed(std::chrono::milliseconds ahead = 150ms) {
+    const std::uint64_t frames = audio_frames(
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(ahead)
+                .count()),
+        kAudioRate);
+    return eventually([&] {
+      out_->tick();
+      return out_->position().has_value() && out_->queued() >= frames;
+    });
+  }
+
+  // The output's clock moved on by `by`, and ticked: its position then.
+  std::optional<std::uint64_t> advance(std::chrono::nanoseconds by) {
+    clock_.advance(by);
+    out_->tick();
+    return out_->position();
+  }
+
+  static std::uint64_t ns(std::chrono::nanoseconds at) {
+    return static_cast<std::uint64_t>(at.count());
+  }
+
+  vp_test::ManualClock clock_;
+  NullAudioOut* out_ = nullptr;  // the player's output, once started
+  int outputs_made_ = 0;
+};
+
+// With the null output, a file with an Audio track plays every geometry frame
+// as one without: stepped, each in order at its pts.
+TEST_F(AudioPlayerTest, SteppedEveryGeometryFrameOfATwoTrackFilePlays) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  EXPECT_TRUE(player->has_audio());
+  EXPECT_EQ(outputs_made_, 1);
+  EXPECT_EQ(player->frame_count(), kFrames);
+  EXPECT_EQ(player->track(), 0u);
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    ASSERT_NO_FATAL_FAILURE(step_to(*player, i));
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Played, as without audio: each in order, none before its pts.
+TEST_F(AudioPlayerTest, PlayedEveryGeometryFrameOfATwoTrackFilePlays) {
+  const SteadyClock::time_point t0 = SteadyClock::now();
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  player->set_loop(false);
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    const std::optional<FrameStamp> frame = next_frame();
+    const auto arrived_ns = ns(SteadyClock::now() - t0);
+    ASSERT_TRUE(frame.has_value()) << "no frame " << i;
+    EXPECT_EQ(frame->index, i);
+    EXPECT_EQ(frame->pts_ns, pts_of(i));
+    EXPECT_GE(arrived_ns, pts_of(i) - pts_of(0)) << "frame " << i;
+  }
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// No Audio track: no output, so no ring and no feeder.
+TEST_F(AudioPlayerTest, AFileWithNoAudioTrackMakesNoOutput) {
+  path_ = scratch_.file(vp_test::kStream);  // SetUp's copy, with no audio
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  EXPECT_FALSE(player->has_audio());
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  EXPECT_EQ(outputs_made_, 0);
+  EXPECT_FALSE(player->audio_position().has_value());
+  player->set_muted(true);  // nothing to mute: no effect
+  EXPECT_TRUE(player->muted());
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// The audio starts at the first geometry pts and follows its clock. The test
+// takes no frame, so the frames never reach the end and loop.
+// Mutant: a pause that does not hold the position.
+TEST_F(AudioPlayerTest, APauseHoldsTheAudioPosition) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(fed());
+  EXPECT_EQ(player->audio_position(), pts_of(0));
+  EXPECT_TRUE(out_->playing());
+  EXPECT_EQ(advance(100ms), pts_of(0) + ns(100ms));
+  player->pause();
+  EXPECT_FALSE(out_->playing());
+  EXPECT_EQ(advance(100ms), pts_of(0) + ns(100ms));
+  player->play();
+  EXPECT_EQ(advance(50ms), pts_of(0) + ns(150ms));
+  EXPECT_EQ(player->audio_position(), pts_of(0) + ns(150ms));
+  EXPECT_EQ(out_->stats().flushes, 1u);
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A step shows a frame and leaves the audio paused, its position held.
+TEST_F(AudioPlayerTest, AStepIsTheFramesAloneAndSilent) {
+  StreamPlayer* player = start(/*playing=*/false);
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(fed());
+  EXPECT_FALSE(out_->playing());
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
+  ASSERT_NO_FATAL_FAILURE(step_to(*player, 1));
+  EXPECT_FALSE(out_->playing());
+  EXPECT_EQ(advance(100ms), pts_of(0));
+  EXPECT_EQ(out_->stats().played_frames, 0u);
+  player->play();
+  EXPECT_EQ(advance(20ms), pts_of(0) + ns(20ms));
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A step while playing pauses the audio too, its position held where it was.
+// Mutant: a step that leaves the audio playing.
+TEST_F(AudioPlayerTest, AStepWhilePlayingPausesTheAudio) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(fed());
+  EXPECT_EQ(advance(50ms), pts_of(0) + ns(50ms));
+  player->step();
+  EXPECT_FALSE(out_->playing());
+  EXPECT_EQ(advance(100ms), pts_of(0) + ns(50ms));
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// With loop off, the frames played into the end pause there, and the audio
+// with them: its position holds, with no underrun counted, until a play,
+// which plays it from the first pts again.
+// Mutant: an end that pauses the frames alone.
+TEST_F(AudioPlayerTest, WithLoopOffTheEndPausesTheAudioWithTheFrames) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  player->set_loop(false);
+  ASSERT_TRUE(fed());
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    ASSERT_TRUE(next_frame().has_value()) << "no frame " << i;
+  }
+  ASSERT_TRUE(eventually([&] { return !player->playing(); }));
+  EXPECT_FALSE(out_->playing());
+  const std::optional<std::uint64_t> held = advance(0ms);
+  const std::uint64_t underrun = out_->stats().underrun_frames;
+  EXPECT_EQ(advance(1s), held);
+  EXPECT_EQ(out_->stats().underrun_frames, underrun);
+  player->play();
+  EXPECT_TRUE(out_->playing());
+  ASSERT_TRUE(eventually([&] {
+    out_->tick();
+    return out_->stats().flushes == 2;
+  })) << "the play after the end did not flush the audio";
+  EXPECT_EQ(out_->position(), pts_of(0));
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// At a loop the output is flushed, back to the first geometry pts, and the
+// feeder reads the track from its start again.
+// Mutant: a loop that does not flush the audio.
+TEST_F(AudioPlayerTest, ALoopFlushesTheAudioAndRestartsItsCursor) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(player->loop());
+  ASSERT_TRUE(fed());
+  EXPECT_EQ(advance(100ms), pts_of(0) + ns(100ms));
+  std::uint64_t pass = 1;
+  for (int taken = 0; pass < 2 && taken < 3 * static_cast<int>(kFrames);
+       ++taken) {
+    const std::optional<FrameStamp> frame = next_frame();
+    ASSERT_TRUE(frame.has_value()) << player->status().message();
+    pass = frame->pass;
+  }
+  ASSERT_EQ(pass, 2u) << "no loop";
+  ASSERT_TRUE(eventually([&] {
+    out_->tick();
+    return out_->stats().flushes == 2;
+  })) << "the loop did not flush the audio";
+  EXPECT_EQ(out_->position(), pts_of(0));
+  ASSERT_TRUE(fed());
+  EXPECT_EQ(advance(20ms), pts_of(0) + ns(20ms));
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// Muted, the gain is 0 and the audio's clock runs on.
+TEST_F(AudioPlayerTest, AMuteIsGainZeroWithTheClockRunning) {
+  make_audio_ = [make = make_audio_](const AudioFormat& format) {
+    EXPECT_EQ(format.sample_rate, kAudioRate);
+    EXPECT_EQ(format.channels, 1u);
+    return make(format);
+  };
+  StreamPlayer* player = nullptr;
+  {
+    core::Result<std::unique_ptr<StreamPlayer>> opened =
+        StreamPlayer::open(path_, make_audio_);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    player_ = std::move(opened).value();
+    player = player_.get();
+  }
+  EXPECT_FALSE(player->muted());
+  player->set_muted(true);  // before start: the output takes it
+  ASSERT_TRUE(
+      player->start(device(), allocator(), extractor_config(), exchange_).ok());
+  ASSERT_TRUE(fed());
+  EXPECT_TRUE(player->muted());
+  EXPECT_EQ(out_->gain(), 0.0f);
+  EXPECT_EQ(advance(30ms), pts_of(0) + ns(30ms));
+  player->set_muted(false);
+  EXPECT_FALSE(player->muted());
+  EXPECT_EQ(out_->gain(), 1.0f);
+  EXPECT_EQ(advance(10ms), pts_of(0) + ns(40ms));
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// An output that cannot be made fails start, with no worker.
+TEST_F(AudioPlayerTest, AnOutputThatCannotBeMadeFailsStart) {
+  make_audio_ =
+      [](const AudioFormat&) -> core::Result<std::unique_ptr<AudioOut>> {
+    return core::Status::io_error("no output here");
+  };
+  core::Result<std::unique_ptr<StreamPlayer>> opened =
+      StreamPlayer::open(path_, make_audio_);
+  ASSERT_TRUE(opened.ok()) << opened.status().message();
+  core::Status started =
+      (*opened)->start(device(), allocator(), extractor_config(), exchange_);
+  EXPECT_EQ(started.domain(), Code::IoError);
+  EXPECT_FALSE((*opened)->audio_position().has_value());
+  make_audio_ =
+      [](const AudioFormat&) -> core::Result<std::unique_ptr<AudioOut>> {
+    return std::unique_ptr<AudioOut>();
+  };
+  opened = StreamPlayer::open(path_, make_audio_);
+  ASSERT_TRUE(opened.ok()) << opened.status().message();
+  started =
+      (*opened)->start(device(), allocator(), extractor_config(), exchange_);
+  EXPECT_EQ(started.domain(), Code::InvalidArgument);
 }
 
 // --- Live: the tests' stream served on 127.0.0.1 ----------------------------

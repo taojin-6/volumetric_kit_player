@@ -9,6 +9,9 @@ find_package(Threads REQUIRED)
 
 add_library(
   player STATIC
+  volumetric_kit/player/audio_feeder.cpp
+  volumetric_kit/player/audio_out.cpp
+  volumetric_kit/player/audio_ring.cpp
   volumetric_kit/player/command_line.cpp
   volumetric_kit/player/controls.cpp
   volumetric_kit/player/frame_hooks.cpp
