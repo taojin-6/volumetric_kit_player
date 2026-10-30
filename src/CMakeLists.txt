@@ -9,11 +9,13 @@ find_package(Threads REQUIRED)
 
 add_library(
   player STATIC
+  volumetric_kit/player/audio_clock.cpp
   volumetric_kit/player/audio_feeder.cpp
   volumetric_kit/player/audio_out.cpp
   volumetric_kit/player/audio_ring.cpp
   volumetric_kit/player/command_line.cpp
   volumetric_kit/player/controls.cpp
+  volumetric_kit/player/device_audio_out.cpp
   volumetric_kit/player/frame_hooks.cpp
   volumetric_kit/player/live_connection.cpp
   volumetric_kit/player/measure_log.cpp
@@ -40,6 +42,20 @@ target_link_libraries(
          volumetric_kit::gfx_ui
          Threads::Threads)
 vp_target_warnings(player)
+# The Apple audio output (AudioOut::open_default's on macOS and iOS), under ARC,
+# and the frameworks it plays through; Core Audio's device calls are macOS's
+# alone.
+if(APPLE)
+  target_sources(player PRIVATE volumetric_kit/player/apple_audio_out.mm)
+  set_source_files_properties(volumetric_kit/player/apple_audio_out.mm
+                              PROPERTIES COMPILE_OPTIONS -fobjc-arc)
+  target_link_libraries(player PUBLIC "-framework AVFoundation"
+                                      "-framework Foundation")
+  if(NOT VP_IOS)
+    target_link_libraries(player PUBLIC "-framework AudioToolbox"
+                                        "-framework CoreAudio")
+  endif()
+endif()
 # The commits and the configuration the measure log's header states.
 vp_build_info(player volumetric_kit/player/measure_log.cpp)
 

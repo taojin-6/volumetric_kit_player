@@ -11,6 +11,10 @@ add_test(NAME vp_test_streams COMMAND vp_write_stream "${VP_TEST_STREAMS}")
 set_tests_properties(vp_test_streams PROPERTIES FIXTURES_SETUP vp_streams
                                                 SKIP_RETURN_CODE 77 TIMEOUT 300)
 
+# Every test runs with VP_NO_AUDIO_DEVICE set, so the Apple output opens no
+# device even where a test reaches it (AGENTS.md).
+set(VP_TEST_ENVIRONMENT VP_NO_AUDIO_DEVICE=1)
+
 # vp_<name>_test from <name>_test.cpp, linking the given targets. A case that
 # hangs fails after 5 minutes rather than holding a CI job to its limit. With
 # STREAMS, its cases read the tests' streams in VP_TEST_STREAMS.
@@ -20,7 +24,7 @@ function(vp_add_test name)
   target_link_libraries(vp_${name}_test PRIVATE ${arg_UNPARSED_ARGUMENTS}
                                                 GTest::gtest_main)
   vp_target_warnings(vp_${name}_test)
-  set(properties TIMEOUT 300)
+  set(properties TIMEOUT 300 ENVIRONMENT ${VP_TEST_ENVIRONMENT})
   if(arg_STREAMS)
     target_compile_definitions(vp_${name}_test
                                PRIVATE VP_TEST_STREAMS="${VP_TEST_STREAMS}")
@@ -32,9 +36,12 @@ endfunction()
 # The pacing clock and the stats panel's figures, host only.
 vp_add_test(playback volumetric_kit::player)
 vp_add_test(playback_stats volumetric_kit::player)
-# The audio ring, the outputs and the feeder, on the host with synthetic frames:
-# no device, no sound.
+# The audio ring, the outputs, the device output's clock and lifecycle over a
+# fake device, and the feeder, on the host with synthetic frames: no device, no
+# sound.
 vp_add_test(audio_out volumetric_kit::player)
+vp_add_test(audio_clock volumetric_kit::player)
+vp_add_test(device_audio_out volumetric_kit::player)
 vp_add_test(audio_feeder volumetric_kit::player)
 # The decode and mesh worker, on a device (the core's fixtures), over the tests'
 # streams.
@@ -49,7 +56,7 @@ add_test(
 set_tests_properties(
   vp_live_park_soak
   PROPERTIES ENVIRONMENT
-             VP_PARK_CYCLES=50
+             "VP_PARK_CYCLES=50;${VP_TEST_ENVIRONMENT}"
              LABELS
              stress
              FIXTURES_REQUIRED
@@ -90,6 +97,14 @@ if(TARGET volumetric_kit::player_desktop)
   add_executable(vp_desktop_hooks vp_desktop_hooks.cpp)
   target_link_libraries(vp_desktop_hooks PRIVATE volumetric_kit::player_desktop)
   vp_target_warnings(vp_desktop_hooks)
+endif()
+# vp_audio_check, a tool: the Apple audio output played by hand on a Mac, with
+# no window, a tone at gain 0 unless asked (README.md). ctest never runs it: it
+# opens the audio device, which no test does (AGENTS.md).
+if(APPLE)
+  add_executable(vp_audio_check vp_audio_check.cpp)
+  target_link_libraries(vp_audio_check PRIVATE volumetric_kit::player)
+  vp_target_warnings(vp_audio_check)
 endif()
 # The command of vp_test_streams, above.
 add_executable(vp_write_stream vp_write_stream.cpp)
@@ -217,7 +232,8 @@ if(APPLE)
     NAME vp_player_view_on_moltenvk_specialized
     COMMAND
       "${CMAKE_COMMAND}" -E env MVK_CONFIG_SPECIALIZED_QUEUE_FAMILIES=1
-      "$<TARGET_FILE:vp_player_view_test>" --gtest_filter=PlayerViewTest.*)
+      ${VP_TEST_ENVIRONMENT} "$<TARGET_FILE:vp_player_view_test>"
+      --gtest_filter=PlayerViewTest.*)
   set_tests_properties(
     vp_player_view_on_moltenvk_specialized
     PROPERTIES FAIL_REGULAR_EXPRESSION

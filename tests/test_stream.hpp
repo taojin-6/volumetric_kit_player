@@ -17,8 +17,9 @@
 /// make_decode_grid: 8,192 slots), so the table refuses some on the device,
 /// and the codec grows the grid and decodes it again at its finish; and with
 /// that frame a sphere of more blocks than those slots, so the codec grows
-/// the grid before it records the frame. A copy of one of them, and a stream
-/// that opens but never decodes, in a scratch directory of the test's own.
+/// the grid before it records the frame. A copy of one of them, with an
+/// Audio track added or not, and a stream that opens but never decodes, in a
+/// scratch directory of the test's own.
 
 #include <gtest/gtest.h>
 #include <unistd.h>
@@ -28,9 +29,12 @@
 #include <memory>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/grid/stream/audio.hpp"
 #include "volumetric_kit/grid/stream/session.hpp"
+#include "volumetric_kit/grid/stream/stream_reader.hpp"
 #include "volumetric_kit/grid/stream/stream_writer.hpp"
 
 namespace vp_test {
@@ -121,9 +125,11 @@ class Scratch {
 };
 
 // A stream that opens, with no device, but never decodes: a 25 fps geometry
-// track of `records` one-byte key records.
+// track of `records` one-byte key records; with `audio`, an Audio track too,
+// 8 kHz mono PCM, a frame of silence at each geometry record's pts.
 inline core::Status write_undecodable_stream(const std::string& path,
-                                             std::uint64_t records) {
+                                             std::uint64_t records,
+                                             bool audio = false) {
   namespace stream = grid::stream;
   stream::Session session;
   session.writer = "volumetric_kit_player tests";
@@ -131,15 +137,70 @@ inline core::Status write_undecodable_stream(const std::string& path,
   track.kind = stream::TrackKind::Geometry;
   track.rate = {25, 1};
   session.tracks.push_back(track);
+  if (audio) {
+    stream::Track sound;
+    sound.kind = stream::TrackKind::Audio;
+    sound.rate = {8000, 1};
+    stream::AudioParams params;
+    params.sample_rate = 8000;
+    sound.params = stream::encode_audio_params(params);
+    session.tracks.push_back(sound);
+  }
   VKC_ASSIGN(std::unique_ptr<stream::StreamWriter> writer,
              stream::StreamWriter::create(path, session));
-  const std::uint8_t byte = 0;
+  const std::uint8_t bytes[2] = {0, 0};
   for (std::uint64_t i = 0; i < records; ++i) {
     stream::RecordInfo record;
     record.key = true;
     record.pts_ns = pts_of(i);
     record.seq = i;
-    VKC_TRY(writer->append(record, &byte, 1));
+    VKC_TRY(writer->append(record, bytes, 1));
+    if (audio) {
+      record.track = 1;
+      VKC_TRY(writer->append(record, bytes, 2));
+    }
+  }
+  return writer->finish();
+}
+
+// The stream at `from` copied to `to` with an Audio track added, on the
+// first track's clock: 8 kHz mono PCM, a frame of silence at each record's
+// pts.
+inline core::Status copy_with_audio(const std::string& from,
+                                    const std::string& to) {
+  namespace stream = grid::stream;
+  VKC_ASSIGN(std::unique_ptr<stream::StreamReader> reader,
+             stream::StreamReader::open(from));
+  stream::Session session = reader->session();
+  stream::Track sound;
+  sound.kind = stream::TrackKind::Audio;
+  sound.clock = session.tracks.at(0).clock;
+  sound.rate = {8000, 1};
+  stream::AudioParams params;
+  params.sample_rate = 8000;
+  sound.params = stream::encode_audio_params(params);
+  session.tracks.push_back(sound);
+  const auto audio_track =
+      static_cast<std::uint16_t>(session.tracks.size() - 1);
+  VKC_ASSIGN(std::unique_ptr<stream::StreamWriter> writer,
+             stream::StreamWriter::create(to, session));
+  stream::Position pos = reader->begin();
+  stream::Record record;
+  std::vector<std::uint8_t> payload;
+  const std::uint8_t silence[2] = {0, 0};
+  for (std::uint64_t seq = 0;; ++seq) {
+    VKC_ASSIGN(const bool more, reader->next(&pos, &record));
+    if (!more) {
+      break;
+    }
+    VKC_TRY(reader->read(record, &payload));
+    VKC_TRY(writer->append(record.info, payload.data(), payload.size()));
+    stream::RecordInfo info;
+    info.track = audio_track;
+    info.key = true;
+    info.pts_ns = record.info.pts_ns;
+    info.seq = seq;
+    VKC_TRY(writer->append(info, silence, 2));
   }
   return writer->finish();
 }

@@ -10,12 +10,15 @@
 // written at its pts, drops what was written before, and lands paused or
 // with no time passed; paused, it renders silence and takes nothing, so the
 // position holds; a short ring renders silence, counted as an underrun once
-// flushed, the position stopping at its last frame; the gain scales what
+// flushed, the position stopping at its last frame; a render says what it
+// took, from which pts, and whether it flushed; the gain scales what
 // goes out, and at 0 the position runs on. The null output renders what its
 // clock says played, carrying the remainder of a frame, at most a second a
 // tick, on a manual clock by the caller's ticks or on steady_clock by its
-// own thread, and refuses a rate of 0 or other than 1 or 2 channels. The
-// conversions between frames and time round as stated and do not overflow.
+// own thread, and refuses a rate of 0 or other than 1 or 2 channels; it is
+// the platform's output off Apple, and on Apple under the tests' backstop,
+// where the Apple output refuses. The conversions between frames and time
+// round as stated and do not overflow.
 
 #include "volumetric_kit/player/audio_out.hpp"
 
@@ -24,12 +27,16 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <thread>
 #include <vector>
 
 #include "manual_clock.hpp"
 #include "volumetric_kit/player/audio_ring.hpp"
+#if defined(__APPLE__)
+#include "volumetric_kit/player/device_audio_out.hpp"
+#endif
 
 namespace {
 
@@ -41,6 +48,7 @@ using volumetric_kit::player::AudioFormat;
 using volumetric_kit::player::AudioOut;
 using volumetric_kit::player::AudioRing;
 using volumetric_kit::player::NullAudioOut;
+using volumetric_kit::player::Rendered;
 using vp_test::ManualClock;
 using SteadyClock = std::chrono::steady_clock;
 
@@ -270,8 +278,56 @@ TEST(AudioOut, AShortRingRendersSilenceCountedAsAnUnderrun) {
   want.resize(300, 0.0f);
   EXPECT_EQ(out.next(300), want);
   EXPECT_EQ(out.stats().underrun_frames, 200u);
+  EXPECT_EQ(out.stats().underruns, 1u);
   EXPECT_EQ(out.position(), kStart + audio_ns(100, kRate))
       << "the position stops at the last frame";
+  out.next(10);
+  EXPECT_EQ(out.stats().underruns, 2u) << "a render short again";
+}
+
+// A device output's clock is built from what each render says it took.
+TEST(AudioOut, ARenderSaysWhatItTookAndItsPts) {
+  TestOut out({kRate, 1});
+  std::vector<float> samples(100);
+  out.play();
+  Rendered took = out.render(samples.data(), 10);
+  EXPECT_FALSE(took.based) << "nothing placed before a flush";
+  const std::vector<float> a = ramp(1.0f, 30);
+  out.flush(kStart);
+  out.write(a.data(), 30);
+  took = out.render(samples.data(), 20);
+  EXPECT_TRUE(took.based);
+  EXPECT_TRUE(took.flushed);
+  EXPECT_EQ(took.frames, 20u);
+  EXPECT_EQ(took.pts_ns, kStart);
+  EXPECT_EQ(took.end_pts_ns, kStart + audio_ns(20, kRate));
+  took = out.render(samples.data(), 20);
+  EXPECT_FALSE(took.flushed);
+  EXPECT_EQ(took.frames, 10u) << "short";
+  EXPECT_EQ(took.pts_ns, kStart + audio_ns(20, kRate));
+  EXPECT_EQ(took.end_pts_ns, kStart + audio_ns(30, kRate));
+  out.pause();
+  took = out.render(samples.data(), 20);
+  EXPECT_EQ(took.frames, 0u);
+  EXPECT_EQ(took.pts_ns, took.end_pts_ns);
+}
+
+// Off Apple, and on it under the tests' backstop (VP_NO_AUDIO_DEVICE, set
+// here too for a run outside ctest), the platform's output is the null one:
+// silent, routed nowhere. The Apple output refuses, touching no device.
+TEST(AudioOut, TheDefaultUnderTheBackstopOrOffAppleIsTheNullOutput) {
+  ASSERT_EQ(setenv("VP_NO_AUDIO_DEVICE", "1", 1), 0);
+#if defined(__APPLE__)
+  EXPECT_EQ(
+      volumetric_kit::player::open_apple_audio({kRate, 1}).status().domain(),
+      core::Status::Code::Unsupported);
+#endif
+  core::Result<std::unique_ptr<AudioOut>> out =
+      AudioOut::open_default({kRate, 1});
+  ASSERT_TRUE(out.ok()) << out.status().message();
+  EXPECT_FALSE((*out)->route().audible);
+  EXPECT_TRUE((*out)->route().name.empty());
+  EXPECT_FALSE((*out)->take_pause_request());
 }
 
 TEST(AudioOut, AnOverrunTakesWhatFitsAndTheRestFollowsInOrder) {
@@ -399,8 +455,8 @@ TEST(NullAudioOut, ItRefusesARateOfZeroOrOtherThanOneOrTwoChannels) {
     EXPECT_EQ(out.status().domain(), core::Status::Code::InvalidArgument)
         << format.sample_rate << " Hz, " << format.channels << " channels";
   }
-  const core::Result<std::unique_ptr<AudioOut>> standard =
-      AudioOut::open_default({48000, 2});
+  const core::Result<std::unique_ptr<NullAudioOut>> standard =
+      NullAudioOut::create({48000, 2}, {}, NullAudioOut::Ticks::kByCaller);
   EXPECT_TRUE(standard.ok()) << standard.status().message();
 }
 

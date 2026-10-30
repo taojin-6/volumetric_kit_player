@@ -10,9 +10,10 @@ paced by the stream's timestamps or by the sender.
 > which paces frames by their timestamps with play, pause and step; the
 > stream player (`src/volumetric_kit/player/stream_player.hpp`), which decodes
 > and meshes each frame on the GPU on a worker thread, from a file or live
-> from a sender; the audio output and its feeder
-> (`src/volumetric_kit/player/audio_out.hpp`, `audio_feeder.hpp`), which play
-> a file's audio beside its frames, silent for now; the view
+> from a sender; the audio outputs and the feeder
+> (`src/volumetric_kit/player/audio_out.hpp`, `device_audio_out.hpp`,
+> `audio_feeder.hpp`), which play a file's audio beside its frames, through
+> AVAudioEngine on macOS and iOS and silently elsewhere; the view
 > (`src/volumetric_kit/player/player_view.hpp`), which draws each mesh under
 > an orbit camera, a controls panel and a stats panel on any window system;
 > the per-frame hooks (`src/volumetric_kit/player/frame_hooks.hpp`), a
@@ -130,12 +131,25 @@ are the panel's shortcuts:
 | D | turns Deblock on or off |
 | U | turns Unlit on or off |
 | T | turns Texture on or off |
+| M | turns Mute on or off |
 | A program's key | opens or closes its panel |
 | Esc | closes the window |
 
 A file with an Audio track (grid's `TrackKind::Audio`) plays it beside the
 frames from their first pts, paused, stepped and looped with them, through
-a silent output for now (DECISIONS.md).
+the system's output on macOS and iOS, and silently elsewhere. Mute, a box
+drawn for such a file, silences it; the status line then ends with `muted`,
+else with `audio <n> ms`, the route's latency, or `audio off` while no
+device plays it. An interruption, such as a call, or the output's device
+going away, such as AirPods disconnecting or, on iOS, headphones unplugged,
+pauses the player (DECISIONS.md).
+
+`"$root/build/tests/vp_audio_check"` checks the output by hand on a Mac,
+with no window: it plays a tone through it, silent at gain 0 unless
+`--gain 0.2` says otherwise, for `--seconds 10`, at `--rate 48000` or one
+the device converts, such as 44100, and prints the route, its latency, the
+position's rate, drift and largest residual against `steady_clock`, its
+steps back, the clock's runs and the underruns. No test runs it.
 
 With `run.frames`, the app prints the frame drawn as it exits, for CI's
 smoke run (DECISIONS.md).
@@ -201,6 +215,10 @@ access; once refused, Settings › Privacy & Security › Local Network allows
 it. A sender the app cannot reach is the status line's reason, retried
 about every second until Source chooses another. While nothing plays, a
 label says why, and a tap on it opens the dialog.
+
+A file's audio plays as on the desktop, through the phone's route, Mute in
+the panel. It stops while the app is not active, with no background audio,
+and plays again when it is.
 
 To give it a file, launch it once, then copy a `.vrst` into its folder: in
 the Files app under On My iPhone (or iPad) › Player, in Finder under the

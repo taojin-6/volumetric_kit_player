@@ -70,7 +70,11 @@
 // Audio track no output is made; the audio starts at the first geometry pts
 // and follows its clock; a pause holds it, a step leaves it paused, a loop
 // flushes it back to the first pts and feeds it again, and a mute is gain 0
-// with its clock running; an output that cannot be made fails start.
+// with its clock running; an output that cannot be made fails start; with no
+// maker the output is the null one. Through a device output over a fake
+// device: a park stops the device and gives its route back and the unpark
+// starts it, the status saying where the audio goes; an interruption or a
+// device gone pauses the frames and the audio at the next follow_audio, once.
 //
 // Live, from a grid StreamServer on 127.0.0.1 publishing the stream (looped
 // and restamped for a steady flow), or a raw peer: frames arrive with their
@@ -144,6 +148,7 @@
 #include <utility>
 #include <vector>
 
+#include "fake_audio_device.hpp"
 #include "manual_clock.hpp"
 #include "test_stream.hpp"
 #include "volumetric_kit/core/base/unique_fd.hpp"
@@ -174,6 +179,8 @@ using namespace std::chrono_literals;
 using volumetric_kit::player::audio_frames;
 using volumetric_kit::player::AudioFormat;
 using volumetric_kit::player::AudioOut;
+using volumetric_kit::player::AudioStatus;
+using volumetric_kit::player::DeviceAudioOut;
 using volumetric_kit::player::DeviceTiming;
 using volumetric_kit::player::FrameCommit;
 using volumetric_kit::player::FrameExchange;
@@ -3384,6 +3391,7 @@ TEST_F(AudioPlayerTest, AFileWithNoAudioTrackMakesNoOutput) {
   ASSERT_NO_FATAL_FAILURE(step_to(*player, 0));
   EXPECT_EQ(outputs_made_, 0);
   EXPECT_FALSE(player->audio_position().has_value());
+  EXPECT_FALSE(player->audio_status().has_value());
   player->set_muted(true);  // nothing to mute: no effect
   EXPECT_TRUE(player->muted());
   EXPECT_LT(stop_time(*player), kPrompt);
@@ -3552,6 +3560,105 @@ TEST_F(AudioPlayerTest, AnOutputThatCannotBeMadeFailsStart) {
   started =
       (*opened)->start(device(), allocator(), extractor_config(), exchange_);
   EXPECT_EQ(started.domain(), Code::InvalidArgument);
+}
+
+// With no maker the player plays a file's audio through the null output:
+// silent, routed nowhere. No test opens an audio device.
+TEST_F(AudioPlayerTest, WithNoMakerTheOutputIsTheNullOne) {
+  make_audio_ = {};
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  const std::optional<AudioStatus> status = player->audio_status();
+  ASSERT_TRUE(status.has_value());
+  EXPECT_FALSE(status->route.audible);
+  EXPECT_TRUE(status->route.name.empty());
+  EXPECT_FALSE(player->follow_audio());
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A device output, over a fake device, as the apps' Apple output plays.
+class DeviceAudioPlayerTest : public AudioPlayerTest {
+ protected:
+  void SetUp() override {
+    AudioPlayerTest::SetUp();
+    if (base_setup_incomplete()) {
+      return;
+    }
+    device_ = std::make_shared<vp_test::FakeDeviceState>();
+    make_audio_ = [this](const AudioFormat& format)
+        -> core::Result<std::unique_ptr<AudioOut>> {
+      VKC_ASSIGN(std::unique_ptr<DeviceAudioOut> out,
+                 DeviceAudioOut::create(format, vp_test::fake_device(device_)));
+      device_out_ = out.get();
+      return std::unique_ptr<AudioOut>(std::move(out));
+    };
+  }
+
+  bool device_running() {
+    std::lock_guard<std::mutex> lock(device_->mutex);
+    return device_->running;
+  }
+
+  std::shared_ptr<vp_test::FakeDeviceState> device_;
+  DeviceAudioOut* device_out_ = nullptr;  // the player's, once started
+};
+
+// A park stops the device and gives its route back; the unpark starts it
+// again. The status says where the audio goes meanwhile.
+TEST_F(DeviceAudioPlayerTest, AParkStopsTheDeviceAndTheUnparkStartsIt) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NE(device_out_, nullptr);
+  EXPECT_TRUE(device_running());
+  std::optional<AudioStatus> status = player->audio_status();
+  ASSERT_TRUE(status.has_value());
+  EXPECT_TRUE(status->route.audible);
+  EXPECT_EQ(status->route.name, "Fake Speakers");
+  EXPECT_EQ(status->route.latency_ns, 10'000'000u);
+  ASSERT_TRUE(player->park(kPrompt));
+  EXPECT_FALSE(device_running());
+  EXPECT_EQ(device_->releases, 1);
+  EXPECT_FALSE(player->audio_status()->route.audible);
+  ASSERT_TRUE(player->park(kPrompt)) << "a park again";
+  player->unpark();
+  EXPECT_TRUE(device_running());
+  EXPECT_EQ(device_->starts, 2);
+  player->unpark();  // not parked: no start
+  EXPECT_EQ(device_->starts, 2);
+  player->set_muted(true);
+  status = player->audio_status();
+  EXPECT_TRUE(status->muted);
+  EXPECT_TRUE(status->route.audible);
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// An interruption, or the device gone, pauses the player, the frames and the
+// audio, at the next follow_audio, once; play resumes both.
+// Mutant: follow_audio that pauses the audio alone.
+TEST_F(DeviceAudioPlayerTest, AnOutputThatAsksToPausePausesThePlayer) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  ASSERT_NE(device_out_, nullptr);
+  EXPECT_FALSE(player->follow_audio());
+  EXPECT_TRUE(player->playing());
+  device_out_->interruption_began();
+  EXPECT_TRUE(player->playing()) << "not until the view follows";
+  EXPECT_TRUE(player->follow_audio());
+  EXPECT_FALSE(player->playing());
+  EXPECT_FALSE(device_out_->playing());
+  EXPECT_FALSE(player->follow_audio()) << "once";
+  device_out_->interruption_ended();
+  EXPECT_FALSE(player->playing()) << "the end resumes nothing";
+  player->play();
+  EXPECT_TRUE(device_out_->playing());
+  device_out_->device_went_away();
+  EXPECT_TRUE(player->follow_audio());
+  EXPECT_FALSE(player->playing());
+  EXPECT_FALSE(device_out_->playing());
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
 // --- Live: the tests' stream served on 127.0.0.1 ----------------------------

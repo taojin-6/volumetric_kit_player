@@ -26,15 +26,17 @@ namespace volumetric_kit::player {
 /// VKC_ASSIGN(const core::config::Config settings,
 ///            core::config::load(path, core::config::Application::Player));
 /// VKC_ASSIGN(std::unique_ptr<StreamPlayer> player,
-///            open_source(settings.source));
+///            open_source(settings.source, AudioOut::open_default));
 /// @endcode
-/// @param source  A source the core loaded for `Application::Player`, or one
-///                of @ref parse_live_source's or @ref folder_source's.
+/// @param source      A source the core loaded for `Application::Player`, or
+///                    one of @ref parse_live_source's or @ref folder_source's.
+/// @param make_audio  A file's audio output (StreamPlayer::open): the apps
+///                    give AudioOut::open_default; empty for the null output.
 /// @return With no `host`, StreamPlayer::open of its `path`; else
 ///         StreamPlayer::connect, which does no I/O, to `host` on `port`, or
 ///         for 0 on LiveAddress's default, the sender's; or their refusal.
 core::Result<std::unique_ptr<StreamPlayer>> open_source(
-    const core::config::Source& source);
+    const core::config::Source& source, AudioOutMaker make_audio = {});
 
 /// @brief Parse a sender's source from a host and a port typed apart, as the
 ///        iOS app's dialog takes them, on the host alone. Each is trimmed of

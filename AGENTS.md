@@ -60,6 +60,10 @@ records why.
   `GlfwNativeWindowTest`. Only CI's Xvfb step on the Linux legs runs the
   window; the owner checks it by hand. Agents and CI build the iOS app but
   never run it; the owner runs it on a device.
+- **Tests and agents never open an audio device.** Tests play through the
+  null output or a fake device, and run with `VP_NO_AUDIO_DEVICE` set, which
+  stops the Apple output opening one (DECISIONS.md); `vp_audio_check` and
+  the apps' sound are checked by hand.
 - Logic is tested headless: host-only where it can be, otherwise on a device
   through the core's fixtures, which skip without one locally and fail in CI.
 - Run GPU tests under the validation layer: `VKC_TEST_VALIDATION=1`, and on

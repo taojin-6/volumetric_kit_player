@@ -312,8 +312,11 @@ core::Status StreamPlayer::start_audio() {
   const AudioFormat format = played_format(audio_track_->params);
   std::unique_ptr<AudioOut> out;
   try {
-    VKC_ASSIGN(out, make_audio_ ? make_audio_(format)
-                                : AudioOut::open_default(format));
+    if (make_audio_) {
+      VKC_ASSIGN(out, make_audio_(format));
+    } else {
+      VKC_ASSIGN(out, NullAudioOut::create(format));
+    }
   } catch (...) {
     return core::exception_status("StreamPlayer's audio output",
                                   core::Status::Code::IoError);
@@ -426,6 +429,30 @@ std::optional<std::uint64_t> StreamPlayer::audio_position() const {
   return audio_ ? audio_->position() : std::nullopt;
 }
 
+std::optional<AudioStatus> StreamPlayer::audio_status() const {
+  if (!audio_track_) {
+    return std::nullopt;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  AudioStatus status;
+  status.muted = muted_;
+  if (audio_) {
+    status.route = audio_->route();
+  }
+  return status;
+}
+
+bool StreamPlayer::follow_audio() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (audio_ == nullptr || !audio_->take_pause_request()) {
+    return false;
+  }
+  clock_.pause();
+  audio_->pause();
+  changed_.notify_all();
+  return true;
+}
+
 // Live too: the decoder takes it at the next record.
 void StreamPlayer::set_deblock(bool on) {
   control([this, on] { deblock_ = on; });
@@ -436,13 +463,16 @@ bool StreamPlayer::deblock() const {
   return deblock_;
 }
 
-// TODO: with a device output, a park stops the audio and an unpark resumes
-// it; the null output and the feeder run on through a park.
+// A device output stops at a park and starts at the unpark; the null output
+// and the feeder run on through it.
 bool StreamPlayer::park(std::chrono::milliseconds timeout) {
   const Clock::time_point deadline = Clock::now() + timeout;
   {
     std::unique_lock<std::mutex> lock(mutex_);
     parked_ = true;
+    if (audio_) {
+      audio_->park();
+    }
     changed_.notify_all();  // ends a wait to retry, and wakes a frame's pacing
     if (!changed_.wait_until(lock, deadline, [this] { return busy_ == 0; })) {
       return false;
@@ -463,7 +493,12 @@ void StreamPlayer::unpark() {
   if (hooks_parked_.exchange(false) && hooks_->on_resume) {
     hooks_->on_resume();
   }
-  control([this] { parked_ = false; });
+  control([this] {
+    if (parked_ && audio_) {
+      audio_->unpark();
+    }
+    parked_ = false;
+  });
 }
 
 void StreamPlayer::taken() {

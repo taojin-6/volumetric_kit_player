@@ -6,12 +6,13 @@
 // gfx's ImGuiTouch for the controls panel, three recognizers drive the camera
 // unless the panel holds the finger, or a program's panel where they begin
 // over its content, with a double tap there, and the scene's activation parks
-// and unparks the worker. The Source button, at the top right, opens iOS's
-// dialog, which chooses a sender by host and port, or the first .vrst in the
-// app's Documents folder, which the Files app and Finder show (Info.plist.in);
-// the choice is kept for the next launch. A measure launch (--measure, the
-// runner's, tools/measure/) plays the stream it names instead and logs its
-// frames into Documents/measure/, or there why it could not.
+// and unparks the worker and a file's audio, which plays through the Apple
+// output (AudioOut::open_default). The Source button, at the top right, opens
+// iOS's dialog, which chooses a sender by host and port, or the first .vrst in
+// the app's Documents folder, which the Files app and Finder show
+// (Info.plist.in); the choice is kept for the next launch. A measure launch
+// (--measure, the runner's, tools/measure/) plays the stream it names instead
+// and logs its frames into Documents/measure/, or there why it could not.
 
 #import "PlayerViewController.h"
 
@@ -157,7 +158,7 @@ vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
     const std::optional<vkp::MeasureArgs>& measure, std::optional<bool> deblock,
     const std::optional<vg::ui::DockedPanelState>& panel) {
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
-             vkp::open_source(source));
+             vkp::open_source(source, vkp::AudioOut::open_default));
   if (deblock) {
     player->set_deblock(*deblock);
   }

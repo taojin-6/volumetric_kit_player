@@ -187,6 +187,8 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   }
   VKC_TRY(player_->status());
   VKC_TRY(hook_failure_);
+  // An interruption, or the audio's device gone, pauses the player.
+  player_->follow_audio();
   // 1. The draw is timed as the worker is, while the stats show it as of the
   // last frame: gfx's profiler marks every frame it is attached to, so it is
   // attached only then, in its place (the loop keeps its address; the

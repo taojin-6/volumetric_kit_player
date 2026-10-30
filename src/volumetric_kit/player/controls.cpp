@@ -149,9 +149,9 @@ bool draw_box(const char* label, bool* on, const UiArea& area) {
   return ImGui::Checkbox(label, on);
 }
 
-// Deblock, Unlit and, given, Texture and the panel's, each a box after the
-// line's last control, or below it when the line would not fit `area` with
-// it.
+// Deblock, Unlit and, given, Texture, the panel's and, with audio, Mute, each
+// a box after the line's last control, or below it when the line would not
+// fit `area` with it.
 void draw_boxes(StreamPlayer& player, bool& unlit, bool* textured,
                 const UiArea& area, const char* panel_label, bool* panel_open) {
   bool on = player.deblock();
@@ -164,6 +164,12 @@ void draw_boxes(StreamPlayer& player, bool& unlit, bool* textured,
   }
   if (panel_label != nullptr && panel_open != nullptr) {
     draw_box(panel_label, panel_open, area);
+  }
+  if (player.has_audio()) {
+    bool muted = player.muted();
+    if (draw_box("Mute", &muted, area)) {
+      player.set_muted(muted);
+    }
   }
 }
 
@@ -196,7 +202,8 @@ std::string draw_file_controls(StreamPlayer& player,
   ImGui::SameLine();
   draw_normals(normals);
   draw_boxes(player, unlit, textured, area, panel_label, panel_open);
-  return status_line(shown, player.frame_count(), player.playing(), loop);
+  return status_line(shown, player.frame_count(), player.playing(), loop,
+                     player.audio_status());
 }
 
 }  // namespace
@@ -269,8 +276,21 @@ std::string live_status_line(const LiveStatus& status,
   return line;
 }
 
+std::string audio_status_text(const AudioStatus& audio) {
+  if (audio.muted) {
+    return "muted";
+  }
+  if (!audio.route.audible) {
+    return "audio off";
+  }
+  // To the nearest ms.
+  return "audio " +
+         std::to_string((audio.route.latency_ns + 500'000) / 1'000'000) + " ms";
+}
+
 std::string status_line(const std::optional<FrameStamp>& shown,
-                        std::uint64_t frame_count, bool playing, bool loop) {
+                        std::uint64_t frame_count, bool playing, bool loop,
+                        const std::optional<AudioStatus>& audio) {
   if (!shown) {
     return "loading";
   }
@@ -282,6 +302,9 @@ std::string status_line(const std::optional<FrameStamp>& shown,
   line += playing ? " · playing" : " · paused";
   if (loop) {
     line += " · loop";
+  }
+  if (audio) {
+    line += " · " + audio_status_text(*audio);
   }
   return line;
 }

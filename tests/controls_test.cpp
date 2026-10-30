@@ -3,7 +3,8 @@
 
 // The controls and the stats panel on the host: status_line's,
 // live_status_line's and stats_lines' wording, file and live, a frame's set
-// only where its record names one, the deblock's
+// only where its record names one, a file's audio muted, its latency or off,
+// the deblock's
 // for each filter with some, none or all of its blocks exact, and off;
 // live_reason; parse_live_address; and
 // draw_controls and StatsPanel on a CPU-only ImGui context fed by gfx's
@@ -13,7 +14,9 @@
 // player's deblock, on the row or, where the row would not fit, below it,
 // Unlit, off at first, flips the view's Unlit, after Deblock or below it,
 // Texture is drawn only when given, after Unlit, and flips the view's Texture,
-// a live player's too, "Pause" and "Normals" fit their buttons, a finger on the
+// a live player's too, Mute is drawn only for a file with audio and flips the
+// player's mute, its status line naming the audio's state,
+// "Pause" and "Normals" fit their buttons, a finger on the
 // controls is ImGui's, and they keep clear of the safe area; a status line too
 // wide for the work area breaks between its parts, the rows after the first
 // indented; a live player's, never started, are Normals, Deblock and Unlit over
@@ -80,6 +83,8 @@ namespace stream = volumetric_kit::grid::stream;
 namespace ui = volumetric_kit::gfx::ui;
 using std::chrono::milliseconds;
 using std::chrono::seconds;
+using volumetric_kit::player::audio_status_text;
+using volumetric_kit::player::AudioStatus;
 using volumetric_kit::player::display_line;
 using volumetric_kit::player::draw_controls;
 using volumetric_kit::player::draw_source;
@@ -142,6 +147,38 @@ TEST(StatusLine, NamesTheFramesSetWhenItHasOne) {
             "frame 12/150 · set 0 · paused");
   stamp.set = stream::kNoSet;
   EXPECT_EQ(status_line(stamp, 150, false, false), "frame 12/150 · paused");
+}
+
+// A file's audio after the rest: muted; else the route's latency to the
+// nearest ms while a device plays it; else off. None without audio.
+TEST(StatusLine, SaysWhatTheAudioDoesForAFileWithAudio) {
+  const FrameStamp stamp = stamp_of(11, 41'234, false);
+  AudioStatus audio;
+  EXPECT_EQ(status_line(stamp, 150, true, true, audio),
+            "frame 12/150 · playing · loop · audio off");
+  audio.route.audible = true;
+  audio.route.latency_ns = 22'600'000;
+  EXPECT_EQ(status_line(stamp, 150, false, false, audio),
+            "frame 12/150 · paused · audio 23 ms");
+  audio.muted = true;
+  EXPECT_EQ(status_line(stamp, 150, true, false, audio),
+            "frame 12/150 · playing · muted");
+  EXPECT_EQ(status_line(stamp, 150, true, false, std::nullopt),
+            "frame 12/150 · playing");
+  EXPECT_EQ(status_line(std::nullopt, 150, true, false, audio), "loading");
+}
+
+TEST(AudioStatusText, RoundsTheLatencyToTheNearestMs) {
+  AudioStatus audio;
+  audio.route.audible = true;
+  audio.route.latency_ns = 22'499'999;
+  EXPECT_EQ(audio_status_text(audio), "audio 22 ms");
+  audio.route.latency_ns = 22'500'000;
+  EXPECT_EQ(audio_status_text(audio), "audio 23 ms");
+  audio.route.latency_ns = 0;
+  EXPECT_EQ(audio_status_text(audio), "audio 0 ms");
+  audio.route.latency_ns = 2'000'000'000;  // AirPlay
+  EXPECT_EQ(audio_status_text(audio), "audio 2000 ms");
 }
 
 // 300 records of 41 kB at 30 fps: 9.84 Mbit/s.
@@ -535,6 +572,22 @@ class ControlsTest : public ::testing::Test {
     ImGui::Render();
   }
 
+  // The player over a stream with an Audio track, opened but not started, as
+  // of the next frame, which with the one after lays out its controls.
+  void open_with_audio() {
+    const std::string path = scratch_.file("with_audio.vrst");
+    const core::Status written =
+        vp_test::write_undecodable_stream(path, 3, /*audio=*/true);
+    ASSERT_TRUE(written.ok()) << written.message();
+    core::Result<std::unique_ptr<StreamPlayer>> opened =
+        StreamPlayer::open(path);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    player_ = std::move(opened).value();
+    ASSERT_TRUE(player_->has_audio());
+    frame();
+    frame();
+  }
+
   // Source drawn from the next frame; its window takes its size on its
   // second.
   void show_source() {
@@ -855,6 +908,42 @@ TEST_F(ControlsTest, TextureIsDrawnOnlyWhenGivenAndATapFlipsIt) {
     tap(control(vp_test::kTexture));
     EXPECT_FALSE(textured_);
   }
+}
+
+// Mute, a box after the others, is drawn only for a file with audio; a tap
+// mutes the player and nothing else, and another unmutes it. The status line
+// says the audio is off, as no output plays it before a start.
+TEST_F(ControlsTest, MuteIsDrawnOnlyWithAudioAndATapFlipsIt) {
+  const ImGuiID mute_id =
+      ImGui::FindWindowByName(kControlsWindow)->GetID("Mute");
+  width_ = 600;
+  controls_shown_ = stamp_of(2, 1'000, false);
+  frame();
+  frame();
+  const auto mute = [this] {
+    return vp_test::mute_top_left(panel()) +
+           0.5f * vp_test::control_size(panel(), vp_test::kMute);
+  };
+  EXPECT_NE(item_under(mute()), mute_id);
+  ASSERT_NO_FATAL_FAILURE(open_with_audio());
+  EXPECT_EQ(item_under(mute()), mute_id);
+  ASSERT_FALSE(player_->muted());
+  tap(mute());
+  EXPECT_TRUE(player_->muted());
+  EXPECT_TRUE(player_->playing()) << "the tap pressed Mute alone";
+  EXPECT_TRUE(player_->deblock());
+  EXPECT_FALSE(unlit_);
+  tap(mute());
+  EXPECT_FALSE(player_->muted());
+  // The status line, the controls' last item, on one row.
+  const std::string line = "frame 3/3 · playing · loop · audio off";
+  ASSERT_EQ(
+      status_line(controls_shown_, player_->frame_count(), player_->playing(),
+                  player_->loop(), player_->audio_status()),
+      line);
+  const ImGuiWindow& window = panel();
+  EXPECT_NEAR(window.DC.CursorPosPrevLine.x - vp_test::text_width(window, line),
+              window.Pos.x + window.WindowPadding.x, 1.0f);
 }
 
 // A live player's Texture, given, is after its Unlit on the line over the
