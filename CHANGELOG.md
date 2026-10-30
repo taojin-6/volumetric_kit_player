@@ -195,6 +195,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   measure launch's `--panel on|off` (`MeasureArgs::panel`). The log's `run`
   names them.
 
+- A file's audio: its first Audio track on the geometry's clock (grid's
+  `TrackKind::Audio`) plays beside its geometry through `AudioOut`
+  (`audio_out.hpp`), fed ahead by `AudioFeeder` (`audio_feeder.hpp`)
+  through a lock-free `AudioRing` and placed by pts, starting at the
+  geometry's first pts; for now through the silent `NullAudioOut`
+  everywhere. The frames are paced as before. A pause or a step pauses the
+  audio, a play plays it, each pass flushes it and reads the track again,
+  and a mute is gain 0. `StreamPlayer::open` takes an `AudioOutMaker`;
+  `StreamPlayer::has_audio`, `set_muted`, `muted` and `audio_position`.
+  A file with no Audio track plays as before, with no output or feeder.
+
 ### Changed
 
 - build: the iOS app needs iOS 26 or newer: `cmake --preset ios` targets

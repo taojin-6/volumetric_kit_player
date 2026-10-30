@@ -4,6 +4,52 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-30 — A file's audio: AudioOut, the null output, video the master
+
+A file's Audio track (grid 0.4.0's `TrackKind::Audio`, raw PCM s16) plays
+beside its geometry through `AudioOut` (`audio_out.hpp`), fed by
+`AudioFeeder` (`audio_feeder.hpp`). The owner's audio plan, step one: the
+output and the feeder, with a silent output only.
+
+- **Audio is host I/O:** PCM in host memory, never on the GPU or in the
+  per-frame GPU path; a CPU audio codec needs the owner's approval. Why:
+  the OS reads and writes PCM in host memory, 96 KB/s for 48 kHz mono, and
+  its only arithmetic here is s16 to f32.
+- **The output is the player's,** an interface with play, pause, flush, gain
+  and `position()`, the pts being heard. Why: what plays the audio and its
+  clock are the player's pacing; nothing else in the family plays sound.
+- **One ring between one producer and the render thread, lock-free** (an
+  SPSC `AudioRing` of f32 frames). The render side neither locks nor
+  allocates, and takes the producer's flush through a sequence lock it never
+  waits on. Why: a device's render callback must do neither.
+- **The null output, silent, renders by a clock:** steady_clock on a thread
+  of its own, or a test's clock and ticks. Every platform plays through it
+  until a device output comes (Apple's next). Why: Linux and CI need no
+  sound, and tests then run the ring on two threads, under ThreadSanitizer
+  too, with no device: no test opens an audio device.
+- **Video stays the master.** The frames are paced as before; the audio
+  follows the controls: a pause and a step pause it, so its position holds;
+  a play plays it; each pass, a loop's or a play's after the end, flushes it
+  and restarts its cursor; a mute is gain 0 with its clock running. Why:
+  which clock paces a file is decided by measuring how often frames are
+  late, and one design ships then, not a switch.
+- **The feeder reads 200-500 ms ahead,** on a thread of its own with a second
+  cursor on the file's reader, which is safe for several. Why: the frames'
+  reads stay as they were, and the lead rides out a slow read.
+- **Placed by pts, not by count:** a record within one chunk (its own
+  length) of the running position follows on; past it, a forward jump is
+  silence and an overlap is dropped. The first record after a flush is
+  placed exactly, so the audio starts at the geometry's first pts. Why: a
+  mic that overflows loses samples with no gap in its count, and within a
+  chunk the pts' jitter should move nothing.
+- **The first Audio track on the geometry's clock that the player can
+  play:** PCM s16, 8 to 384 kHz, with records; the others are skipped. The
+  first two channels play; more are downmixed to them. Why: pts on another
+  clock cannot be placed against the frames'.
+- **No Audio track, nothing new:** no output, no ring, no feeder thread.
+- **An output or a feeder that cannot start fails `start`.** Why: the null
+  output fails only where a thread cannot start, as the worker would.
+
 ## 2026-10-29 — A program's docked panel
 
 `FrameHooks::panel`: a program's own panel beside the scene, on the desktop

@@ -22,8 +22,8 @@ records why.
 - Code another application could use belongs in its owner, as a task in that
   repository. The player keeps only its assembly and its playback.
 - Processing runs on the GPU, on one `VkDevice` that grid and gfx share. The
-  host reads the stream's bytes, from a file or a socket, and handles input,
-  with no host fallbacks.
+  host reads the stream's bytes, from a file or a socket, plays its audio
+  and handles input, with no host fallbacks.
 
 ## Layout and naming
 

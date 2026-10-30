@@ -32,6 +32,10 @@ endfunction()
 # The pacing clock and the stats panel's figures, host only.
 vp_add_test(playback volumetric_kit::player)
 vp_add_test(playback_stats volumetric_kit::player)
+# The audio ring, the outputs and the feeder, on the host with synthetic frames:
+# no device, no sound.
+vp_add_test(audio_out volumetric_kit::player)
+vp_add_test(audio_feeder volumetric_kit::player)
 # The decode and mesh worker, on a device (the core's fixtures), over the tests'
 # streams.
 vp_add_test(stream_player STREAMS volumetric_kit::player

@@ -10,7 +10,9 @@ paced by the stream's timestamps or by the sender.
 > which paces frames by their timestamps with play, pause and step; the
 > stream player (`src/volumetric_kit/player/stream_player.hpp`), which decodes
 > and meshes each frame on the GPU on a worker thread, from a file or live
-> from a sender; the view
+> from a sender; the audio output and its feeder
+> (`src/volumetric_kit/player/audio_out.hpp`, `audio_feeder.hpp`), which play
+> a file's audio beside its frames, silent for now; the view
 > (`src/volumetric_kit/player/player_view.hpp`), which draws each mesh under
 > an orbit camera, a controls panel and a stats panel on any window system;
 > the per-frame hooks (`src/volumetric_kit/player/frame_hooks.hpp`), a
@@ -130,6 +132,10 @@ are the panel's shortcuts:
 | T | turns Texture on or off |
 | A program's key | opens or closes its panel |
 | Esc | closes the window |
+
+A file with an Audio track (grid's `TrackKind::Audio`) plays it beside the
+frames from their first pts, paused, stepped and looped with them, through
+a silent output for now (DECISIONS.md).
 
 With `run.frames`, the app prints the frame drawn as it exits, for CI's
 smoke run (DECISIONS.md).
