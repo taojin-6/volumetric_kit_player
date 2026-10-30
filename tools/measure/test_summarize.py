@@ -209,7 +209,7 @@ class Summarize(unittest.TestCase):
         """The format-3 fixture as format 5: frames 0 and 1 live, with a
         playout each; frame 2 a file's, its five fields empty."""
         live = {"1,0,I": ",50.0000,120.0000,130.0000,arrival,0.5000",
-                "1,1,P": ",60.0000,121.0000,121.0000,audio,-0.2500"}
+                "1,1,P": ",60.0000,121.0000,121.0000,program,-0.2500"}
         lines = []
         for line in text.replace("measure 3", "measure 5").replace(
                 "# recon:", "# grid:").splitlines():
@@ -231,7 +231,7 @@ class Summarize(unittest.TestCase):
         self.assertEqual(log.figures["delay_ms"], [120.0, 121.0])
         self.assertEqual(log.figures["target_ms"], [130.0, 121.0])
         self.assertEqual(log.figures["late_ms"], [0.5, -0.25])
-        self.assertEqual(log.needs, {"arrival": 1, "audio": 1})
+        self.assertEqual(log.needs, {"arrival": 1, "program": 1})
         # Taken with no present: the buffer, then publish and take; the file
         # frame's has no buffer.
         self.assertEqual(log.figures["taken_latency_ms"], [59.0, 70.0, 11.0])
@@ -240,7 +240,13 @@ class Summarize(unittest.TestCase):
                       "| 60.000 |", rows)
         self.assertIn("| playout delay ms (live, as taken) | 120.500 "
                       "| 120.000 | 121.000 |", rows)
-        self.assertIn("- delay set by: arrival: 1, audio: 1 frames", rows)
+        self.assertIn("- delay set by: arrival: 1, program: 1 frames", rows)
+        # A live stream's audio names its need too.
+        with open(path, encoding="utf-8") as file:
+            audio = self.write(file.read().replace(",program,", ",audio,"))
+        self.assertIn("- delay set by: arrival: 1, audio: 1 frames",
+                      summarize.summary(summarize.read_log(audio))
+                      .splitlines())
         # Diffed against format 3, which has none of it.
         diffed = summarize.summarize([UNSHARED, path]).split(
             "## Before -> after (means)")[1].splitlines()

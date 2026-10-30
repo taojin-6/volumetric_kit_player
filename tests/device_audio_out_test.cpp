@@ -15,13 +15,13 @@
 // A configuration change starts it again, re-reading the route; a device
 // gone asks the player to pause. A shift's insert holds what is heard
 // through its silence, the frames after it heard as they pass the output.
-// Onto a route of longer latency the
-// position never goes back; a restart begins a new run even where its
-// frames follow on; and a start's renders before its route is read play
-// silence and take nothing. The route is read while a start is under way
-// without waiting for it. A start that fails leaves it stopped until the
-// next. The render thread and a reader of the position pass the clock
-// between them under ThreadSanitizer, the position never going back.
+// Onto a route of longer latency the position never goes back; a restart
+// begins a new run even where its frames follow on; and a start's renders
+// before its route is read play silence and take nothing. The route is read
+// while a start is under way without waiting for it. A start that fails
+// leaves it stopped until the next. The render thread and a reader of the
+// position pass the clock between them under ThreadSanitizer, the position
+// never going back.
 
 #include "volumetric_kit/player/device_audio_out.hpp"
 
@@ -290,9 +290,6 @@ TEST_F(DeviceAudioOutTest, ARouteChangeToALongerLatencyNeverMovesItBack) {
                                        "heard 180 ms after the change";
 }
 
-// A restart begins a new run even where its first render follows on, at the
-// old run's end with the pts after it, so the new frames are heard at the
-// new route's latency. Mutant: render_at that misses the restart.
 // A shift's insert of 10 ms, begun in the render at 20 ms and leading the
 // next: what is heard holds through its silence, then the frames after it
 // are heard from when they pass the output, a new run.
@@ -318,6 +315,9 @@ TEST_F(DeviceAudioOutTest, AnInsertHoldsWhatIsHeardThroughItsSilence) {
   EXPECT_EQ(out_->stats().underruns, 0u);
 }
 
+// A restart begins a new run even where its first render follows on, at the
+// old run's end with the pts after it, so the new frames are heard at the
+// new route's latency. Mutant: render_at that misses the restart.
 TEST_F(DeviceAudioOutTest, ARestartBeginsANewRunThoughItsFramesFollowOn) {
   fill();
   const std::uint64_t start = now();

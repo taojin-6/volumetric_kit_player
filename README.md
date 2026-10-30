@@ -241,8 +241,9 @@ about every second until Source chooses another. While nothing plays, a
 label says why, and a tap on it opens the dialog.
 
 A file's audio plays as on the desktop, through the phone's route, Mute in
-the panel, and a sender's on its playout clock. It stops while the app is
-not active, with no background audio, and plays again when it is.
+the panel; a sender's plays on its playout clock, with no Mute box. Audio
+stops while the app is not active, with no background audio, and plays again
+when it is.
 
 To give it a file, launch it once, then copy a `.vrst` into its folder: in
 the Files app under On My iPhone (or iPad) › Player, in Finder under the

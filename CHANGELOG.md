@@ -254,10 +254,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `drift_trim`), never moving D.
   The live status line ends "audio late by N ms" where a route's latency
   needs D past 1 s (`LiveStatus::audio_late`); vp_probe's report adds D's
-  target; the measure log's `need` may be `audio`, which
+  target (`probe_delay_text`); the measure log's `need` may be `audio`, which
   `tools/measure/summarize.py` reads. `find_audio_track` takes a live
-  session, with no counts. A live stream with no Audio track plays as
-  before.
+  session, with no counts. An Audio record of more than a second is passed
+  over unread (`LiveAudio::takes`), and a connection's end drops what the
+  output holds. A live stream with no Audio track plays as before.
 
 ### Changed
 
@@ -267,7 +268,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The player requires 0.6.0; the core pin and floor stay at 0.30.0.
 - `NullAudioOut::position` runs on from its last render by its clock,
   through the frames it holds, as a device output's is mapped to now.
-
 - `StreamPlayer::open` with no audio output maker plays through the null
   output, not `AudioOut::open_default`; `open_source` takes a maker, which the
   desktop and iOS apps give as `AudioOut::open_default`. The player library

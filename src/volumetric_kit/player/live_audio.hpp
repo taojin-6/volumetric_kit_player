@@ -231,6 +231,7 @@ class LiveAudio final : public AudioMaster {
   bool playing() const noexcept {
     return playing_.load(std::memory_order_acquire);
   }
+  /// @param now  The time, near now.
   /// @return What is heard at @p now, on the clock's pts (above); none while
   ///         not in step.
   std::optional<std::int64_t> heard_pts(
@@ -242,6 +243,7 @@ class LiveAudio final : public AudioMaster {
   LiveAudioStats stats() const;
 
   /// @brief Its output's gain, now and for an output made later: 0 mutes.
+  /// @param gain  At least 0 (AudioOut::set_gain).
   void set_gain(float gain);
   /// @brief Park its output (AudioOut::park), now and for one made later.
   void park();
