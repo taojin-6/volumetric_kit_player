@@ -89,8 +89,11 @@ vkc_require_sibling(
 # controls and stats panels (ImGui) and the profiler that times the draw. Its
 # tests, examples and -Werror stay off in a subproject. Its GLFW tier is built
 # for player_desktop alone, so not on iOS: the library links no window system
-# (the top-level CMakeLists.txt checks). The pin is gfx main at #166's merge
-# (0b750b0), for ui::DockedPanel, which lays out a program's panel and draws its
+# (the top-level CMakeLists.txt checks). The pin is gfx main at #168's merge
+# (df3a0de), whose windows render at 4x MSAA (#167, #168): the swapchain's
+# layout().samples is 4, so the view's pipelines draw multisampled, and the
+# tests' offscreen targets take the view's layout with offscreen_desc. Before
+# it, #166's ui::DockedPanel, which lays out a program's panel and draws its
 # handle and header, on main at #165's merge (928146c), for
 # HybridMeshFrame::viewport, which draws the mesh in the scene's part. What the
 # player uses besides is as at #153's merge (123d013): ui::draw_stage_table's
@@ -108,7 +111,7 @@ set(VG_WITH_GLFW ${VP_DESKTOP_APP})
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  GIT_TAG 0b750b02e1be665d452a8ccba09e63ac45ee1aad)
+  GIT_TAG df3a0de4184f6b989faa8d8ffbe0a338e00642a5)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
 if(VP_BUILD_TESTS)
