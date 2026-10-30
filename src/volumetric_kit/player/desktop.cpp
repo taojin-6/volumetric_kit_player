@@ -145,8 +145,13 @@ core::Status run(const cfg::Config& settings, const AppConfig& config) {
     // camera, its drags in the scene's heights.
     const bool to_panel =
         target.on_panel(left || right, view->over_panel(cursor));
-    const bool double_click =
-        left && !was_left && clicks.press(cursor, glfwGetTime());
+    double points_x = 0.0;
+    double points_y = 0.0;
+    glfwGetCursorPos(w, &points_x, &points_y);  // window points, as ImGui's
+    const bool double_click = left && !was_left &&
+                              clicks.press({static_cast<float>(points_x),
+                                            static_cast<float>(points_y)},
+                                           glfwGetTime());
     const float height = static_cast<float>(
         view->scene_rect().extent.height > 0 ? view->scene_rect().extent.height
                                              : size.height);

@@ -36,7 +36,8 @@
 // out its breakdowns, submit and finish, the renderer's sits beside it in a
 // work area wider than tall, the rate and a program's lines over it, the
 // worker's column as tall with them as without, and a line breaks against the
-// room its column has. Beside a program's panel (ProgramPanel), docked right
+// room its column has. Beside a program's panel (gfx's DockedPanel), docked
+// right
 // or at the bottom, safe areas kept clear, the controls, Source and the stats
 // sit in the scene's part of the work area, clear of the panel's handle and
 // header; and the panel's box is drawn only when given, after Texture, and a
@@ -65,6 +66,7 @@
 #include "imgui_internal.h"  // FindWindowByName, to find the panels
 #include "test_stream.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/gfx/ui/docked_panel.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
@@ -84,8 +86,6 @@ using volumetric_kit::player::draw_controls;
 using volumetric_kit::player::draw_source;
 using volumetric_kit::player::FrameStamp;
 using volumetric_kit::player::kControlsWindow;
-using volumetric_kit::player::kPanelHandleWindow;
-using volumetric_kit::player::kPanelHeaderWindow;
 using volumetric_kit::player::kSourceWindow;
 using volumetric_kit::player::kStatsWindow;
 using volumetric_kit::player::live_reason;
@@ -95,7 +95,7 @@ using volumetric_kit::player::LiveState;
 using volumetric_kit::player::LiveStatus;
 using volumetric_kit::player::parse_live_address;
 using volumetric_kit::player::PlaybackStats;
-using volumetric_kit::player::ProgramPanel;
+using volumetric_kit::player::scene_area;
 using volumetric_kit::player::stats_lines;
 using volumetric_kit::player::StatsPanel;
 using volumetric_kit::player::status_line;
@@ -105,6 +105,12 @@ using Lines = std::vector<std::string>;
 using TimePoint = PlaybackStats::Clock::time_point;
 
 const TimePoint t0{seconds(100)};
+
+// A program's panel's title, and its handle's and header's ImGui windows
+// (gfx::ui::DockedPanel::draw_chrome).
+constexpr const char* kProgramTitle = "Program panel";
+constexpr const char* kProgramHandle = "Program panel##handle";
+constexpr const char* kProgramHeader = "Program panel##header";
 
 // A stamp of frame `index`, `bytes` long, a key record or not.
 FrameStamp stamp_of(std::uint64_t index, std::uint64_t bytes, bool key) {
@@ -510,9 +516,11 @@ class ControlsTest : public ::testing::Test {
     seconds_ += 1.0 / 60.0;
     touch_->new_frame(display(seconds_, safe_area_, width_, height_));
     ImGui::NewFrame();
-    program_.layout({2 * width_, 2 * height_});
-    const UiArea& area = program_.scene_area();
-    bool open = program_.laid_out_open();
+    const ui::PanelLayout& laid = program_.layout({2 * width_, 2 * height_});
+    const bool laid_open = program_.open();
+    scene_area_ = scene_area(laid, laid_open);
+    const UiArea& area = scene_area_;
+    bool open = laid_open;
     draw_controls(*player_, controls_shown_, normals_, unlit_,
                   texture_shown_ ? &textured_ : nullptr, area,
                   box_shown_ ? vp_test::kPanelLabel : nullptr, &open);
@@ -521,8 +529,8 @@ class ControlsTest : public ::testing::Test {
     }
     panel_.draw(*stats_, shown_, triangles_, render_, now(), player_->live(),
                 area, program_line_);
-    program_.draw_chrome("Program panel", {});
-    if (open != program_.laid_out_open()) {
+    program_.draw_chrome(kProgramTitle);
+    if (open != laid_open) {
       program_.set_open(open);
     }
     ImGui::Render();
@@ -689,7 +697,8 @@ class ControlsTest : public ::testing::Test {
   std::uint32_t height_ = 300;  // the display's, in points
   // A program's panel, closed unless a test opens it; its box while
   // `box_shown_`.
-  ProgramPanel program_;
+  ui::DockedPanel program_;
+  UiArea scene_area_;  // the scene's part of the work area, the last frame
   bool box_shown_ = false;
   ImGuiContext* context_ = nullptr;
   std::unique_ptr<ui::ImGuiTouch> touch_;  // reset before the context
@@ -1474,17 +1483,15 @@ TEST_F(ControlsTest, BesideTheProgramsPanelThePanelsSitInTheScenesPart) {
     box_shown_ = true;
     program_.set_open(true);
     show_source();
-    const UiArea& area = program_.scene_area();
+    const UiArea area = scene_area_;
     const UiArea work = volumetric_kit::player::work_area();
     ASSERT_TRUE(phone.width > phone.height ? area.size.x < work.size.x
                                            : area.size.y < work.size.y);
     const ImRect inside(area.pos.x - 1.0f, area.pos.y - 1.0f,
                         area.pos.x + area.size.x + 1.0f,
                         area.pos.y + area.size.y + 1.0f);
-    const ImGuiWindow* const handle =
-        ImGui::FindWindowByName(kPanelHandleWindow);
-    const ImGuiWindow* const header =
-        ImGui::FindWindowByName(kPanelHeaderWindow);
+    const ImGuiWindow* const handle = ImGui::FindWindowByName(kProgramHandle);
+    const ImGuiWindow* const header = ImGui::FindWindowByName(kProgramHeader);
     ASSERT_NE(handle, nullptr);
     ASSERT_NE(header, nullptr);
     for (const ImGuiWindow* window :
@@ -1501,8 +1508,8 @@ TEST_F(ControlsTest, BesideTheProgramsPanelThePanelsSitInTheScenesPart) {
     }
     program_.set_open(false);
     frame();
-    EXPECT_EQ(program_.scene_area().size.x, work.size.x);
-    EXPECT_EQ(program_.scene_area().size.y, work.size.y);
+    EXPECT_EQ(scene_area_.size.x, work.size.x);
+    EXPECT_EQ(scene_area_.size.y, work.size.y);
   }
 }
 

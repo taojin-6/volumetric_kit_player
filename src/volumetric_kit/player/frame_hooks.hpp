@@ -24,6 +24,7 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/gfx/ui/docked_panel.hpp"
 #include "volumetric_kit/grid/mesh/device_mesh.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
@@ -55,20 +56,14 @@ enum class FrameCommit {
           ///< draw since holds the frame, as kHold does.
 };
 
-/// @brief The window edge a program's panel docks at (@ref PanelHooks): the
-///        end of the drawable's long axis.
-enum class DockSide : std::uint8_t {
-  kRight,   ///< Beside the scene: a drawable at least as wide as tall.
-  kBottom,  ///< Below it: a drawable taller than wide.
-};
-
 /// @brief One display frame of a program's panel (@ref PanelHooks), in
 ///        drawable pixels, which the frame's pass covers.
 struct PanelFrame {
   VkExtent2D drawable{};  ///< The pass's extent.
   /// The program's part: the panel below its header, inside the safe area.
   VkRect2D content{};
-  DockSide side = DockSide::kRight;  ///< Where the panel docks.
+  /// Where the panel docks.
+  gfx::ui::DockSide side = gfx::ui::DockSide::Right;
 };
 
 /// @brief Pointer input over a program's panel (@ref PanelHooks::pointer),
@@ -86,13 +81,11 @@ struct PanelPointer {
 };
 
 /// @brief A program's panel, docked beside the scene while open
-///        (PlayerView::panel_open): at the drawable's right, or at its
-///        bottom when it is taller than wide, its share of the safe area
-///        resized by a handle on its inner edge. The view draws its handle
-///        and its header (the title, then @ref draw_ui's items, then a
-///        close button), the mesh in the scene's part alone, and the
-///        controls, the stats and Source there too. A box in the controls,
-///        and the desktop's @ref key, open and close it.
+///        (PlayerView::panel_open) by gfx::ui::DockedPanel's rules, which
+///        also draws its handle and header. The view draws the mesh in the
+///        scene's part alone, and the controls, the stats and Source there
+///        too. A box in the controls, and the desktop's @ref key, open and
+///        close it.
 ///
 /// Each display frame the panel is open, on the draw thread: @ref draw_ui
 /// in the UI's frame, before the take; @ref prepare after before_draw and
@@ -124,11 +117,16 @@ struct PanelHooks {
   /// GLFW's key codes match, other than the view's own (L, N, D, U, T,
   /// which keep their meaning); 0, none.
   char key = 0;
-  /// The header's items after the title, such as buttons, inside its ImGui
-  /// window; and captions over the content through ImGui's draw lists, in
-  /// points (pixels over `DisplayFramebufferScale`), drawn after
-  /// @ref record.
+  /// The header's items, such as buttons, inside its ImGui window
+  /// (gfx::ui::DockedPanel::draw_chrome); and captions over the content on
+  /// `ImGui::GetBackgroundDrawList()`, which draws over @ref record and
+  /// under the UI, in points (pixels over `DisplayFramebufferScale`).
   std::function<void(const PanelFrame& frame)> draw_ui;
+  /// The content's size at each side, which picks the side
+  /// (gfx::ui::DockedPanel::set_content_size), asked each display frame the
+  /// panel is open, before its layout. Empty, the panel docks at the end of
+  /// the drawable's long axis.
+  std::function<gfx::ui::DockedContentSize()> content_size;
   /// Work outside the pass whose results @ref record reads, into the
   /// frame's command buffer; it runs whether or not before_draw ran this
   /// frame. A failure stops the view with its status.

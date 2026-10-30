@@ -88,8 +88,7 @@ UiArea work_area();
 /// @param textured    The view's Texture (PlayerView::textured), which its
 ///                    box shows and a press flips; null draws no Texture box,
 ///                    as for a view with no texture bound.
-/// @param area        Where they go (@ref work_area, or
-///                    ProgramPanel::scene_area).
+/// @param area        Where they go (@ref work_area, or scene_area).
 /// @param panel_label  The panel's box's label (PanelHooks::label); null
 ///                     draws no box, as for a program with no panel.
 /// @param panel_open  Whether the panel is open, which its box shows and a
@@ -112,7 +111,7 @@ void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
 ///   source_requested = true;  // PlayerView::take_source_request
 /// }
 /// @endcode
-/// @param area  Where it goes (@ref work_area, or ProgramPanel::scene_area).
+/// @param area  Where it goes (@ref work_area, or scene_area).
 /// @return Whether a tap or click pressed it in this frame.
 /// @pre An ImGui frame is open on the view's context.
 bool draw_source(const UiArea& area);
@@ -218,7 +217,7 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
 std::string display_line(const gfx::FrameMetrics& render);
 
 /// @brief The "Stats" panel, at the top left of its area (the work area, or
-///        the scene's part of it: ProgramPanel::scene_area): a header
+///        the scene's part of it: scene_area): a header
 ///        (gfx::ui::begin_collapsible_panel) and below it, while
 ///        open, on a 60 % background, the @ref stats_lines, the worker's stage
 ///        table, per stream frame, and the renderer's, per display frame under
@@ -276,8 +275,7 @@ class StatsPanel {
   /// @param now        The time, for the rates and the rebuild.
   /// @param live       Whether they are a live player's, for
   ///                   @ref stats_lines.
-  /// @param area       Where it goes (@ref work_area, or
-  ///                   ProgramPanel::scene_area): its
+  /// @param area       Where it goes (@ref work_area, or scene_area): its
   ///                   lines break against its width.
   /// @param program_line  A program's text (FrameHooks::stats_line), for
   ///                      @ref stats_lines; empty, none.

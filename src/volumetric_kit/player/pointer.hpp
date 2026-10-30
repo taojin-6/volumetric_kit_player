@@ -43,21 +43,21 @@ class PointerTarget {
 };
 
 /// @brief A desktop's double click: a press within @ref kSeconds and
-///        @ref kPixels of the press before, which ImGui's defaults set.
+///        @ref kPoints of the press before, which ImGui's defaults set.
 ///
 /// @code
 /// DoubleClick clicks;
-/// if (pressed_now && clicks.press(cursor, glfwGetTime())) {
+/// if (pressed_now && clicks.press(cursor_points, glfwGetTime())) {
 ///   pointer.double_tap = true;
 /// }
 /// @endcode
 class DoubleClick {
  public:
   static constexpr double kSeconds = 0.3;  ///< ImGui's MouseDoubleClickTime.
-  static constexpr float kPixels = 6.0f;   ///< Its MouseDoubleClickMaxDist.
+  static constexpr float kPoints = 6.0f;   ///< Its MouseDoubleClickMaxDist.
 
   /// @brief A press.
-  /// @param at       Where, in pixels.
+  /// @param at       Where, in window points, as ImGui's distance is.
   /// @param seconds  When, on a steady clock.
   /// @return Whether it completes a double click; the press after one starts
   ///         a new pair.

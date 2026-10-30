@@ -30,6 +30,7 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/gfx/ui/docked_panel.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
 #include "volumetric_kit/player/command_line.hpp"
@@ -145,16 +146,16 @@ vkc::Result<std::optional<cfg::Source>> MeasureSource(
 }
 
 // The view over `source`, on `layer`, with fingertip-sized controls, the
-// Source button, on an iPhone the compact stats and a program's panel at 45 %
-// with detents at 45 % and 60 %, and the deblock and the panel as `deblock`
-// and `panel`, if set, as a view before had them; the worker's device timing,
+// Source button, on an iPhone the compact stats and a program's panel's share
+// and detents, and the deblock and the panel as `deblock` and `panel`, if
+// set, as a view before had them; the worker's device timing,
 // its tile depth, the labels and the vertex sharing as a `measure` launch
 // fixes them, or else timed while the stats panel is open. No validation: iOS
 // has no layer to load (DECISIONS.md).
 vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
     CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source,
     const std::optional<vkp::MeasureArgs>& measure, std::optional<bool> deblock,
-    const std::optional<vkp::PanelState>& panel) {
+    const std::optional<vg::ui::DockedPanelState>& panel) {
   VKC_ASSIGN(std::unique_ptr<vkp::StreamPlayer> player,
              vkp::open_source(source));
   if (deblock) {
@@ -170,12 +171,12 @@ vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
       UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
   config.compact_stats = phone;
   if (phone) {
-    config.panel.right_share = 0.45f;
-    config.panel.bottom_share = 0.45f;
-    config.panel_detents = {0.45f, 0.6f};
+    config.panel.state.right_share = 0.45f;
+    config.panel.state.bottom_share = 0.45f;
+    config.panel.detents = {0.45f, 0.6f};
   }
   if (panel) {
-    config.panel = *panel;
+    config.panel.state = *panel;
   }
   if (measure) {
     config.device_timing = measure->timing;
@@ -278,7 +279,7 @@ glm::vec2 Pixels(CGPoint at, UIView* view) {
   std::unique_ptr<vkp::MeasureLog> _log;
   std::uint64_t _logged;  // the view's frames taken, as of the last logged
   std::optional<bool> _deblock;  // the last view's Deblock, for the next
-  std::optional<vkp::PanelState> _panel;  // and its program's panel
+  std::optional<vg::ui::DockedPanelState> _panel;  // and its program's panel
 }
 
 - (void)loadView {

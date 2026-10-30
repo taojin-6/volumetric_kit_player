@@ -38,27 +38,28 @@
 // a commit hook holds and skips frames; the hooks' stats line is the stats'
 // last; and a before_draw failure stops the view. A program's panel
 // (FrameHooks::panel), open, docks right on a landscape drawable and at the
-// bottom on a portrait one: its drawing fills its content, the mesh is
-// centred in the scene and drawn nowhere else, its hooks run each frame, its
-// key and box open and close it, and pointer input reaches it while open;
-// closed, none of its hooks runs, the scene is the whole drawable, and the
-// frame's pixels and the controls' place are a view's with no panel; and its
-// prepare's failure stops the view. A live view presents, on the two images
-// its swapchain asks for (checked on the host).
-// A program's device requirements (PlayerViewConfig::device_requirements),
-// merged with grid's on the host (worker_requirements): none leave grid's
-// alone, a program's add to grid's, which stay, and a host allocation failure
-// in the merge is OutOfMemory. On the device, none leave the device as grid's
-// alone makes it; an optional extension is enabled on the hooks' devices where
-// the GPU offers it and skipped where not; grid's stay enabled under
-// requirements that leave them out, and frames play; and a required extension
-// no GPU offers refuses the view, its hooks never made.
-// The view makes its own shared device, validated as the test policy asks, so
-// the layer's errors fail the test. The tests skip where the loader offers no
-// headless surface (NVIDIA's ICD), but fail on Apple, where MoltenVK has one.
-// MoltenVK plans two queue families, so the mesh's buffers are CONCURRENT and
-// read across. One family, EXCLUSIVE and read in place, is tested on the host
-// only (mesh_wiring_test.cpp) until a leg runs the view on one.
+// bottom on a portrait one, or where its content shows larger: its drawing
+// fills its content, the mesh is centred in the scene and drawn nowhere else,
+// its hooks run each frame, its key and box open and close it, as do its
+// close button and a handle release below 25 %, and pointer input reaches it
+// while open; closed, none of its hooks runs, the scene is the whole
+// drawable, and the frame's pixels and the controls' place are a view's with
+// no panel; and its prepare's failure stops the view. A live view presents, on
+// the two images its swapchain asks for (checked on the host). A program's
+// device requirements (PlayerViewConfig::device_requirements), merged with
+// grid's on the host (worker_requirements): none leave grid's alone, a
+// program's add to grid's, which stay, and a host allocation failure in the
+// merge is OutOfMemory. On the device, none leave the device as grid's alone
+// makes it; an optional extension is enabled on the hooks' devices where the
+// GPU offers it and skipped where not; grid's stay enabled under requirements
+// that leave them out, and frames play; and a required extension no GPU offers
+// refuses the view, its hooks never made. The view makes its own shared device,
+// validated as the test policy asks, so the layer's errors fail the test. The
+// tests skip where the loader offers no headless surface (NVIDIA's ICD), but
+// fail on Apple, where MoltenVK has one. MoltenVK plans two queue families, so
+// the mesh's buffers are CONCURRENT and read across. One family, EXCLUSIVE and
+// read in place, is tested on the host only (mesh_wiring_test.cpp) until a leg
+// runs the view on one.
 
 #include "volumetric_kit/player/player_view.hpp"
 
@@ -111,6 +112,7 @@
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_texture_set.hpp"
+#include "volumetric_kit/gfx/ui/docked_panel.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
@@ -130,7 +132,6 @@ namespace gfx = volumetric_kit::gfx;
 namespace grid = volumetric_kit::grid;
 using namespace std::chrono_literals;
 using volumetric_kit::player::DeviceTiming;
-using volumetric_kit::player::DockSide;
 using volumetric_kit::player::DrawBinding;
 using volumetric_kit::player::FrameCommit;
 using volumetric_kit::player::FrameHooks;
@@ -144,7 +145,6 @@ using volumetric_kit::player::LiveState;
 using volumetric_kit::player::MakeHooks;
 using volumetric_kit::player::PanelFrame;
 using volumetric_kit::player::PanelPointer;
-using volumetric_kit::player::PanelState;
 using volumetric_kit::player::PlayerView;
 using volumetric_kit::player::PlayerViewConfig;
 using volumetric_kit::player::StatsPanel;
@@ -153,6 +153,7 @@ using volumetric_kit::player::StreamPlayer;
 using volumetric_kit::player::view_swapchain;
 using volumetric_kit::player::worker_requirements;
 using SteadyClock = std::chrono::steady_clock;
+using DockSide = volumetric_kit::gfx::ui::DockSide;
 
 constexpr VkExtent2D kExtent{320, 240};
 // The narrowest phone in portrait: 375 x 667 points, at 3 pixels a point.
@@ -774,7 +775,7 @@ class PlayerViewTest : public core::test::VulkanTest {
   bool share_vertices_ = PlayerViewConfig{}.share_vertices;
   bool unlit_ = PlayerViewConfig{}.unlit;
   bool textured_ = PlayerViewConfig{}.textured;
-  PanelState panel_ = PlayerViewConfig{}.panel;
+  gfx::ui::DockedPanelConfig panel_ = PlayerViewConfig{}.panel;
   MakeHooks make_hooks_;  // the view's hooks, with the context noted
   // mesh_pixel's pixel, from the middle, in pixels, +y down: the middle
   // unless a test moves it.
@@ -2289,9 +2290,12 @@ struct PanelCalls {
   int prepare = 0;
   int record = 0;
   int pointer = 0;
+  int content_size = 0;
   PanelFrame frame;   // as draw_ui last had it
   PanelPointer last;  // the last pointer input
   bool fail = false;  // prepare refuses
+  // The content's size it gives (PanelHooks::content_size); none, no hook.
+  std::optional<gfx::ui::DockedContentSize> content;
 };
 
 // Hooks with a program's panel, its box labelled vp_test::kPanelLabel and
@@ -2329,6 +2333,12 @@ MakeHooks panel_hooks(std::shared_ptr<PanelCalls> calls) {
       ++calls->pointer;
       calls->last = pointer;
     };
+    if (calls->content) {
+      hooks.panel.content_size = [calls]() {
+        ++calls->content_size;
+        return *calls->content;
+      };
+    }
     return hooks;
   };
 }
@@ -2346,25 +2356,33 @@ bool lit(const std::array<int, 4>& p) {
 }
 
 // Open from the start, on a landscape drawable and on a portrait one: the
-// panel docks right, then at the bottom; its draw_ui, prepare and record run
-// each frame; its content is all its own colour, and the mesh lies in the
-// scene alone, centred in it. Pointer input over the content reaches it; the
-// desktop's key (set_panel_open) closes it and none of its hooks runs, and a
-// tap on its box opens it again.
+// panel docks right, then at the bottom, and right on the portrait one when
+// its content is tall (PanelHooks::content_size); its draw_ui, prepare and
+// record run each frame; its content is all its own colour, and the mesh lies
+// in the scene alone, centred in it. Pointer input over the content reaches
+// it; the desktop's key (set_panel_open) closes it and none of its hooks
+// runs, and a tap on its box opens it again.
 TEST_F(PlayerViewTest, AProgramsPanelDocksBesideTheSceneAndDrawsItsContent) {
   struct Case {
     VkExtent2D extent;
+    std::optional<gfx::ui::DockedContentSize> content;
     DockSide side;
   };
-  panel_.open = true;
-  for (const Case& c :
-       {Case{kExtent, DockSide::kRight}, Case{{240, 320}, DockSide::kBottom}}) {
-    SCOPED_TRACE(c.extent.width);
+  const glm::vec2 tall{64.0f, 256.0f};
+  panel_.state.open = true;
+  for (const Case& c : {Case{kExtent, std::nullopt, DockSide::Right},
+                        Case{{240, 320}, std::nullopt, DockSide::Bottom},
+                        Case{{240, 320},
+                             gfx::ui::DockedContentSize{tall, tall},
+                             DockSide::Right}}) {
+    SCOPED_TRACE(::testing::Message()
+                 << c.extent.width << (c.content ? ", tall content" : ""));
     touch_.reset();
     view_.reset();
     context_.reset();
     extent_ = c.extent;
     const auto calls = std::make_shared<PanelCalls>();
+    calls->content = c.content;
     make_hooks_ = panel_hooks(calls);
     ASSERT_TRUE(make_view(/*playing=*/false));
     EXPECT_TRUE(view_->panel_open());
@@ -2376,13 +2394,16 @@ TEST_F(PlayerViewTest, AProgramsPanelDocksBesideTheSceneAndDrawsItsContent) {
     ASSERT_GE(calls->record, 1);
     EXPECT_EQ(calls->draw_ui, calls->prepare);
     EXPECT_EQ(calls->prepare, calls->record);
+    if (c.content) {
+      EXPECT_GE(calls->content_size, calls->draw_ui);
+    }
 
     const PanelFrame& frame = calls->frame;
     const VkRect2D scene = view_->scene_rect();
     ASSERT_EQ(frame.side, c.side);
     EXPECT_EQ(frame.drawable.width, c.extent.width);
     EXPECT_EQ(frame.drawable.height, c.extent.height);
-    if (c.side == DockSide::kRight) {
+    if (c.side == DockSide::Right) {
       EXPECT_EQ(scene.extent.height, c.extent.height);
       EXPECT_LT(scene.extent.width, frame.content.offset.x);
     } else {
@@ -2438,11 +2459,13 @@ TEST_F(PlayerViewTest, AProgramsPanelDocksBesideTheSceneAndDrawsItsContent) {
     view_->set_panel_open(false);
     const int recorded = calls->record;
     const int drawn = calls->draw_ui;
+    const int sized = calls->content_size;
     for (int i = 0; i < 3; ++i) {
       ASSERT_TRUE(present());
     }
     EXPECT_EQ(calls->record, recorded);
     EXPECT_EQ(calls->draw_ui, drawn);
+    EXPECT_EQ(calls->content_size, sized);
     EXPECT_EQ(view_->scene_rect().extent.width, c.extent.width);
     EXPECT_EQ(view_->scene_rect().extent.height, c.extent.height);
     EXPECT_FALSE(view_->over_panel(inside));
@@ -2497,10 +2520,62 @@ TEST_F(PlayerViewTest, AClosedPanelRunsNothingAndDrawsAsWithNone) {
             controls->GetID(vp_test::kPanelLabel));
 }
 
+// Open, its header's close button closes it, and so does a drag on its
+// handle released below 25 %: it stays closed, and none of its hooks runs.
+TEST_F(PlayerViewTest, ItsCloseButtonAndItsHandleCloseIt) {
+  const auto calls = std::make_shared<PanelCalls>();
+  make_hooks_ = panel_hooks(calls);
+  panel_.state.open = true;
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  ASSERT_TRUE(present());
+  ASSERT_TRUE(present());
+  // The chrome's windows, as gfx::ui::DockedPanel names them.
+  const auto chrome = [this](const char* part) {
+    ImGui::SetCurrentContext(view_->ui_context());
+    const ImGuiWindow* const window = ImGui::FindWindowByName(
+        (std::string("Program panel##") + part).c_str());
+    EXPECT_NE(window, nullptr) << part;
+    return window != nullptr ? window->Rect() : ImRect();
+  };
+  const auto stays_closed = [&] {
+    EXPECT_FALSE(view_->panel_open());
+    const int recorded = calls->record;
+    for (int i = 0; i < 3; ++i) {
+      ASSERT_TRUE(present());
+    }
+    EXPECT_FALSE(view_->panel_open());
+    EXPECT_EQ(calls->record, recorded);
+  };
+
+  // The close button, a frame height square at the header's right end.
+  const ImRect header = chrome("header");
+  tap({header.Max.x - ImGui::GetStyle().WindowPadding.x -
+           0.5f * ImGui::GetFrameHeight(),
+       header.GetCenter().y});
+  stays_closed();
+
+  view_->set_panel_open(true);
+  ASSERT_TRUE(present());
+  ASSERT_TRUE(present());
+  const ImVec2 grab = chrome("handle").GetCenter();
+  const float end = static_cast<float>(kExtent.width) - 4.0f;
+  touch_->touch_began(1, {grab.x, grab.y});
+  ASSERT_TRUE(present());
+  touch_->touch_moved(1, {0.5f * (grab.x + end), grab.y});
+  ASSERT_TRUE(present());
+  touch_->touch_moved(1, {end, grab.y});
+  ASSERT_TRUE(present());
+  touch_->touch_ended(1);
+  for (int i = 0; i < 4; ++i) {
+    ASSERT_TRUE(present());
+  }
+  stays_closed();
+}
+
 // With no panel there is nothing to open: no key, and the scene stays the
 // whole drawable.
 TEST_F(PlayerViewTest, WithNoPanelThereIsNothingToOpen) {
-  panel_.open = true;
+  panel_.state.open = true;
   ASSERT_TRUE(make_view(/*playing=*/false));
   EXPECT_FALSE(view_->panel_open());
   view_->set_panel_open(true);
@@ -2518,7 +2593,7 @@ TEST_F(PlayerViewTest, APanelsPrepareFailureStopsTheView) {
   const auto calls = std::make_shared<PanelCalls>();
   calls->fail = true;
   make_hooks_ = panel_hooks(calls);
-  panel_.open = true;
+  panel_.state.open = true;
   ASSERT_TRUE(make_view());
   core::Status failed;
   const SteadyClock::time_point deadline = SteadyClock::now() + kArrival;

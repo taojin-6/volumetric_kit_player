@@ -17,7 +17,7 @@ bool PointerTarget::on_panel(bool held, bool over_panel) noexcept {
 
 bool DoubleClick::press(glm::vec2 at, double seconds) noexcept {
   const bool second = first_ && seconds - first_->seconds <= kSeconds &&
-                      glm::distance(at, first_->at) <= kPixels;
+                      glm::distance(at, first_->at) <= kPoints;
   if (second) {
     first_.reset();
   } else {

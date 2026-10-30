@@ -13,9 +13,11 @@ program's.
 - **Docked, never floating.** The panel and the scene split the drawable,
   and the mesh, the controls, the stats and Source move into the scene's
   part, so nothing covers the mesh.
-- **At the end of the drawable's long axis.** Why: the owner's choice of an
-  automatic side over fixed sides per device: desktops dock right, an iPhone
-  at the bottom in portrait and right in landscape.
+- **gfx lays it out** (`ui::DockedPanel`, as its `ui::ImagePanel` does):
+  the side, the share, the handle and the header. The side is where the
+  program's content (`PanelHooks::content_size`) shows larger, else the end
+  of the drawable's long axis. Why: the owner's choice of an automatic side
+  over fixed sides per device, and one home for a docked panel's rules.
 - **40 % of the safe area, 45 % on an iPhone, held to 25-60 % and 240 pt
   across; an iPhone's handle snaps to 45 % and 60 %, and a release below
   25 % closes.** Why: the scene keeps at least 40 %; on an iPhone the owner
@@ -28,10 +30,6 @@ program's.
   panel is open.
 - **The state lasts the run,** carried across the iOS shell's view rebuilds
   as Deblock is; nothing is saved across launches.
-- **The layout is the player's for now** (`ProgramPanel`), a knowing copy of
-  the generic part of gfx's `ui::ImagePanel`, which lays out content of its
-  own. Why: gfx's panel draws its own header buttons; one home in gfx is a
-  gfx task (the TODO in `program_panel.cpp`).
 
 ## 2026-10-29 — The light follows the viewer
 

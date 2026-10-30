@@ -29,6 +29,7 @@
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
+#include "volumetric_kit/gfx/ui/docked_panel.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
@@ -36,7 +37,6 @@
 #include "volumetric_kit/player/controls.hpp"
 #include "volumetric_kit/player/frame_hooks.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
-#include "volumetric_kit/player/program_panel.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
 struct ImGuiContext;
@@ -96,13 +96,10 @@ struct PlayerViewConfig {
   bool unlit = false;
   /// The panel's Texture, at start (PlayerView::textured).
   bool textured = false;
-  /// A program's panel (FrameHooks::panel) at start: closed by default, and
-  /// its shares; a shell carries it across a rebuild of the view
-  /// (PlayerView::panel_state). The iOS shell gives an iPhone 45 %.
-  PanelState panel;
-  /// The shares a drag on the panel's handle snaps to: the iOS shell gives
-  /// an iPhone {0.45, 0.6}; empty, as by default, a drag resizes freely.
-  std::vector<float> panel_detents;
+  /// A program's panel (FrameHooks::panel) at start: closed by default, its
+  /// shares and its handle's detents. A shell carries its state across a
+  /// rebuild of the view (PlayerView::panel_state).
+  gfx::ui::DockedPanelConfig panel;
 };
 
 /// @brief The requirements of the device the worker decodes and meshes on, as
@@ -295,7 +292,9 @@ class PlayerView {
   }
   /// @return The panel's state, for a shell to carry into the next view
   ///         (PlayerViewConfig::panel).
-  PanelState panel_state() const noexcept { return panel_.state(); }
+  gfx::ui::DockedPanelState panel_state() const noexcept {
+    return panel_.state();
+  }
   /// @return The desktop's key for the panel (PanelHooks::key); 0 with none.
   char panel_key() const noexcept { return hooks_.panel.key; }
   /// @return Whether @p point, in drawable pixels, is over the panel's
@@ -312,7 +311,7 @@ class PlayerView {
   /// @return The scene's rectangle as of the last frame, in drawable pixels:
   ///         the whole drawable while the panel is closed; empty before the
   ///         first frame. A shell measures the camera's drags in its height.
-  VkRect2D scene_rect() const noexcept { return panel_.scene(); }
+  VkRect2D scene_rect() const noexcept { return panel_.laid_out().scene; }
   /// @return The flags the mesh draws with (gfx::pipelines::HybridMeshFlags)
   ///         before a DrawBinding clears any: kHybridMeshNormals while
   ///         @ref normals, else kHybridMeshLit.
@@ -429,8 +428,9 @@ class PlayerView {
   bool normals_ = false;         // the mesh's shading (mesh_flags)
   bool unlit_ = false;           // its vertex colours unshaded
   bool textured_ = false;        // drawn with before_draw's texture set
-  ProgramPanel panel_;           // the program's panel (FrameHooks::panel)
+  gfx::ui::DockedPanel panel_;   // the program's panel (FrameHooks::panel)
   bool panel_drawn_ = false;     // the last frame laid it out open
+  PanelFrame panel_frame_;       // and that frame's rectangles
   bool texture_bound_ = false;   // a before_draw has bound one: Texture shows
   bool source_button_ = false;   // frame() draws Source
   bool source_request_ = false;  // pressed since take_source_request

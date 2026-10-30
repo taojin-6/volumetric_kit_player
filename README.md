@@ -99,14 +99,14 @@ Texture, a box shown once a program's `before_draw` binds a texture set,
 draws the mesh with that texture; off, as at first, the mesh is drawn in its
 own shading.
 A program may add a panel of its own (`FrameHooks::panel`), with a box after
-Texture and a key, which docks beside the scene: at the right, or at the
-bottom of a window taller than wide, at 40 % of the safe area (45 % on an
-iPhone). A drag on its inner edge resizes it within 25-60 %, snapping to
-45 % and 60 % on an iPhone, and a release below 25 % closes it; its header
-names it and closes it. While it is open the mesh, the panel at the bottom,
-the stats and Source sit in the scene's part, and the pointer and gestures
-that begin over the panel are the program's: a drag or one or two fingers,
-the wheel or a pinch, and a double click or tap.
+Texture and a key, which docks beside the scene, at the right or at the
+bottom, at 40 % of the safe area (45 % on an iPhone). A drag on its inner
+edge resizes it within 25-60 %, snapping to 45 % and 60 % on an iPhone, and
+a release below 25 % closes it; its header names it and closes it. While it
+is open the mesh, the controls, the stats and Source sit in the scene's
+part, and the pointer and gestures that begin over the panel are the
+program's: a drag or one or two fingers, the wheel or a pinch, and a double
+click or tap.
 The stats at the top left show the bitrate, the frame drawn, what the
 deblock did to it (its filter, T and the blocks it kept at their exact
 decode), the frames' GPU time, the worker's queue idle and queue latency, the

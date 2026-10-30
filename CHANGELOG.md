@@ -173,15 +173,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`tests/vp_desktop_hooks.cpp`).
 - A program's panel (`FrameHooks::panel`), docked beside the scene while
   open: its title, box and desktop key; `draw_ui` for its header's items and
-  captions, `prepare` before the pass and `record` into its content after
-  the mesh; and the pointer and gestures over it (`PanelPointer`). The view
-  lays it out (`ProgramPanel`) and draws the mesh, the controls, the stats
-  and Source in the scene's part; the shells route input by where a press
-  began (`PointerTarget`, `DoubleClick`). `PlayerViewConfig::panel` and
-  `panel_detents` start it, which the iOS shell carries across a rebuild and
-  sets for an iPhone; `PlayerView::panel_open`, `set_panel_open`,
-  `panel_state`, `panel_key`, `over_panel`, `panel_pointer`, `scene_rect`
-  and `record_frame` work it.
+  captions, `content_size` for its side, `prepare` before the pass and
+  `record` into its content after the mesh; and the pointer and gestures
+  over it (`PanelPointer`). gfx's `ui::DockedPanel` lays it out; the view
+  draws the mesh, the controls, the stats and Source in the scene's part
+  (`scene_area`), and the shells route input by where a press began
+  (`PointerTarget`, `DoubleClick`). `PlayerViewConfig::panel` starts it,
+  which the iOS shell carries across a rebuild and sets for an iPhone;
+  `PlayerView::panel_open`, `set_panel_open`, `panel_state`, `panel_key`,
+  `over_panel`, `panel_pointer`, `scene_rect` and `record_frame` work it.
 - `PlayerViewConfig::device_requirements`: what a program's hooks need of
   the worker's device beyond grid's. The view's device, and vp_probe's by
   the worker alone, are made with them merged with grid's
@@ -199,7 +199,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   core main at #65's merge (a4a6fff, 0.29.0), grid main (cbf7a6e, 0.1.0) and
   gfx main at #160's merge (17b3192), and requires core 0.29.0, its pin's
   version and grid's floor, and grid 0.1.0 with each tier it links; gfx
-  since moved to #165's merge (928146c), for `HybridMeshFrame::viewport`. The
+  since moved to #166's head (fc459a1), on #165's merge, for
+  `HybridMeshFrame::viewport` and `ui::DockedPanel`. The
   worker's device asks for grid's requirements, without the external-memory
   and Metal-object extensions recon asked for, where offered, for its camera
   decoders. A mesh vertex on a corner whose distance is the iso-value is

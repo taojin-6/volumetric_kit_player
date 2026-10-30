@@ -19,6 +19,7 @@
 #include "volumetric_kit/grid/base/device_requirements.hpp"
 #include "volumetric_kit/player/controls.hpp"
 #include "volumetric_kit/player/mesh_wiring.hpp"
+#include "volumetric_kit/player/program_panel.hpp"
 
 namespace volumetric_kit::player {
 
@@ -131,7 +132,7 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   view->source_button_ = config.source_button;
   view->unlit_ = config.unlit;
   view->textured_ = config.textured;
-  view->panel_ = ProgramPanel(config.panel, config.panel_detents);
+  view->panel_ = gfx::ui::DockedPanel(config.panel);
   view->stats_panel_ = StatsPanel(config.compact_stats);
   // The panel opens at launch, so its frames are timed from the first.
   view->device_timing_ = config.device_timing;
@@ -145,7 +146,7 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
                               graphics_family};
     VKC_ASSIGN(view->hooks_, config.make_hooks(context));
   }
-  view->set_panel_open(config.panel.open);  // none without a panel
+  view->set_panel_open(config.panel.state.open);  // none without a panel
   VKC_TRY(view->player_->start(view->grid_device_, view->grid_allocator_,
                                wiring.mc, view->exchange_, &view->hooks_));
   return view;
@@ -206,11 +207,16 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   // panel's box, close button or handle changes it from the next frame.
   overlay_.new_frame();
   const VkExtent2D pixels = app_.swapchain().extent();
-  const PanelFrame& laid = panel_.layout(pixels);
-  panel_drawn_ = panel_.laid_out_open();
-  const UiArea& area = panel_.scene_area();
-  bool panel_box = panel_drawn_;
   const PanelHooks& panel = hooks_.panel;
+  if (panel_.open() && panel.content_size) {
+    panel_.set_content_size(panel.content_size());
+  }
+  const gfx::ui::PanelLayout& docked = panel_.layout(pixels);
+  panel_drawn_ = panel_.open();
+  panel_frame_ = {pixels, docked.content, docked.side};
+  const PanelFrame& laid = panel_frame_;
+  const UiArea area = scene_area(docked, panel_drawn_);
+  bool panel_box = panel_drawn_;
   // Texture's box once a before_draw has bound a set; the panel's, given.
   draw_controls(*player_, shown_, normals_, unlit_,
                 texture_bound_ ? &textured_ : nullptr, area,
@@ -353,14 +359,13 @@ void PlayerView::panel_pointer(const PanelPointer& pointer) const {
 }
 
 void PlayerView::record_frame(VkCommandBuffer cmd) const {
-  const PanelFrame& laid = panel_.laid_out();
   if (!panel_drawn_) {
-    record_mesh(cmd, laid.drawable);  // as with no panel
+    record_mesh(cmd, panel_frame_.drawable);  // as with no panel
     return;
   }
-  record_mesh(cmd, laid.drawable, panel_.scene());
+  record_mesh(cmd, panel_frame_.drawable, panel_.laid_out().scene);
   if (hooks_.panel.record) {
-    hooks_.panel.record(cmd, laid);
+    hooks_.panel.record(cmd, panel_frame_);
   }
 }
 
