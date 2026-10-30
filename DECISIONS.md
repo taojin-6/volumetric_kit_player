@@ -91,15 +91,19 @@ frame waits for it; the latency grows instead.
   and other tracks' records pass `pass_other`, which touches no clock.
 - **A file is unchanged:** paced by its pts, released when due, asked no
   live hook, with no playout; its log rows end with five empty fields.
-- **Measured** on the M5 Max, two runs: Rafa2 (30 fps) served on loopback
-  by grid's `serve_stream`, played by `vp_probe --connect` through the view,
-  1,500 frames each. With no program, D is 23-27 ms at p50 (p95 25-30), set
-  by arrival, and due to presented 21-29 ms at p50 (p95 36-39). At
-  `--live-delay 150`, D is 150 ms and due to presented 146-148 ms at p50
-  (p95 157-166). Past the join's first frame, every record was a frame of
-  its own, in order. The worker's host time a frame stays under 1 ms
-  (decode, submit and mesh); a steady hold touches the ring's 16 MiB (RSS
-  58 MB against 41).
+- **Measured** on the M5 Max: Rafa2 (30 fps) served on loopback by grid's
+  `serve_stream`, played by `vp_probe --connect` through the view, 1,500
+  frames at `--live-delay 0` and `150` (the same hooks and mesh ring). At 0,
+  D is 24 ms at p50 (p95 29), set by arrival, and due to presented 27 ms
+  (p95 34); at 150, due to presented 155 ms (p95 164). Past the join's first
+  frame every record was a frame of its own, in order, and the meshes at 0
+  and 150 held the same triangles for all 150 records of the loop. The
+  worker's host time a frame is about 1 ms (decode, submit and mesh), as
+  before; a steady hold touches the ring's 16 MiB (RSS 58 MB against 42).
+  How late a frame is taken after its present time is the phase of the
+  stream's pts against the 60 Hz tick: at a fixed D it sits near one value,
+  and where that is near a tick's edge, jitter moves some frames a tick on
+  (5 % here, 20 % in an earlier run).
 
 ## 2026-10-29 — A program's docked panel
 
