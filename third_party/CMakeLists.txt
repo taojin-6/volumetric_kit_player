@@ -13,19 +13,21 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first, and the
 # config tier: its Source, which the library's open_source takes on every
 # platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
-# is core main at PR #65's merge (a4a6fff, 0.29.0), grid's own pin and the floor
-# grid's library asks for. #65 to #67 add vulkan/fwd.hpp, test support for tests
-# that are main()s of their own, vkc_export_glsl and vkc_require_sibling, which
-# checks grid below; the player's code uses none of the rest. What it uses is as
-# at #52's merge (0.21.0): HostRing, whose slots grid's decoder and maps keep,
-# in place where device-mapped memory is cached and copied elsewhere;
-# CommandBatch::input and output; and DeviceCounters::dispatches and barriers,
-# which the stamps and the measure log carry. Under it, 0.20.0's rows with busy,
-# wait and device halves (core::DeviceTime), tiled device time,
-# PendingBatch::device_rows and device_span, GpuTimer::set_max_depth and
-# Device::counters and calibrate. Its iOS module, cmake/vkc_ios.cmake, links
-# MoltenVK's iOS release (MoltenVK_ROOT) and answers glm. The floor below is the
-# pin's version, so an older FETCHCONTENT_SOURCE_DIR override is refused.
+# is core main at PR #70's merge (2120e62, 0.30.0), grid's own pin and the floor
+# grid's library asks for. #68 to #70 add CI's trigger check, which the lint job
+# takes at this pin, and FuseOrbbec's output.max_viewers; #65 to #67 add
+# vulkan/fwd.hpp, test support for tests that are main()s of their own,
+# vkc_export_glsl and vkc_require_sibling, which checks grid below; the player's
+# code uses none of the rest. What it uses is as at #52's merge (0.21.0):
+# HostRing, whose slots grid's decoder and maps keep, in place where
+# device-mapped memory is cached and copied elsewhere; CommandBatch::input and
+# output; and DeviceCounters::dispatches and barriers, which the stamps and the
+# measure log carry. Under it, 0.20.0's rows with busy, wait and device halves
+# (core::DeviceTime), tiled device time, PendingBatch::device_rows and
+# device_span, GpuTimer::set_max_depth and Device::counters and calibrate. Its
+# iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT)
+# and answers glm. The floor below is the pin's version, so an older
+# FETCHCONTENT_SOURCE_DIR override is refused.
 set(VKC_WITH_VULKAN ON)
 set(VKC_WITH_CONFIG ON)
 # The test policy, which vp_probe's library validates by on every desktop, and
@@ -36,9 +38,9 @@ endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG a4a6fff4af65b26b25df27c8ed8c9eecbfbfcd87)
+  GIT_TAG 2120e6294e3c7ead8bb168d757f940b21d21267c)
 FetchContent_MakeAvailable(volumetric_kit_core)
-vkc_require_core(0.29.0 VULKAN CONFIG)
+vkc_require_core(0.30.0 VULKAN CONFIG)
 
 # --- volumetric_kit_grid -----------------------------------------------------
 # The stream reader, the codec's decode grid and its deblock, Marching Cubes,
@@ -46,11 +48,15 @@ vkc_require_core(0.29.0 VULKAN CONFIG)
 # and the tests' stream writer the PLY writer and the mesh integrator. Its tests
 # and examples are off, as is its -Werror in a subproject, so its library's core
 # floor is the one checked; its own core pin is the player's. The pin is grid
-# main at its first commits as a repository of its own (cbf7a6e), recon #309's
-# grid/ unchanged: the code recon at #299's merge (d8b8bda) built the player's
-# tiers from, under grid's names (DECISIONS.md, 2026-10-29). What the player
-# uses is as at recon #277's merge: a frame decoded and meshed in the caller's
-# batch (codec::record_growing, finish_growing;
+# main at #9's merge (01bdc64, 0.4.0), for TrackKind::Audio and
+# stream/audio.hpp, the Audio track the player plays (audio_feeder.hpp). Since
+# its first commits (cbf7a6e), recon #309's grid/ under grid's names
+# (DECISIONS.md, 2026-10-29), it has also brought marching-cubes vertex normals
+# from the field's gradient (0.2.1), StreamServer::viewers (0.2.0), the core
+# floor 0.30.0 (0.3.0) and an Encoder that holds P-frames a quantization step
+# against their reference (0.3.1), which the tests' streams are written with.
+# What the player uses besides is as at recon #277's merge: a frame decoded and
+# meshed in the caller's batch (codec::record_growing, finish_growing;
 # mesh::MarchingCubes::record_extract, finish, abandon), DeviceMesh::ready,
 # Decoder::claim_input and last_rounds, and the reads straight into caller
 # memory (StreamReader::read, networking::StreamClient::read); and since, recon
@@ -65,11 +71,11 @@ set(VGRID_BUILD_EXAMPLES OFF)
 FetchContent_Declare(
   volumetric_kit_grid
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
-  GIT_TAG cbf7a6ea2b8729645b24503063ff7a076706f698)
+  GIT_TAG 01bdc64cec96f8dbd0a107e55bfff6fec9d213a3)
 FetchContent_MakeAvailable(volumetric_kit_grid)
 vkc_require_sibling(
   volumetric_kit::grid
-  0.1.0
+  0.4.0
   TARGETS
   volumetric_kit::grid_codec
   volumetric_kit::grid_mesh

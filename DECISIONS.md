@@ -95,9 +95,8 @@ The core's CI does the same since its #68 (its DECISIONS.md, 2026-10-28,
 
 - **The lint job runs the core's `check-workflow-triggers` action,** which
   fails on `pull_request_target`, `workflow_run`, the comment and discussion
-  events, and `schedule`. It is taken at #68's merge (fcbbe0c), the first
-  core commit with it, newer than the core the build pins (a4a6fff) until
-  that pin moves.
+  events, and `schedule`. It is taken at the core the build pins, as the
+  core asks of a sibling.
 - **No checkout keeps a token** (`persist-credentials: false`): no job
   pushes.
 - **The Linux legs' images are pinned by digest,** the tag in a comment, so
