@@ -37,10 +37,12 @@ struct FrameFigures {
   std::optional<double> gpu_ms;
   std::optional<double> device_idle_ms;  ///< FrameStamp::device_idle_ms.
   std::optional<double> queue_ms;        ///< FrameStamp::queue_ms.
-  /// Its latency, FrameStamp::due to presented: only a frame with all three
-  /// legs below has it.
+  /// Its latency, FrameStamp::due to presented: only a frame with the
+  /// publish, take and present legs below has it.
   std::optional<double> latency_ms;
-  std::optional<double> publish_ms;  ///< FrameStamp::due to published.
+  /// Live: FrameStamp::due to released, its wait as bytes; none for a file.
+  std::optional<double> buffer_ms;
+  std::optional<double> publish_ms;  ///< FrameStamp::released to published.
   std::optional<double> take_ms;     ///< Published to taken.
   std::optional<double> present_ms;  ///< Taken to presented.
 };
@@ -53,8 +55,8 @@ struct FrameFigures {
 /// @endcode
 /// @param stamp  The frame's stamp.
 /// @return Its device time when timed and measured, its queue idle and
-///         latency, each latency leg whose ends it has, in order, and with
-///         all three its latency.
+///         latency, each latency leg whose ends it has, in order (live, the
+///         buffer leg first), and with publish, take and present its latency.
 FrameFigures frame_figures(const FrameStamp& stamp);
 
 /// @brief Figures over the frames taken for drawing: the track's mean

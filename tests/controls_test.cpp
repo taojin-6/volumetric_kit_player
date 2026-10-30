@@ -32,15 +32,17 @@
 // means per stream frame, then the renderer's rows per display frame under its
 // rate, each table under the window it covers; they name the frames' device
 // time, queue idle and queue latency, n/t or n/a where unknown, and the
-// latency's legs, as one line when compact. Compact, the worker's table leaves
-// out its breakdowns, submit and finish, the renderer's sits beside it in a
-// work area wider than tall, the rate and a program's lines over it, the
-// worker's column as tall with them as without, and a line breaks against the
-// room its column has. Beside a program's panel (gfx's DockedPanel), docked
-// right or at the bottom, safe areas kept clear, the controls, Source and the
-// stats sit in the scene's part of the work area, clear of the panel's handle
-// and header; and the panel's box is drawn only when given, after Texture, and
-// a tap opens and closes the panel.
+// latency's legs, as one line when compact; live, the legs begin with the
+// wait as bytes, and a line says the shown frame's playout delay and the need
+// that set it, the worker's column's last when compact. Compact, the worker's
+// table leaves out its breakdowns, submit and finish, the renderer's sits
+// beside it in a work area wider than tall, the rate and a program's lines over
+// it, the worker's column as tall with them as without, and a line breaks
+// against the room its column has. Beside a program's panel (gfx's
+// DockedPanel), docked right or at the bottom, safe areas kept clear, the
+// controls, Source and the stats sit in the scene's part of the work area,
+// clear of the panel's handle and header; and the panel's box is drawn only
+// when given, after Texture, and a tap opens and closes the panel.
 
 #include "volumetric_kit/player/controls.hpp"
 
@@ -80,6 +82,8 @@ namespace stream = volumetric_kit::grid::stream;
 namespace ui = volumetric_kit::gfx::ui;
 using std::chrono::milliseconds;
 using std::chrono::seconds;
+using volumetric_kit::player::delay_line;
+using volumetric_kit::player::DelayNeed;
 using volumetric_kit::player::display_line;
 using volumetric_kit::player::draw_controls;
 using volumetric_kit::player::draw_source;
@@ -94,6 +98,7 @@ using volumetric_kit::player::LiveState;
 using volumetric_kit::player::LiveStatus;
 using volumetric_kit::player::parse_live_address;
 using volumetric_kit::player::PlaybackStats;
+using volumetric_kit::player::Playout;
 using volumetric_kit::player::scene_area;
 using volumetric_kit::player::stats_lines;
 using volumetric_kit::player::StatsPanel;
@@ -157,6 +162,9 @@ stream::TrackStats a_track() {
 const Lines kNoFigures{"GPU n/t · idle n/t · queue n/t",
                        "latency - · publish - · take - · present -"};
 constexpr const char* kNoFiguresCompact = "GPU n/t · latency -";
+// Live, the latency's legs begin with the wait as bytes.
+constexpr const char* kNoLiveLegs =
+    "latency - · buffer - · publish - · take - · present -";
 
 TEST(StatsLines, SayDashForTheFrameBeforeTheFirst) {
   const PlaybackStats stats(a_track(), {30, 1});
@@ -284,8 +292,8 @@ TEST(StatsLines, LiveTheyShowTheLastSecondsBitrateAndRecords) {
   PlaybackStats stats({}, {});
   EXPECT_EQ(stats_lines(stats, std::nullopt, 0, t0, true),
             (Lines{"bitrate - Mbit/s · last 1 s", "frame - · - kB · - k tris",
-                   "deblock - · T - mm", kNoFigures[0], kNoFigures[1],
-                   "rate 0.0 fps · 0 rec/s"}));
+                   "deblock - · T - mm", kNoFigures[0], kNoLiveLegs,
+                   "delay - ms", "rate 0.0 fps · 0 rec/s"}));
   // 11 frames 100 ms apart, each taken as it is published after 3 records of
   // 12.5 kB: 3 Mbit/s, 30 records a second. A fused room's frames: every
   // block holds an unobserved voxel, so the fallback kept them all exact.
@@ -305,7 +313,59 @@ TEST(StatsLines, LiveTheyShowTheLastSecondsBitrateAndRecords) {
       stats_lines(stats, taken, 1'200, t0 + seconds(1), true),
       (Lines{"bitrate 3.0 Mbit/s · last 1 s", "frame P · 12.5 kB · 1 k tris",
              "deblock LG · T 0.500 mm · 1,920 of 1,920 blocks exact",
-             kNoFigures[0], kNoFigures[1], "rate 10.0 fps · 30 rec/s"}));
+             kNoFigures[0], kNoLiveLegs, "delay - ms",
+             "rate 10.0 fps · 30 rec/s"}));
+}
+
+// Live, one line says the shown frame's applied D, as it was taken, and the
+// need that set its target, "over 1 s" past the clamp; compact, it is the
+// worker's column's last, after the deblock's; a file has none. The latency's
+// legs begin with the wait as bytes, which a live frame's latency counts.
+TEST(StatsLines, LiveTheDelayLineSaysDAndTheNeedThatSetIt) {
+  FrameStamp shown = stamp_of(3, 12'500, false);
+  EXPECT_EQ(delay_line(std::nullopt), "delay - ms");
+  EXPECT_EQ(delay_line(shown), "delay - ms") << "taken with no playout";
+  Playout playout;
+  playout.offset = milliseconds(-500);
+  playout.point = milliseconds(-377);  // D 123 ms
+  playout.target = milliseconds(130);
+  playout.need = DelayNeed::kProgram;
+  shown.playout = playout;
+  EXPECT_EQ(delay_line(shown), "delay 123 ms · program");
+  playout.point = playout.offset + milliseconds(1'000);
+  playout.target = milliseconds(1'000);
+  playout.need = DelayNeed::kArrival;
+  playout.clamped = true;
+  shown.playout = playout;
+  EXPECT_EQ(delay_line(shown), "delay 1000 ms · arrival · over 1 s");
+  shown.playout = Playout{};
+  EXPECT_EQ(delay_line(shown), "delay 0 ms · none");
+  PlaybackStats live({}, {});
+  shown.playout = playout;
+  shown.due = t0;
+  shown.released = t0 + milliseconds(120);
+  shown.published = shown.released + milliseconds(9);
+  shown.taken = shown.published + milliseconds(8);
+  shown.presented = *shown.taken + milliseconds(1);
+  live.add_frame(shown, *shown.taken);
+  const Lines full = stats_lines(live, shown, 0, t0 + seconds(1), true);
+  ASSERT_EQ(full.size(), 7u);
+  EXPECT_EQ(full[4],
+            "latency 138.0 ms · buffer 120.0 · publish 9.0 · take 8.0 · "
+            "present 1.0");
+  EXPECT_EQ(full[5], "delay 1000 ms · arrival · over 1 s");
+  const Lines compact =
+      stats_lines(live, shown, 0, t0 + seconds(1), true, /*compact=*/true);
+  ASSERT_EQ(compact.size(), 6u);
+  EXPECT_EQ(compact[3], "delay 1000 ms · arrival · over 1 s");
+  EXPECT_EQ(compact[4], "GPU n/t · latency 138.0 ms");
+  const PlaybackStats file(a_track(), {30, 1});
+  for (const bool small : {false, true}) {
+    for (const std::string& line :
+         stats_lines(file, shown, 0, t0, false, small)) {
+      EXPECT_EQ(line.rfind("delay", 0), std::string::npos) << line;
+    }
+  }
 }
 
 // A program's line is the last, file and live, full and compact, the

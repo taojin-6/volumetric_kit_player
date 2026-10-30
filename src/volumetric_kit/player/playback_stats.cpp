@@ -50,7 +50,15 @@ FrameFigures frame_figures(const FrameStamp& stamp) {
   }
   figures.device_idle_ms = stamp.device_idle_ms;
   figures.queue_ms = stamp.queue_ms;
-  figures.publish_ms = leg_ms(stamp.due, stamp.published);
+  // Live (a frame taken with a playout), its wait as bytes; a file's
+  // release is its due.
+  if (stamp.playout) {
+    figures.buffer_ms = leg_ms(stamp.due, stamp.released);
+  }
+  const PlaybackStats::Clock::time_point released =
+      stamp.released == PlaybackStats::Clock::time_point{} ? stamp.due
+                                                           : stamp.released;
+  figures.publish_ms = leg_ms(released, stamp.published);
   if (stamp.taken) {
     figures.take_ms = leg_ms(stamp.published, stamp.taken);
     figures.present_ms = leg_ms(*stamp.taken, stamp.presented);
@@ -92,8 +100,8 @@ FrameFigures PlaybackStats::frame_means() const {
   for (std::optional<double> FrameFigures::* figure :
        {&FrameFigures::gpu_ms, &FrameFigures::device_idle_ms,
         &FrameFigures::queue_ms, &FrameFigures::latency_ms,
-        &FrameFigures::publish_ms, &FrameFigures::take_ms,
-        &FrameFigures::present_ms}) {
+        &FrameFigures::buffer_ms, &FrameFigures::publish_ms,
+        &FrameFigures::take_ms, &FrameFigures::present_ms}) {
     double sum = 0.0;
     int frames = 0;
     for (const Stages& frame : stages_) {

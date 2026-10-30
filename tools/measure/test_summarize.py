@@ -5,7 +5,10 @@
 
 Summarize: on the fixtures in testdata/, a format-1 log (before.csv, M0's),
 a format-2 one (after.csv) and a format-3 one (unshared.csv), and the last
-as format 4, which names the grid's commit where recon's was, it keeps a
+as format 4, which names the grid's commit where recon's was, and as
+format 5, whose live frames add their wait as bytes to their latency and
+show their playout delay, its target, how late they were taken and the needs
+that set it, and whose file frames have none of these, it keeps a
 log's passes after the first, takes nearest-rank p50 and p95, takes the GPU
 over measured rows alone and says why the rest were not, counts the device
 per frame, shows the load in a <log>.load beside a log after its device;
@@ -16,12 +19,12 @@ per frame; in each it takes a timed frame's device time over its stages but
 their breakdowns; it diffs two logs, a format-1 against a format-2 one and a
 format-2 against a format-3 one, a figure one lacks shown as "-", keeps a
 breakdown that a later frame or the second log alone has under its stage,
-and refuses what is not a log of a format it reads.
+and refuses what is not a log of a format it reads, format 6 among them.
 
 ProbeLog: each log vp_probe writes of the tests' stream (VP_PROBE_CSV, the
 paths joined by os.pathsep), two passes of its six frames with every frame
 timed, vertices shared or not and both among the logs, reads as one of
-format 4: its header names the commits of core, grid and gfx, which the build
+format 5 with no live figure: its header names the commits of core, grid and gfx, which the build
 fetched, and says how it ran; each frame has its read, decode, mesh,
 submit, wait and finish rows,
 the decode's breakdowns where measured, and its frame row: its record's set,
@@ -201,6 +204,60 @@ class Summarize(unittest.TestCase):
                       summarize.summary(summarize.read_log(UNSHARED))
                       .splitlines())
 
+    @staticmethod
+    def as_format_5(text):
+        """The format-3 fixture as format 5: frames 0 and 1 live, with a
+        playout each; frame 2 a file's, its five fields empty."""
+        live = {"1,0,I": ",50.0000,120.0000,130.0000,arrival,0.5000",
+                "1,1,P": ",60.0000,121.0000,121.0000,program,-0.2500"}
+        lines = []
+        for line in text.replace("measure 3", "measure 5").replace(
+                "# recon:", "# grid:").splitlines():
+            if line.startswith("pass,"):
+                line += ",buffer_ms,delay_ms,target_ms,need,late_ms"
+            elif not line.startswith("#"):
+                frame_row = line.split(",")[5] == ""
+                line += (live.get(line[:5], ",,,,,") if frame_row
+                         else ",,,,,")
+            lines.append(line)
+        return "\n".join(lines) + "\n"
+
+    def test_a_format_5_log_adds_a_live_frames_buffer_and_its_playout(self):
+        with open(UNSHARED, encoding="utf-8") as file:
+            path = self.write(self.as_format_5(file.read()))
+        log = summarize.read_log(path)
+        self.assertEqual(log.format, 5)
+        self.assertEqual(log.figures["buffer_ms"], [50.0, 60.0])
+        self.assertEqual(log.figures["delay_ms"], [120.0, 121.0])
+        self.assertEqual(log.figures["target_ms"], [130.0, 121.0])
+        self.assertEqual(log.figures["late_ms"], [0.5, -0.25])
+        self.assertEqual(log.needs, {"arrival": 1, "program": 1})
+        # Taken with no present: the buffer, then publish and take; the file
+        # frame's has no buffer.
+        self.assertEqual(log.figures["taken_latency_ms"], [59.0, 70.0, 11.0])
+        rows = summarize.summary(log).splitlines()
+        self.assertIn("|   ..due -> released ms (live) | 55.000 | 50.000 "
+                      "| 60.000 |", rows)
+        self.assertIn("| playout delay ms (live, as taken) | 120.500 "
+                      "| 120.000 | 121.000 |", rows)
+        self.assertIn("- delay set by: arrival: 1, program: 1 frames", rows)
+        # Diffed against format 3, which has none of it.
+        diffed = summarize.summarize([UNSHARED, path]).split(
+            "## Before -> after (means)")[1].splitlines()
+        self.assertIn("| playout delay ms (live, as taken) | - -> 120.500 |",
+                      diffed)
+        with open(UNSHARED, encoding="utf-8") as file:
+            bad = self.as_format_5(file.read())
+        for broken, why in (
+            (bad.replace(",arrival,", ",soon,"), "need 'soon'"),
+            (bad.replace(",120.0000,130.0000", ",x,130.0000"),
+             "delay_ms 'x' is not a number"),
+            (bad.replace(",buffer_ms", ""), "columns"),
+        ):
+            with self.subTest(why=why):
+                with self.assertRaisesRegex(summarize.LogError, why):
+                    summarize.read_log(self.write(broken))
+
     def test_a_format_2_log_diffs_against_a_format_3_one(self):
         rows = summarize.summarize([AFTER, UNSHARED]).split(
             "## Before -> after (means)")[1].splitlines()
@@ -250,7 +307,7 @@ class Summarize(unittest.TestCase):
         with open(UNSHARED, encoding="utf-8") as file:
             good_3 = file.read()
         for bad, why in (
-            (good.replace("measure 1", "measure 5"), "format"),
+            (good.replace("measure 1", "measure 6"), "format"),
             (good.replace("measure 1", "measure 2"), "lacks rings"),
             (good_2.replace("# labels: on\n", ""), "lacks labels"),
             (good_2.replace("measure 2", "measure 1"), "columns"),
@@ -299,7 +356,9 @@ class ProbeLog(unittest.TestCase):
     def test_the_header_names_what_was_measured(self):
         for log in self.logs:
             with self.subTest(log=log.path):
-                self.assertEqual(log.format, 4)
+                self.assertEqual(log.format, 5)
+                self.assertEqual(log.needs, {}, "a file's frames: no playout")
+                self.assertEqual(log.figures["buffer_ms"], [])
                 header = log.header
                 for sibling in ("core", "grid", "gfx"):
                     self.assertRegex(header[sibling],

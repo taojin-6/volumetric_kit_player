@@ -29,8 +29,13 @@ function(vp_add_test name)
   gtest_discover_tests(vp_${name}_test PROPERTIES ${properties})
 endfunction()
 
-# The pacing clock and the stats panel's figures, host only.
+# The pacing clock, the live playout clock, the live records held as bytes and
+# the stats panel's figures, host only; the live clock's test counts
+# allocations.
 vp_add_test(playback volumetric_kit::player)
+vp_add_test(live_clock volumetric_kit::player)
+target_sources(vp_live_clock_test PRIVATE test_allocation_failure.cpp)
+vp_add_test(held_records volumetric_kit::player)
 vp_add_test(playback_stats volumetric_kit::player)
 # The audio ring, the outputs and the feeder, on the host with synthetic frames:
 # no device, no sound.
@@ -121,7 +126,7 @@ vp_target_warnings(vp_probe)
 # counting their calls or keeping a mesh more of the ring; on the host, its
 # hooks' options refused with them, and the view's settings it plays with.
 vp_add_test(probe STREAMS volumetric_kit::player_probe
-            volumetric_kit::core_test_policy)
+            volumetric_kit::core_test_support)
 set(VP_PROBE_DIR "${CMAKE_CURRENT_BINARY_DIR}/probe")
 file(MAKE_DIRECTORY "${VP_PROBE_DIR}")
 set(probe_modes worker)

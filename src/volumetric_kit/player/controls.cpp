@@ -4,6 +4,7 @@
 #include "volumetric_kit/player/controls.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -286,6 +287,19 @@ std::string status_line(const std::optional<FrameStamp>& shown,
   return line;
 }
 
+std::string delay_line(const std::optional<FrameStamp>& shown) {
+  if (!shown || !shown->playout) {
+    return "delay - ms";
+  }
+  const Playout& playout = *shown->playout;
+  return "delay " +
+         fixed(
+             std::chrono::duration<double, std::milli>(playout.delay()).count(),
+             0) +
+         " ms · " + to_string(playout.need) +
+         (playout.clamped ? " · over 1 s" : "");
+}
+
 std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
@@ -339,12 +353,22 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      " Mbit/s" + (live ? " · last 1 s" : ""),
                                  std::move(frame), std::move(deblock)};
   if (compact) {
+    // Live, the delay is the worker's column's last line (StatsPanel), as
+    // the renderer's has no room for one more beside a program's line.
+    if (live) {
+      lines.push_back(delay_line(shown));
+    }
     lines.push_back(gpu + " · " + latency);
   } else {
     lines.push_back(gpu + " · " + idle + " · " + queue);
-    lines.push_back(latency + " · publish " + leg(means.publish_ms) +
-                    " · take " + leg(means.take_ms) + " · present " +
-                    leg(means.present_ms));
+    // Live, its wait as bytes before its decode leads the legs.
+    lines.push_back(latency +
+                    (live ? " · buffer " + leg(means.buffer_ms) : "") +
+                    " · publish " + leg(means.publish_ms) + " · take " +
+                    leg(means.take_ms) + " · present " + leg(means.present_ms));
+    if (live) {
+      lines.push_back(delay_line(shown));
+    }
   }
   lines.push_back(std::move(rate));
   // A program's text, each of its lines but the empty ones.
@@ -415,7 +439,8 @@ void StatsPanel::draw(const PlaybackStats& stats,
   // Compact: the worker's table holds its stages, read, decode and mesh, and
   // the renderer's its rows but its loop's submit, and an area wider than
   // tall has room for the renderer's beside the worker's, not below. The
-  // worker's column holds the bitrate, frame and deblock lines; the rest, the
+  // worker's column holds the bitrate, frame and deblock lines, and live the
+  // delay's (live, its table has no read row); the rest, the
   // device's line, the rate and a program's lines, sit over the display's
   // rate, where a phone in landscape has room for them with one program line
   // (DECISIONS.md). Beside, a worker's line takes the width the renderer's
@@ -449,7 +474,9 @@ void StatsPanel::draw(const PlaybackStats& stats,
   const bool beside = area.size.x > area.size.y;
   const float worker_width =
       beside ? width - render_width_ - style.ItemSpacing.x : width;
-  const std::size_t worker_lines = std::min<std::size_t>(lines_.size(), 3);
+  // The bitrate, frame and deblock lines, and live the delay's.
+  const std::size_t worker_lines =
+      std::min<std::size_t>(lines_.size(), live ? 4 : 3);
   begin_column("##worker");
   for (std::size_t i = 0; i < worker_lines; ++i) {
     draw_parted_line(lines_[i], worker_width);

@@ -3,6 +3,8 @@
 
 #include "volumetric_kit/player/frame_hooks.hpp"
 
+#include <chrono>
+#include <optional>
 #include <utility>
 
 #include "volumetric_kit/core/base/check.hpp"
@@ -53,6 +55,22 @@ core::Result<std::optional<FrameStamp>> FrameTaker::take(std::uint32_t slot) {
             return hold();
           }
         }
+        // Live, held until its present time, uncounted and unasked: read
+        // afresh, so a D raised since its release delays it too.
+        const LiveClock* const clock = player_->live_clock();
+        const std::optional<Playout> playout =
+            clock != nullptr ? clock->time() : std::nullopt;
+        if (playout) {
+          const std::chrono::nanoseconds wait = release_wait(
+              stamp.pts_ns, clock->now_pts(*playout, Playback::Clock::now()),
+              std::chrono::nanoseconds(0));
+          // One later than any frame of this clock's could be is an earlier
+          // connection's, on another pts base: not held.
+          if (wait > std::chrono::nanoseconds(0) &&
+              wait <= kMaxLiveDelay + playout->lead) {
+            return mesh::CommitDecision::kPark;
+          }
+        }
         FrameCommit decided = FrameCommit::kDraw;
         if (hooks_ != nullptr && hooks_->commit) {
           core::Result<FrameCommit> said = hooks_->commit(taken, stamp);
@@ -78,6 +96,9 @@ core::Result<std::optional<FrameStamp>> FrameTaker::take(std::uint32_t slot) {
         }
         skipped_since_draw_ = false;
         stamp.taken = Playback::Clock::now();
+        if (clock != nullptr) {
+          stamp.playout = clock->time();
+        }
         live_extra_ = stamp.extra;
         drawn = std::move(stamp);
         return mesh::CommitDecision::kCommit;
