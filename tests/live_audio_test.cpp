@@ -11,7 +11,8 @@
 // no track; the gain and a park reach an output made later. A connection's
 // first record is heard at its present time, and its end drops what the
 // output holds, so an unpark plays nothing stale and the position is none.
-// Simulated, on a manual clock: geometry and audio records muxed by pts,
+// A record of more than a second is refused, unread. Simulated, on a manual
+// clock: geometry and audio records muxed by pts,
 // with network jitter, the sender's clock, its mic and the viewer's output
 // each up to 100 ppm off, and a 200 ms stall: the audio is heard within its
 // band of the clock before the stall and again soon after it, following the
@@ -276,6 +277,34 @@ TEST(LiveAudio, AnEndDropsWhatTheOutputHoldsSoAnUnparkPlaysNothingStale) {
   EXPECT_EQ(sounded(vp_test::render(*device, kChunk * 10, state->host_ns)), 0)
       << "nothing of the last connection";
   EXPECT_FALSE(audio.position().has_value()) << "none without a track";
+}
+
+// A record of more than a second of the track's frames, more than the
+// output's ring holds, is refused before it is read or converted, and
+// counted as dropped; a second's is taken.
+TEST(LiveAudio, ARecordOfMoreThanASecondIsRefused) {
+  vp_test::ManualClock now;
+  Outputs outputs;
+  LiveClock clock;
+  LiveAudio audio(clock, outputs.maker(reader_of(now)), reader_of(now));
+  EXPECT_FALSE(audio.takes(2)) << "no track";
+  EXPECT_EQ(audio.stats().dropped, 0u);
+  ASSERT_TRUE(audio.begin(mono_track(), kPeriod).ok());
+  const std::size_t second = std::size_t{2} * kRate;  // s16 mono
+  EXPECT_TRUE(audio.takes(second));
+  EXPECT_FALSE(audio.takes(second + 2));
+  EXPECT_EQ(audio.stats().dropped, 1u);
+  // Given anyway, it is refused before it is placed.
+  clock.arrived(kPts0, now(), 0ns, audio.need());
+  const std::vector<std::uint8_t> pcm(second + 2);
+  stream::RecordInfo info;
+  info.track = 1;
+  info.key = true;
+  info.pts_ns = kPts0;
+  audio.arrived(info, pcm.data(), pcm.size(), now());
+  EXPECT_EQ(audio.stats().dropped, 2u);
+  EXPECT_EQ(audio.stats().records, 0u);
+  EXPECT_EQ(audio.stats().placements, 0u);
 }
 
 // A sender and a viewer, simulated on the test's clock in 1 ms steps: the

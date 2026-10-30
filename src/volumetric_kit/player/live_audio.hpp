@@ -96,8 +96,9 @@ std::chrono::nanoseconds drift_trim(std::chrono::nanoseconds ahead) noexcept;
 /// @brief What a live feeder did, over the player's life.
 struct LiveAudioStats {
   std::uint64_t records = 0;  ///< Written, whole or in part.
-  /// Refused: not whole frames, before the clock had a point, or wholly
-  /// before what was already written (late).
+  /// Refused: more than a second of frames (@ref LiveAudio::takes), not
+  /// whole frames, before the clock had a point, or wholly before what was
+  /// already written (late).
   std::uint64_t dropped = 0;
   std::uint64_t placements = 0;  ///< Flushes placing the next record exactly.
   std::uint64_t follows = 0;     ///< Shifts that followed the clock's point.
@@ -142,18 +143,20 @@ struct LiveAudioStats {
 /// any wired one would need, is clamped: the audio then plays @ref late
 /// behind the picture, and the status line says so.
 ///
-/// **Threads.** The worker calls @ref begin, @ref end, @ref arrived and
-/// @ref look. @ref heard_pts, @ref need, @ref late, @ref playing,
-/// @ref position, @ref stats, @ref set_gain, @ref park and @ref unpark are
-/// safe from any thread; the output is swapped, at a @ref begin of another
-/// format, under a mutex they take.
+/// **Threads.** The worker calls @ref begin, @ref end, @ref takes,
+/// @ref arrived and @ref look. @ref heard_pts, @ref need, @ref late,
+/// @ref playing, @ref position, @ref stats, @ref set_gain, @ref park and
+/// @ref unpark are safe from any thread; the output is swapped, at a
+/// @ref begin of another format, under a mutex they take.
 ///
 /// @code
 /// LiveAudio audio(clock, make_audio);
 /// clock.set_audio_master(&audio);
 /// VKC_TRY(audio.begin(find_audio_track(session, geometry), period));
-/// // each record of its track, as it arrives:
-/// audio.arrived(record.info, payload.data(), payload.size(), arrived);
+/// // each record of its track, as it arrives, read if it takes it:
+/// if (audio.takes(record.size)) {
+///   audio.arrived(record.info, payload.data(), payload.size(), arrived);
+/// }
 /// // between the worker's steps:
 /// audio.look(Clock::now());
 /// clock.arrived(pts, at, program_need, audio.need());
@@ -191,8 +194,17 @@ class LiveAudio final : public AudioMaster {
   ///        connection plays it stale.
   void end();
 
+  /// @brief The worker, before reading a record of the track: whether it
+  ///        takes one of @p bytes. One of more than a second of the track's
+  ///        frames, more than the output's ring holds, is refused and
+  ///        counted as dropped, so no buffer grows to it; the caller passes
+  ///        it over unread.
+  /// @param bytes  Its payload's bytes.
+  /// @return Whether to read it for @ref arrived; false without a track.
+  bool takes(std::size_t bytes);
   /// @brief The worker: a record of the track arrived whole at @p at:
-  ///        placed and written into the output.
+  ///        placed and written into the output; refused as @ref takes
+  ///        refuses it too.
   /// @param info   Its header.
   /// @param pcm    Its payload: s16 little-endian frames of the track's
   ///               channels, converted as to_played does.
@@ -243,6 +255,10 @@ class LiveAudio final : public AudioMaster {
   std::optional<std::chrono::nanoseconds> audio_point() const;
   // `ns` as a signed count of frames at the track's rate, to the nearest.
   std::int64_t frames_of(std::chrono::nanoseconds ns) const;
+  // The most bytes a record of the track may hold: a second of its frames.
+  std::size_t most_bytes() const;
+  // Counts a record refused.
+  void refused();
   void set_playing(bool playing);
 
   LiveClock& clock_;

@@ -141,6 +141,26 @@ std::int64_t LiveAudio::frames_of(nanoseconds ns) const {
   return ns < nanoseconds(0) ? -frames : frames;
 }
 
+std::size_t LiveAudio::most_bytes() const {
+  return std::size_t{2} * track_->params.channels * track_->params.sample_rate;
+}
+
+void LiveAudio::refused() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  ++stats_.dropped;
+}
+
+bool LiveAudio::takes(std::size_t bytes) {
+  if (!track_) {
+    return false;
+  }
+  if (bytes > most_bytes()) {
+    refused();
+    return false;
+  }
+  return true;
+}
+
 void LiveAudio::arrived(const grid::stream::RecordInfo& info,
                         const std::uint8_t* pcm, std::size_t bytes,
                         Clock::time_point at) {
@@ -151,12 +171,8 @@ void LiveAudio::arrived(const grid::stream::RecordInfo& info,
   const std::uint16_t channels = track_->params.channels;
   const std::uint32_t rate = track_->params.sample_rate;
   const std::size_t frame_bytes = std::size_t{2} * channels;
-  const auto refused = [this] {
-    std::lock_guard<std::mutex> lock(mutex_);
-    ++stats_.dropped;
-  };
   const std::optional<nanoseconds> point = audio_point();
-  if (bytes % frame_bytes != 0 || !point) {
+  if (bytes % frame_bytes != 0 || bytes > most_bytes() || !point) {
     refused();
     return;
   }

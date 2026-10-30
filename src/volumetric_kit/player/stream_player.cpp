@@ -1117,8 +1117,12 @@ core::Status StreamPlayer::pass_other(networking::StreamClient& client,
   if (!connection.audio || record.info.track != connection.audio->index) {
     return {};
   }
-  // Grown to the largest record, then reused: no allocation per record.
+  // Grown to the largest record, at most a second of audio, then reused: no
+  // allocation per record. A larger one is passed over unread.
   const auto size = static_cast<std::size_t>(record.size);
+  if (!live_audio_->takes(size)) {
+    return {};
+  }
   if (other_payload_.size() < size) {
     other_payload_.resize(size);
   }
