@@ -18,6 +18,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -51,7 +52,29 @@ struct AudioOutStats {
   std::uint64_t played_frames = 0;  ///< Taken from the ring and rendered.
   /// Rendered as silence for want of frames while playing, once flushed.
   std::uint64_t underrun_frames = 0;
-  std::uint64_t flushes = 0;  ///< Flushes the render thread has applied.
+  std::uint64_t underruns = 0;  ///< Renders that ran short so.
+  std::uint64_t flushes = 0;    ///< Flushes the render thread has applied.
+};
+
+/// @brief What one render took from the ring: the first @ref frames frames
+///        of what went out, the rest silence.
+struct Rendered {
+  std::size_t frames = 0;  ///< Taken from the ring.
+  bool based = false;      ///< A flush has been applied: the pts are known.
+  bool flushed = false;    ///< This render applied one.
+  /// With @ref based: the first frame taken's pts, or with none the next's.
+  std::uint64_t pts_ns = 0;
+  std::uint64_t end_pts_ns = 0;  ///< With @ref based: past the last taken.
+};
+
+/// @brief Where an output's sound goes, as of a moment.
+struct AudioRoute {
+  /// A device plays it: false for the null output, and while a device
+  /// output is stopped (parked, interrupted, or its device failed).
+  bool audible = false;
+  /// From a frame passing the device's output to its being heard.
+  std::uint64_t latency_ns = 0;
+  std::string name;  ///< The device or route; empty for the null output.
 };
 
 /// @brief An audio output: a ring (AudioRing) that one producer fills with
@@ -69,10 +92,15 @@ struct AudioOutStats {
 /// nothing, so @ref position holds. @ref set_gain scales what goes out; at 0
 /// the frames still go, so @ref position runs on (mute).
 ///
+/// **A device output** (DeviceAudioOut) also stops at @ref park and starts
+/// again at @ref unpark, says where its sound goes (@ref route), and asks
+/// its player to pause when the system interrupts it or its device goes
+/// away (@ref take_pause_request). The null output does none of these.
+///
 /// **Threads.** One producer calls @ref write and @ref flush. The controls,
-/// @ref position, @ref queued and @ref stats are safe from any thread. The
-/// render thread, an output's own, calls render(), which neither locks nor
-/// allocates.
+/// @ref position, @ref queued, @ref stats and the device calls are safe from
+/// any thread. The render thread, an output's own, calls render(), which
+/// neither locks nor allocates.
 ///
 /// @code
 /// VKC_ASSIGN(std::unique_ptr<AudioOut> out, AudioOut::open_default(format));
@@ -83,11 +111,13 @@ struct AudioOutStats {
 /// @endcode
 class AudioOut {
  public:
-  /// @brief The output this platform plays through.
+  /// @brief The output this platform plays through: the apps', never the
+  ///        tests' (StreamPlayer::open's default is the null output).
   /// @param format  What it plays.
-  /// @return For now the null output, on `std::chrono::steady_clock` and a
-  ///         thread of its own, everywhere; NullAudioOut::create's refusals.
-  // TODO: the Apple output (AVAudioEngine) on macOS and iOS.
+  /// @return On macOS and iOS the Apple output (open_apple_audio), or the
+  ///         null output where it cannot start; elsewhere the null output,
+  ///         on `std::chrono::steady_clock` and a thread of its own;
+  ///         NullAudioOut::create's refusals.
   static core::Result<std::unique_ptr<AudioOut>> open_default(
       const AudioFormat& format);
 
@@ -138,12 +168,25 @@ class AudioOut {
   /// @return What @ref set_gain last set.
   float gain() const noexcept { return gain_.load(std::memory_order_relaxed); }
 
-  /// @return The pts of the frame being heard now, on the stream's clock:
-  ///         as of the render thread's last render; none until it has
-  ///         applied a @ref flush.
-  std::optional<std::uint64_t> position() const noexcept;
+  /// @return The pts of the frame being heard now, on the stream's clock;
+  ///         none until the render thread has applied a @ref flush. The
+  ///         null output's is as of its last render; a device output's is
+  ///         mapped from its renders' times to now (DeviceAudioOut).
+  virtual std::optional<std::uint64_t> position() const noexcept;
   /// @return What it counted so far.
   AudioOutStats stats() const noexcept;
+
+  /// @return Where its sound goes now; the null output's is not audible.
+  virtual AudioRoute route() const { return {}; }
+  /// @brief Stop the device until @ref unpark, for a suspend: nothing is
+  ///        rendered, so @ref position holds. The null output runs on.
+  virtual void park() {}
+  /// @brief End a @ref park: start the device again.
+  virtual void unpark() {}
+  /// @return Whether the output asked its player to pause since the last
+  ///         call: an interruption began, or the device it played through
+  ///         went away; the null output never asks.
+  virtual bool take_pause_request() noexcept { return false; }
 
  protected:
   /// @brief An output of @p format, paused, its ring a second long.
@@ -156,12 +199,13 @@ class AudioOut {
   ///        applied first. It neither locks nor allocates.
   /// @param out     Room for @p frames interleaved frames.
   /// @param frames  How many.
-  void render(float* out, std::size_t frames) noexcept;
+  /// @return What it took.
+  Rendered render(float* out, std::size_t frames) noexcept;
 
  private:
   // The render thread's: apply the producer's last flush, if it has not
-  // been, and is not being written.
-  void apply_flush() noexcept;
+  // been, and is not being written; whether it did.
+  bool apply_flush() noexcept;
 
   static constexpr std::uint64_t kNoPosition = ~std::uint64_t{0};
 
@@ -184,6 +228,7 @@ class AudioOut {
   std::atomic<std::uint64_t> position_{kNoPosition};
   std::atomic<std::uint64_t> played_{0};
   std::atomic<std::uint64_t> underrun_{0};
+  std::atomic<std::uint64_t> underruns_{0};
   std::atomic<std::uint64_t> flushes_{0};
 };
 

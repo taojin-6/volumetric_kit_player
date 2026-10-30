@@ -64,6 +64,12 @@ struct LiveStatus {
   Playback::Clock::time_point last_record{};  ///< When it arrived.
 };
 
+/// @brief A file's audio, for its status line (@ref audio_status_text).
+struct AudioStatus {
+  bool muted = false;  ///< StreamPlayer::muted.
+  AudioRoute route;    ///< Where it goes (AudioOut::route).
+};
+
 /// @brief How often the worker times its frames' device work
 ///        (@ref StreamPlayer::set_device_timing).
 enum class DeviceTiming : std::uint8_t {
@@ -228,8 +234,11 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 /// controls: a pause, a step, or the end of the track with loop off pauses
 /// it, so its position holds, and a play plays it; each pass of the track, a
 /// loop's or a play's after the end, flushes it and starts its cursor again;
-/// @ref set_muted sets its gain to 0, its clock running. A file without one
-/// has no feeder and no output. Live, there is no audio.
+/// @ref set_muted sets its gain to 0, its clock running. A park stops a
+/// device output and the unpark starts it again; an output that asks to
+/// pause (an interruption, a device gone) pauses the player at
+/// @ref follow_audio. A file without one has no feeder and no output. Live,
+/// there is no audio.
 ///
 /// **Timing.** Each frame's stamp has its stages' host and wait times, and
 /// the worker's device counts, always; its device times only as
@@ -248,7 +257,8 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 ///
 /// **Threads.** The controls (@ref play, @ref pause, @ref step,
 /// @ref set_loop, @ref set_deblock, @ref set_muted), their reads,
-/// @ref audio_position, @ref park, @ref unpark and
+/// @ref audio_position, @ref audio_status, @ref follow_audio, @ref park,
+/// @ref unpark and
 /// @ref taken lock the mutex the worker waits under, so they are safe from
 /// any thread, and each change and each @ref taken wakes the worker;
 /// @ref start, @ref stop and the destructor run on one thread at a time. Only
@@ -286,8 +296,10 @@ class StreamPlayer {
   /// @brief Open @p path and find what to play, on the host alone.
   /// @param path        A `.vrst` file.
   /// @param make_audio  What makes the output its Audio track, if it has one
-  ///                    (find_audio_track), plays through, at @ref start;
-  ///                    empty for AudioOut::open_default.
+  ///                    (find_audio_track), plays through, at @ref start:
+  ///                    AudioOut::open_default for the apps; empty for the
+  ///                    null output, on steady_clock, as tests and vp_probe
+  ///                    play.
   /// @return The player, playing with loop on once started;
   ///         `StreamReader::open`'s refusal, such as
   ///         `Status::Code::NotFound` for a missing file and
@@ -402,6 +414,17 @@ class StreamPlayer {
   ///         none without audio, before @ref start, or until the output
   ///         has taken the feeder's first flush.
   std::optional<std::uint64_t> audio_position() const;
+  /// @return Whether the audio is muted and where it goes (AudioOut::route),
+  ///         for the status line; not audible before @ref start; none
+  ///         without an Audio track.
+  std::optional<AudioStatus> audio_status() const;
+  /// @brief Pause, the frames and the audio, as @ref pause does, if the
+  ///        audio output asked to since the last call
+  ///        (AudioOut::take_pause_request): an interruption began, or the
+  ///        device it played through went away. The view calls it once a
+  ///        frame.
+  /// @return Whether it paused.
+  bool follow_audio();
 
   /// @brief Turns the decoder-side deblock on or off (grid's
   ///        `codec::Decoder::set_deblock`), on by default: from the next

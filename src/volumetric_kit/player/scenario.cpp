@@ -37,9 +37,9 @@ std::string_view trimmed(std::string_view text) {
 }  // namespace
 
 core::Result<std::unique_ptr<StreamPlayer>> open_source(
-    const cfg::Source& source) {
+    const cfg::Source& source, AudioOutMaker make_audio) {
   if (source.host.empty()) {
-    return StreamPlayer::open(source.path);
+    return StreamPlayer::open(source.path, std::move(make_audio));
   }
   LiveAddress address;
   address.host = source.host;

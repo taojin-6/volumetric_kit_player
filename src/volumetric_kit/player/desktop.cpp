@@ -53,8 +53,8 @@ Input& input_of(GLFWwindow* window) {
 
 // The panel's controls as keys: Space plays or pauses, Right steps, L loops,
 // which a live player ignores, N flips Normals, D the deblock, U Unlit, T
-// Texture, and a program's key its panel (PlayerView::panel_key). Esc closes
-// the window.
+// Texture, M the mute, and a program's key its panel (PlayerView::panel_key).
+// Esc closes the window.
 void on_key(GLFWwindow* window, int key, int /*scancode*/, int action,
             int /*mods*/) {
   if (action != GLFW_PRESS) {
@@ -82,6 +82,8 @@ void on_key(GLFWwindow* window, int key, int /*scancode*/, int action,
     view->set_unlit(!view->unlit());
   } else if (key == GLFW_KEY_T) {
     view->set_textured(!view->textured());
+  } else if (key == GLFW_KEY_M) {
+    player.set_muted(!player.muted());
   } else if (view->panel_key() != 0 && key == view->panel_key()) {
     view->set_panel_open(!view->panel_open());
   }
@@ -92,9 +94,10 @@ void on_scroll(GLFWwindow* window, double /*dx*/, double dy) {
 }
 
 core::Status run(const cfg::Config& settings, const AppConfig& config) {
-  // Refusals before GLFW; a live player does no I/O.
+  // Refusals before GLFW; a live player does no I/O. A file's audio plays
+  // through the platform's output, made at start.
   VKC_ASSIGN(std::unique_ptr<StreamPlayer> player,
-             open_source(settings.source));
+             open_source(settings.source, AudioOut::open_default));
   const std::string title =
       player->live() ? player->live_status().address : settings.source.path;
   if (std::getenv("VP_NO_WINDOW") != nullptr) {  // cli_test's backstop

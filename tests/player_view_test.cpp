@@ -7,7 +7,8 @@
 // its record's set, their triangles sharing vertices, or asked not to, three
 // of their own each, onto a frame that meshes nothing too, which
 // still presents; 0 x 0 skips without blocking; a step moves one frame; the
-// worker's failure surfaces from frame(); a tap on Normals switches the mesh's
+// worker's failure surfaces from frame(); an audio output's interruption
+// pauses the player at the next frame; a tap on Normals switches the mesh's
 // flags from lit to normals and back, and frames keep presenting; a tap on
 // Deblock while paused shows the frame shown rebuilt, and the stats say so; the
 // panel draws at a phone's scale; in portrait and in landscape, at the iOS
@@ -90,6 +91,7 @@
 #include <glm/vec3.hpp>
 
 #include "controls_layout.hpp"
+#include "fake_audio_device.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"  // FindWindowByName, to find the panel
 #include "program_requirements.hpp"
@@ -131,6 +133,9 @@ namespace core = volumetric_kit::core;
 namespace gfx = volumetric_kit::gfx;
 namespace grid = volumetric_kit::grid;
 using namespace std::chrono_literals;
+using volumetric_kit::player::AudioFormat;
+using volumetric_kit::player::AudioOut;
+using volumetric_kit::player::DeviceAudioOut;
 using volumetric_kit::player::DeviceTiming;
 using volumetric_kit::player::DrawBinding;
 using volumetric_kit::player::FrameCommit;
@@ -959,6 +964,37 @@ TEST_F(PlayerViewTest, TheWorkersFailureSurfacesFromFrame) {
             std::string::npos)
       << failed.message();
   EXPECT_FALSE(view_->shown().has_value());
+}
+
+// An audio output that asks to pause, an interruption here, over a fake
+// device, pauses the player, its frames and its audio, at the next frame.
+// Mutant: frame() that does not follow the audio.
+TEST_F(PlayerViewTest, AnInterruptionPausesThePlayerAtTheNextFrame) {
+  const std::string two_tracks = scratch_.file("two_tracks.vrst");
+  const core::Status written = vp_test::copy_with_audio(path_, two_tracks);
+  ASSERT_TRUE(written.ok()) << written.message();
+  auto device = std::make_shared<vp_test::FakeDeviceState>();
+  DeviceAudioOut* out = nullptr;  // the player's, once started
+  core::Result<std::unique_ptr<StreamPlayer>> opened = StreamPlayer::open(
+      two_tracks,
+      [device, &out](const AudioFormat& format)
+          -> core::Result<std::unique_ptr<AudioOut>> {
+        VKC_ASSIGN(
+            std::unique_ptr<DeviceAudioOut> made,
+            DeviceAudioOut::create(format, vp_test::fake_device(device)));
+        out = made.get();
+        return std::unique_ptr<AudioOut>(std::move(made));
+      });
+  ASSERT_TRUE(opened.ok()) << opened.status().message();
+  ASSERT_TRUE(view_of(std::move(opened).value()));
+  ASSERT_NE(out, nullptr) << "the view starts the player, and its audio";
+  ASSERT_TRUE(present());
+  ASSERT_TRUE(view_->player().playing());
+  out->interruption_began();
+  const core::Result<bool> ticked = tick();
+  ASSERT_TRUE(ticked.ok()) << ticked.status().message();
+  EXPECT_FALSE(view_->player().playing());
+  EXPECT_FALSE(out->playing());
 }
 
 // Lit at first; a tap on Normals, the row's last control, flips normals() and

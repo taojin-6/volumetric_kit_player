@@ -4,6 +4,91 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-30 — The Apple audio output: its clock and lifecycle
+
+On macOS and iOS a file's audio plays through `open_apple_audio`
+(`apple_audio_out.mm`): AVAudioEngine with an AVAudioSourceNode whose render
+block pulls from the ring. Its logic is C++, `DeviceAudioOut`
+(`device_audio_out.hpp`), over an `AudioDevice` seam that the `.mm`
+implements and the tests fake. Video stays the master for files (the entry
+below).
+
+- **The render block neither locks, allocates, logs nor calls
+  Objective-C:** it renders into a scratch allocated with the device and
+  copies each channel out. The clock reaches readers through a sequence lock
+  it never waits on. Why: a realtime callback that waits glitches.
+- **What is heard when:** each render's host time says when its first frame
+  passes the device's output; `position()` is the frames rendered, less those
+  still queued and their run's latency, at the host clock's now. The latency
+  is `presentationLatency`, plus `AVAudioSession.outputLatency` on iOS, read
+  at each start; a start's renders before then play silence and take
+  nothing. Why: `position()` is the clock that file pacing and live viewing
+  can master on.
+- **Each run keeps the latency of the start it began in.** Onto a route of
+  longer latency the position holds at the old route's last frame until the
+  new route's first is heard, and onto a shorter one it jumps ahead. Why: one
+  latency for every run maps the old route's frames at the new route's, so
+  speakers (10 ms) to AirPods (180 ms) stepped the position back by 170 ms.
+- **Runs and the re-anchor rule** (`reanchors`): frames rendered back to back
+  are one run, and each render moves the run's end to its own time, so the
+  run keeps the device's rate rather than the nominal one. A flush, a device
+  start, a short render, pts that do not follow on, or a time more than 1 ms
+  off the run's end start a new run; the run before is kept while its frames
+  may still be heard. Why: a single anchor drifts with the crystal, up to
+  0.36 s an hour at 100 ppm.
+- **The host clock is read at each call, never mapped through a stored
+  offset to `steady_clock`.** Why: libc++'s `steady_clock` counts sleep and
+  Core Audio's host time does not, so a stored offset goes stale at every
+  wake; read at each call, nothing does, so no wake needs a re-measure.
+- **Stopped, the position holds at what was heard as it stopped;** the
+  frames the device had not played are skipped at the next start.
+- **It plays while neither parked nor interrupted.** A park stops it and
+  gives the route back (on iOS it deactivates the session, telling others);
+  the unpark starts it, ending an interruption too. An interruption stops it
+  and asks the player to pause; its end starts it again, paused, as the
+  player is. A configuration change (a route or device change) starts a new
+  engine and re-reads the route and latency. A device gone (on macOS no
+  longer alive, on iOS the old route's device unavailable) asks the player
+  to pause. A start that fails, as during a call, leaves it stopped until
+  the next. Why: Apple's guidance for players, which says an interruption
+  may never end and to try again once the app is active; and an engine
+  whose device changed stops itself.
+- **`route()` never waits for a device call:** it reads what the last start
+  or stop left, under a mutex of its own; the lifecycle's mutex is held
+  across AVAudioEngine's start and stop and iOS's `setActive`. Why: the
+  frame thread's status line reads it every frame, under the player's mutex.
+- **The system's notices run on a serial queue of the device's,** closed
+  before it goes, so none reaches a destroyed output. An engine's
+  configuration change counts only from the engine playing. On iOS a route
+  change restarts the engine too, so where the engine's own notice comes
+  first it restarts twice: a few ms more silence, and one more run.
+- **The player follows a pause request once a frame**
+  (`StreamPlayer::follow_audio`, from `PlayerView::frame`), pausing the
+  frames and the audio together. Why: the notice comes on a system thread;
+  polled on the view's, the player's mutex stays out of it.
+- **iOS: playback for movies, no background audio.** The category is set
+  only when it differs, as setting it posts a route change.
+- **The apps choose the Apple output; tests and vp_probe the null one.**
+  `StreamPlayer::open`'s default is now the null output; the desktop and iOS
+  apps pass `AudioOut::open_default`, which falls back to the null output
+  where no device starts. Why: no test or agent opens an audio device, and a
+  Mac with no output still plays the frames.
+- **Every test runs with `VP_NO_AUDIO_DEVICE` set** (tests/CMakeLists.txt),
+  and the Apple output then refuses before touching a device, so
+  `open_default` gives the null output. Why: a test that reached
+  `open_default` started AVAudioEngine on the Mac's output, paused but open;
+  like `VP_NO_WINDOW`, the variable stops what the rule alone did not.
+- **Mute is a box after the others, drawn only with audio, and M on the
+  desktop;** the status line ends with `muted`, `audio <n> ms` (the route's
+  latency) or `audio off`, and says nothing without an Audio track.
+- **Underruns are counted as renders too** (`AudioOutStats::underruns`). Why:
+  live viewing will raise its delay on them.
+- **`vp_audio_check` is checked by hand,** a tool beside vp_probe that ctest
+  never runs: a tone at gain 0 unless asked, with the route, latency, rate,
+  drift, underruns, the fit's largest residual, the position's steps back
+  and the clock's runs printed. Why: the rate averages steps and jitter out,
+  so it alone can read 0 ppm over a wrong mapping.
+
 ## 2026-10-30 — A program's live delay
 
 A live player presents each frame at its pts plus one playout point, on a
@@ -124,10 +209,10 @@ output and the feeder, with a silent output only.
   allocates, and takes the producer's flush through a sequence lock it never
   waits on. Why: a device's render callback must do neither.
 - **The null output, silent, renders by a clock:** steady_clock on a thread
-  of its own, or a test's clock and ticks. Every platform plays through it
-  until a device output comes (Apple's next). Why: Linux and CI need no
-  sound, and tests then run the ring on two threads, under ThreadSanitizer
-  too, with no device: no test opens an audio device.
+  of its own, or a test's clock and ticks. Linux, the tests and vp_probe
+  play through it (the Apple output, above, is the apps'). Why: Linux and
+  CI need no sound, and tests then run the ring on two threads, under
+  ThreadSanitizer too, with no device: no test opens an audio device.
 - **Video stays the master.** The frames are paced as before; the audio
   follows the controls: a pause, a step and the end of the track with loop
   off pause it, so its position holds; a play plays it; each pass, a loop's

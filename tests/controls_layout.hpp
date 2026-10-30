@@ -39,12 +39,14 @@ constexpr int kUnlit = 5;
 constexpr int kTexture = 6;
 constexpr int kPanel = 7;
 constexpr const char* kPanelLabel = "Panel";
+// Mute's, the last box, drawn for a file with audio alone (mute_top_left).
+constexpr int kMute = 8;
 
 // Whether the row's `index`th control is a box: Loop, Deblock, Unlit,
-// Texture or the panel's.
+// Texture, the panel's or Mute.
 inline bool is_box(int index) {
   return index == 2 || index == kDeblock || index == kUnlit ||
-         index == kTexture || index == kPanel;
+         index == kTexture || index == kPanel || index == kMute;
 }
 
 // The size of the row's `index`th control, in points, as the last frame laid
@@ -72,6 +74,7 @@ inline float control_width(const ImGuiWindow& panel, int index) {
                       : index == kDeblock ? "Deblock"
                       : index == kUnlit   ? "Unlit"
                       : index == kTexture ? "Texture"
+                      : index == kMute    ? "Mute"
                                           : kPanelLabel;
   return control_size(panel, index).x + ImGui::GetStyle().ItemInnerSpacing.x +
          text_width(panel, label);
@@ -110,6 +113,12 @@ inline std::vector<glm::vec2> lay_out(const ImGuiWindow& panel,
 inline glm::vec2 control_top_left(const ImGuiWindow& panel, int index) {
   return lay_out(panel, {0, 1, 2, 3, kDeblock, kUnlit, kTexture, kPanel},
                  4)[index];
+}
+
+// Mute's top left, in points, for a file with audio and neither Texture nor
+// the panel's box: after Unlit.
+inline glm::vec2 mute_top_left(const ImGuiWindow& panel) {
+  return lay_out(panel, {0, 1, 2, 3, kDeblock, kUnlit, kMute}, 4).back();
 }
 
 // Whether Deblock is on the row, after Normals; else it is below the row.

@@ -13,6 +13,10 @@ project(
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# The Apple audio output is Objective-C++ (src/), in the library itself.
+if(APPLE)
+  enable_language(OBJCXX)
+endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 

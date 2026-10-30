@@ -220,7 +220,9 @@ class PlayerView {
   PlayerView(PlayerView&&) = delete;
   PlayerView& operator=(PlayerView&&) = delete;
 
-  /// @brief One tick: lay out the scene beside a program's panel while it
+  /// @brief One tick: pause the player if its audio asked to
+  ///        (StreamPlayer::follow_audio), lay out the scene beside a
+  ///        program's panel while it
   ///        is open, draw the controls and the stats in the scene's part and
   ///        the panel's chrome, take the newest mesh (FrameTaker, with the
   ///        commit hook), run before_draw and the panel's prepare, draw the

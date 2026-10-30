@@ -8,6 +8,9 @@
 #include <utility>
 
 #include "volumetric_kit/core/base/exception_status.hpp"
+#if defined(__APPLE__)
+#include "volumetric_kit/player/device_audio_out.hpp"
+#endif
 
 namespace volumetric_kit::player {
 namespace {
@@ -31,6 +34,14 @@ std::uint64_t audio_frames(std::uint64_t ns, std::uint32_t sample_rate) {
 
 core::Result<std::unique_ptr<AudioOut>> AudioOut::open_default(
     const AudioFormat& format) {
+#if defined(__APPLE__)
+  core::Result<std::unique_ptr<DeviceAudioOut>> apple =
+      open_apple_audio(format);
+  if (apple.ok()) {
+    return std::unique_ptr<AudioOut>(std::move(apple).value());
+  }
+  // No device plays: the frames play on, through the null output.
+#endif
   VKC_ASSIGN(std::unique_ptr<NullAudioOut> out, NullAudioOut::create(format));
   return std::unique_ptr<AudioOut>(std::move(out));
 }
@@ -67,22 +78,23 @@ AudioOutStats AudioOut::stats() const noexcept {
   AudioOutStats stats;
   stats.played_frames = played_.load(std::memory_order_relaxed);
   stats.underrun_frames = underrun_.load(std::memory_order_relaxed);
+  stats.underruns = underruns_.load(std::memory_order_relaxed);
   stats.flushes = flushes_.load(std::memory_order_relaxed);
   return stats;
 }
 
-void AudioOut::apply_flush() noexcept {
+bool AudioOut::apply_flush() noexcept {
   // A sequence lock's read that never waits: a mark being written is
   // applied at a later render.
   const std::uint64_t seq = mark_seq_.load(std::memory_order_acquire);
   if (seq == seen_seq_ || (seq & 1) != 0) {
-    return;
+    return false;
   }
   const std::uint64_t index = mark_index_.load(std::memory_order_relaxed);
   const std::uint64_t pts = mark_pts_.load(std::memory_order_relaxed);
   std::atomic_thread_fence(std::memory_order_acquire);
   if (mark_seq_.load(std::memory_order_relaxed) != seq) {
-    return;
+    return false;
   }
   seen_seq_ = seq;
   ring_.skip_to(index);
@@ -90,10 +102,20 @@ void AudioOut::apply_flush() noexcept {
   base_index_ = index;
   base_pts_ = pts;
   flushes_.fetch_add(1, std::memory_order_relaxed);
+  return true;
 }
 
-void AudioOut::render(float* out, std::size_t frames) noexcept {
-  apply_flush();
+Rendered AudioOut::render(float* out, std::size_t frames) noexcept {
+  Rendered rendered;
+  rendered.flushed = apply_flush();
+  rendered.based = based_;
+  // The ring's index can pass the base only by frames taken since.
+  const auto pts_at = [this](std::uint64_t index) {
+    return base_pts_ + audio_ns(index - base_index_, format_.sample_rate);
+  };
+  if (based_) {
+    rendered.pts_ns = pts_at(ring_.read_index());
+  }
   const std::size_t channels = format_.channels;
   std::size_t got = 0;
   if (playing_.load(std::memory_order_relaxed)) {
@@ -106,15 +128,16 @@ void AudioOut::render(float* out, std::size_t frames) noexcept {
     played_.fetch_add(got, std::memory_order_relaxed);
     if (based_ && got < frames) {
       underrun_.fetch_add(frames - got, std::memory_order_relaxed);
+      underruns_.fetch_add(1, std::memory_order_relaxed);
     }
   }
   std::fill(out + got * channels, out + frames * channels, 0.0f);
+  rendered.frames = got;
   if (based_) {
-    // The ring's index can pass the base only by frames taken since.
-    const std::uint64_t taken = ring_.read_index() - base_index_;
-    position_.store(base_pts_ + audio_ns(taken, format_.sample_rate),
-                    std::memory_order_release);
+    rendered.end_pts_ns = pts_at(ring_.read_index());
+    position_.store(rendered.end_pts_ns, std::memory_order_release);
   }
+  return rendered;
 }
 
 core::Result<std::unique_ptr<NullAudioOut>> NullAudioOut::create(

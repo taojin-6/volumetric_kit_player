@@ -219,9 +219,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `AudioOutMaker`; `StreamPlayer::has_audio`, `set_muted`, `muted` and
   `audio_position`. A file with no Audio track plays as before, with no
   output or feeder.
+- The Apple audio output: on macOS and iOS the apps play a file's audio
+  through AVAudioEngine (`open_apple_audio`, `apple_audio_out.mm`), the
+  logic in `DeviceAudioOut` over an `AudioDevice` (`device_audio_out.hpp`).
+  Its `position()` is the frames rendered less those queued and their run's
+  latency, at the host clock's now (`audio_clock.hpp`: `heard_pts`,
+  `reanchors`, `output_latency_ns`), never back across a route change. A
+  park stops it and the unpark starts it, ending an interruption too; an
+  interruption or its device gone pauses the player
+  (`StreamPlayer::follow_audio`, each `PlayerView::frame`); a route change
+  starts it again on the new route. With `VP_NO_AUDIO_DEVICE` set, as for
+  every test, it opens no device. iOS plays for movies, with no background
+  audio. `AudioOut` gains `route`, `park`, `unpark` and
+  `take_pause_request`, `position` is virtual, `render` returns what it took
+  (`Rendered`), and `AudioOutStats::underruns` counts short renders. Mute, a
+  box drawn for a file with audio, and the desktop's M key mute it
+  (`StreamPlayer::audio_status`); the status line ends with `muted`,
+  `audio <n> ms` or `audio off` (`audio_status_text`). `tests/vp_audio_check`
+  checks the output by hand on a Mac, with no window (`clock_fit`,
+  `DeviceAudioOut::runs`).
 
 ### Changed
 
+- `StreamPlayer::open` with no audio output maker plays through the null
+  output, not `AudioOut::open_default`; `open_source` takes a maker, which the
+  desktop and iOS apps give as `AudioOut::open_default`. The player library
+  builds Objective-C++ on Apple and links AVFoundation (and AudioToolbox and
+  Core Audio on macOS).
 - build: the iOS app needs iOS 26 or newer: `cmake --preset ios` targets
   iOS 26.0, the family's iOS floor.
 - build: grid at #9's merge (01bdc64, 0.4.0), for its Audio tracks, and

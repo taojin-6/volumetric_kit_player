@@ -61,13 +61,15 @@ struct UiArea {
 UiArea work_area();
 
 /// @brief Draw Play/Pause, Step, Loop, Normals, Deblock, Unlit and, when
-///        given, Texture and a program's panel's box in a row, the status
+///        given, Texture and a program's panel's box, and Mute for a file
+///        with audio (StreamPlayer::has_audio), in a row, the status
 ///        line below, at the bottom centre of @p area, so they stay clear of
 ///        a notch, a home indicator and the panel; a live player's
 ///        (StreamPlayer::live), Normals, Deblock, Unlit and, when given,
 ///        Texture and the panel's box over its @ref live_status_line.
 ///        Deblock, a box that shows and sets StreamPlayer::deblock, then
-///        Unlit, Texture and the panel's, boxes, each go after the line's
+///        Unlit, Texture, the panel's and Mute, which shows and sets
+///        StreamPlayer::muted, boxes, each go after the line's
 ///        last control, or start a line below when it would not fit @p area
 ///        with them, as Deblock does on a phone in portrait; a status line
 ///        too wide for it breaks between its parts, as a stats line does.
@@ -134,22 +136,37 @@ bool draw_source(const UiArea& area);
 std::string live_status_line(const LiveStatus& status,
                              Playback::Clock::time_point now);
 
+/// @brief A file's audio on its status line.
+///
+/// @code
+/// const std::string text = audio_status_text(*player.audio_status());
+/// @endcode
+/// @param audio  Its audio (StreamPlayer::audio_status).
+/// @return "muted" while muted; else "audio <n> ms", n the route's latency
+///         to the nearest ms, while a device plays it; else "audio off" (the
+///         null output, or a device stopped).
+std::string audio_status_text(const AudioStatus& audio);
+
 /// @brief The status line under the controls.
 ///
 /// @code
-/// // "frame 12/150 · set 77 · playing · loop"
-/// const std::string line = status_line(stamp, 150, true, true);
+/// // "frame 12/150 · set 77 · playing · loop · audio 23 ms"
+/// const std::string line =
+///     status_line(stamp, 150, true, true, player.audio_status());
 /// @endcode
 /// @param shown        The last stream frame drawn; empty before the first.
 /// @param frame_count  The track's frames.
 /// @param playing      Whether it plays, rather than being paused.
 /// @param loop         Whether it loops.
+/// @param audio        Its audio; none without an Audio track.
 /// @return The frame drawn, counted from 1, over the track's; its set
-///         (FrameStamp::set) when it has one; `playing` or `paused`; and
-///         `loop` when on: "frame 12/150 · set 77 · playing · loop".
-///         "loading" before the first.
+///         (FrameStamp::set) when it has one; `playing` or `paused`; `loop`
+///         when on; and with audio its @ref audio_status_text:
+///         "frame 12/150 · set 77 · playing · loop · audio 23 ms". "loading"
+///         before the first.
 std::string status_line(const std::optional<FrameStamp>& shown,
-                        std::uint64_t frame_count, bool playing, bool loop);
+                        std::uint64_t frame_count, bool playing, bool loop,
+                        const std::optional<AudioStatus>& audio = {});
 
 /// @brief A live view's playout delay, for the stats: the applied D of the
 ///        shown frame's clock as it was taken (FrameStamp::playout), and the
