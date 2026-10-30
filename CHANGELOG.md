@@ -194,6 +194,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   default), so a panel's cost is measured at a screen's size; the iOS
   measure launch's `--panel on|off` (`MeasureArgs::panel`). The log's `run`
   names them.
+- A live playout clock (`live_clock.hpp`): `LiveClock`, `Playout`,
+  `DelayNeed` and the rules on given times (`present`, `earliest`,
+  `pts_at`, `release_wait`, `mesh_now`, `step_point`); a live frame is
+  presented at its pts plus the least arrival − pts over 10 s plus D, the
+  largest need stated, at most 1 s. `StreamPlayer::live_clock`,
+  `HookContext::live_clock`, `FrameStamp::released` and `playout`.
+- `FrameHooks::live_delay`, a program's need for delay, asked at each live
+  record, and `FrameHooks::data_ready`, asked on the worker before a live
+  frame is published: draw, not yet (the frame before stays shown) or never
+  (abandoned, unpublished).
+- vp_probe's `--live-delay MS`: a floor under a program's need, 0 to 1000.
+- The stats' live "delay" line, D and the need that set it, and the
+  latency's "buffer" leg, the wait as bytes.
 
 ### Changed
 
@@ -222,6 +235,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Measure format 4: the header's `grid` names grid's commit where format 3's
   `recon` named recon's (`BuildInfo::grid`); the runner builds on the grid
   checkout at the player's pin, and the summarizer reads formats 1 to 4.
+- Live, records wait for their present time as host bytes, in one 16 MiB
+  ring, before their decode; the newest decode is meshed once no held record
+  is due, where it was once nothing more had come; the take holds a live
+  frame until its present time; `FrameStamp::records` counts records
+  released, not received; and the stats' publish leg runs from the release.
+  A file plays as before.
+- Measure format 5: the frame row ends with `buffer_ms`, `delay_ms`,
+  `target_ms`, `need` and `late_ms`, empty for a file; the summarizer reads
+  formats 1 to 5.
 - An `after_mesh` hook may record work that reads the grid it is handed,
   such as a compaction of its map (recon #295's const
   `VoxelHashMap::record_compaction`). The worker finishes the hook's batch

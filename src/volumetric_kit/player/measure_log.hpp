@@ -10,17 +10,17 @@
 ///        vp_probe and the iOS app's measure launch write and tools/measure/
 ///        summarizes (DECISIONS.md).
 ///
-/// The format, version 4. Header lines are `# key: value`: `format`, the
+/// The format, version 5. Header lines are `# key: value`: `format`, the
 /// commits of `player`, `core`, `grid` and `gfx`, `build`, `device`,
 /// `rings`, `stream`, `run`, `timing`, `tile_depth`, `labels`,
 /// `share_vertices` and `utc`, and on a phone `thermal` and `low_power`. Then
 /// one CSV header and the rows:
 ///
 /// ```
-/// pass,frame,type,bytes,triangles,table,stage,host_ms,wait_ms,gpu_ms,device,submits,host_waits,blocked_ns,staging_buffers,dispatches,barriers,deblock,exact_blocks,rounds,idle_ms,queue_ms,publish_ms,take_ms,present_ms,vertices,set
-/// 2,7,P,17932,199020,worker,decode,0.4101,0.0000,4.9518,measured,,,,,,,,,,,,,,,,
-/// 2,7,P,17932,199020,render,present,0.0100,1.0441,,none,,,,,,,,,,,,,,,,
-/// 2,7,P,17932,199020,,,,,,,1,0,0,0,39,48,LG,1920,1,26.9100,0.4100,0.2000,8.5000,1.1000,126412,77
+/// pass,frame,type,bytes,triangles,table,stage,host_ms,wait_ms,gpu_ms,device,submits,host_waits,blocked_ns,staging_buffers,dispatches,barriers,deblock,exact_blocks,rounds,idle_ms,queue_ms,publish_ms,take_ms,present_ms,vertices,set,buffer_ms,delay_ms,target_ms,need,late_ms
+/// 2,7,P,17932,199020,worker,decode,0.4101,0.0000,4.9518,measured,,,,,,,,,,,,,,,,,,,,,
+/// 2,7,P,17932,199020,render,present,0.0100,1.0441,,none,,,,,,,,,,,,,,,,,,,,,
+/// 2,7,P,17932,199020,,,,,,,1,0,0,0,39,48,LG,1920,1,26.9100,0.4100,0.2000,8.5000,1.1000,126412,77,,,,,
 /// ```
 ///
 /// - `table` `worker`: the stamp's rows, in its order, per stream frame.
@@ -35,19 +35,26 @@
 /// - Then the frame's row, with no table and no stage: the worker's device
 ///   counts over it (`FrameStamp::counters`); the filter the deblock ran, or
 ///   `off`, and the blocks it kept exact; its rounds; its queue idle and
-///   queue latency; its latency legs, due to published, published to taken
-///   and taken to presented; its mesh's vertices; and its record's set
-///   (`FrameStamp::set`). A figure the frame lacks is empty, as the set of a
-///   record that names none.
+///   queue latency; its latency legs, released to published (a file's
+///   release is its due), published to taken and taken to presented; its
+///   mesh's vertices; its record's set (`FrameStamp::set`); and live, its
+///   wait as bytes (`buffer_ms`, due to released), then its playout as it
+///   was taken (`FrameStamp::playout`): the applied D (`delay_ms`), D's
+///   target (`target_ms`), the need that set it (`need`: `none`, `arrival`
+///   or `program`) and `late_ms`, taken less its present time. A figure the
+///   frame lacks is empty, as the set of a record that names none, and a
+///   file's last five.
 /// - `type` is `I` or `P`; `frame` is `FrameStamp::index` and `pass`
 ///   `FrameStamp::pass`.
 /// - `share_vertices` is `on` or `off` (PlayerViewConfig::share_vertices).
 /// - A paused deblock toggle's rebuild (`FrameStamp::rebuild`) is the frame
 ///   before again, so no frame: it writes nothing.
 ///
-/// Version 2 had neither `share_vertices`, `vertices` nor `set`. Version 1 had
-/// neither `rings`, `tile_depth`, `labels` nor `table`, and its frame row
-/// held the first four counts alone. tools/measure reads all three.
+/// Version 4 had none of the last five columns, and its `publish_ms` ran from
+/// due, which version 5 keeps for a file. Version 3 named recon's commit for
+/// grid's. Version 2 had neither `share_vertices`, `vertices` nor `set`.
+/// Version 1 had neither `rings`, `tile_depth`, `labels` nor `table`, and its
+/// frame row held the first four counts alone. tools/measure reads them all.
 
 #include <chrono>
 #include <cstdint>

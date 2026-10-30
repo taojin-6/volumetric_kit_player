@@ -140,10 +140,15 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
       config.device_timing.value_or(DeviceTiming::kAll));
   view->player_->set_tile_depth(config.tile_depth);
   if (config.make_hooks) {
-    const HookContext context{view->grid_device_,    view->grid_allocator_,
-                              view->app_.device(),   view->app_.allocator(),
-                              &view->mesh_pipeline_, compute_family,
-                              graphics_family,       view->target_layout()};
+    const HookContext context{view->grid_device_,
+                              view->grid_allocator_,
+                              view->app_.device(),
+                              view->app_.allocator(),
+                              &view->mesh_pipeline_,
+                              compute_family,
+                              graphics_family,
+                              view->target_layout(),
+                              view->player_->live_clock()};
     VKC_ASSIGN(view->hooks_, config.make_hooks(context));
   }
   view->set_panel_open(config.panel.state.open);  // none without a panel

@@ -4,10 +4,13 @@
 #include "volumetric_kit/player/stream_player.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <utility>
+#include <vector>
 
 #include "volumetric_kit/core/base/exception_status.hpp"
 #include "volumetric_kit/core/vulkan/host_ring.hpp"
@@ -26,10 +29,13 @@ namespace stream = grid::stream;
 using Clock = Playback::Clock;
 
 // Live: the longest one receive, or one wait for the consumer's take, lasts,
-// so quit and a park are seen within it; and the least time between two
-// meshes while records keep coming.
+// so quit and a park are seen within it.
 constexpr std::chrono::milliseconds kSlice{10};
-constexpr std::chrono::milliseconds kMeshEvery{100};
+// Live: how often a frame waiting for its program is asked again.
+constexpr std::chrono::milliseconds kAskEvery{1};
+// Live: the most records held before their release (kLiveHoldBytes holds
+// their bytes); past it, as past those bytes, nothing more is read.
+constexpr std::size_t kHeldRecords = 1024;
 
 // A record or frame to skip, rather than an error that stops the worker:
 // damage (InvalidArgument), what this version cannot read (Unsupported), and
@@ -209,6 +215,95 @@ struct StreamPlayer::InFlight {
   Batch batch;  // last, so destroyed first: a quit waits for the GPU
 };
 
+// The bytes in one buffer of kLiveHoldBytes, made at the first use and kept,
+// each record's contiguous, oldest first; their headers in a fixed ring. A
+// record larger than the buffer waits until nothing is held, which grows the
+// buffer to it. Nothing is allocated per record, and the buffer is not
+// cleared: its pages are touched as records are written, so making it costs
+// no 16 MiB write on the first record's way.
+class StreamPlayer::HeldRecords {
+ public:
+  struct Held {
+    stream::Record record;
+    Clock::time_point arrived;
+    std::size_t at = 0;  // its bytes' start in the buffer
+  };
+
+  // Where `size` bytes more go: null while full.
+  std::uint8_t* room(std::size_t size) {
+    if (size_ == kHeldRecords) {
+      return nullptr;
+    }
+    if (size_ == 0) {
+      if (bytes_ == nullptr || size > capacity_) {
+        capacity_ = std::max(kLiveHoldBytes, size);  // larger: held alone
+        bytes_.reset(new std::uint8_t[capacity_]);
+      }
+      return bytes_.get();
+    }
+    const Held& first = held_[head_];
+    const Held& last = held_[(head_ + size_ - 1) % kHeldRecords];
+    const std::size_t end =
+        last.at + static_cast<std::size_t>(last.record.size);
+    if (last.at >= first.at) {  // one span, [first.at, end)
+      if (capacity_ - end >= size) {
+        return bytes_.get() + end;
+      }
+      return first.at >= size ? bytes_.get() : nullptr;  // wrapped
+    }
+    return first.at - end >= size ? bytes_.get() + end : nullptr;
+  }
+  // The record whose bytes were just written where room said.
+  void push(const stream::Record& record, Clock::time_point arrived,
+            const std::uint8_t* at) {
+    held_[(head_ + size_) % kHeldRecords] =
+        Held{record, arrived, static_cast<std::size_t>(at - bytes_.get())};
+    ++size_;
+  }
+  bool empty() const { return size_ == 0; }
+  const Held& front() const { return held_[head_]; }
+  const std::uint8_t* bytes(const Held& held) const {
+    return bytes_.get() + held.at;
+  }
+  void pop() {
+    head_ = (head_ + 1) % kHeldRecords;
+    --size_;
+  }
+  // Drop every record, keeping the buffer.
+  void clear() { head_ = size_ = 0; }
+
+ private:
+  std::unique_ptr<std::uint8_t[]> bytes_;  // capacity_ bytes, uncleared
+  std::size_t capacity_ = 0;
+  std::array<Held, kHeldRecords> held_{};
+  std::size_t head_ = 0, size_ = 0;
+};
+
+struct StreamPlayer::Waiting {
+  mesh::PendingExtract extract;  // run on the device, unfinished
+  FrameStamp stamp;
+  std::chrono::nanoseconds took{0};  // the worker's time on it so far
+};
+
+struct StreamPlayer::Connection {
+  std::optional<std::uint16_t> track;         // the session's, once it is in
+  std::optional<InFlight> decoding;           // a record's decode in flight
+  std::chrono::nanoseconds decoding_took{0};  // the worker's time on it
+  bool pending = false;             // newest holds a frame not yet meshed
+  FrameStamp newest;                // the newest frame decoded
+  std::uint32_t newest_blocks = 0;  // its blocks
+  std::chrono::nanoseconds newest_took{0};  // the worker's time on it
+  std::optional<Waiting> waiting;           // a frame its program holds
+  std::uint64_t records = 0;                // released since the last publish
+  std::uint64_t record_bytes = 0;
+  std::optional<Clock::time_point> published;  // the last, on this connection
+  // A whole record of the played track left unread while the ring is full,
+  // and when it arrived.
+  std::optional<HeldRecords::Held> unread;
+
+  bool in_hand() const { return decoding.has_value() || pending; }
+};
+
 core::Result<std::unique_ptr<StreamPlayer>> StreamPlayer::open(
     const std::string& path) {
   try {
@@ -252,6 +347,7 @@ StreamPlayer::StreamPlayer(std::unique_ptr<stream::StreamReader> reader,
 StreamPlayer::StreamPlayer(LiveAddress address)
     : address_(std::move(address)), clock_(0, 0) {
   live_status_.address = to_string(address_);
+  live_clock_.emplace();
 }
 
 StreamPlayer::~StreamPlayer() { stop(); }
@@ -607,6 +703,7 @@ core::Result<bool> StreamPlayer::finish_frame(InFlight frame, Pass& pass) {
     frame.stamp.due = due->at;
     seen = due->seen;
   }
+  frame.stamp.released = frame.stamp.due;  // a file's: no hold
   if (!frame.step) {  // a park waited out its batch and ended its step
     frame.step = Step(*this);
     if (!frame.step) {
@@ -677,23 +774,27 @@ core::Status StreamPlayer::play_live() {
 
 core::Status StreamPlayer::play_connection(networking::StreamClient& client,
                                            core::Status* ended) {
-  std::optional<std::uint16_t> track;  // the session's, once it is in
-  std::optional<InFlight> decoding;    // a record's decode in flight
-  bool pending = false;                // newest holds a frame not yet meshed
-  FrameStamp newest;                   // the newest frame decoded
-  std::uint32_t newest_blocks = 0;     // its blocks
-  std::uint64_t records = 0;           // received since the last publish
-  std::uint64_t record_bytes = 0;
-  std::optional<Clock::time_point> published;  // the last, on this connection
+  if (held_ == nullptr) {
+    held_ = std::make_unique<HeldRecords>();
+  }
+  held_->clear();
+  live_clock_->reset();  // a new connection: no pts base yet
+  Connection connection;
   stream::Record record;
-  // The connection's end, for `why`: a decode in flight is waited out,
-  // submitting nothing, and dropped, as is a record unread.
+  // The connection's end, for `why`: a frame waiting for its program is
+  // abandoned, a decode in flight is waited out, submitting nothing, and
+  // dropped, as are the records held and one unread.
   const auto end = [&](core::Status why) {
-    if (decoding) {
-      (void)decoding->batch.pending.wait();
-      decoder_->abandon(decoding->decode);
-      decoding.reset();
+    if (connection.waiting) {
+      extractor_->abandon(connection.waiting->extract);
+      connection.waiting.reset();
     }
+    if (connection.decoding) {
+      (void)connection.decoding->batch.pending.wait();
+      decoder_->abandon(connection.decoding->decode);
+      connection.decoding.reset();
+    }
+    held_->clear();
     *ended = std::move(why);
     return core::Status();
   };
@@ -706,102 +807,106 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
     if (stopping) {
       return end({});
     }
-    // Drain before waiting for a take. Even without a whole record, a
-    // partial receive is progress: another nonblocking read may advance it.
+    // A frame its program held, asked again.
+    if (connection.waiting) {
+      VKC_ASSIGN(const bool going, ask_program(connection));
+      if (!going) {
+        return end({});
+      }
+    }
+    // Read into the ring, the record left unread first, then every whole
+    // record that has come, so each is stamped as near its arrival as the
+    // worker's last step allows. Drain before waiting for a take: even
+    // without a whole record, a partial receive is progress, as another
+    // nonblocking read may advance it. With nothing in hand, the first read
+    // waits on the socket, until the front's release at the latest.
     bool progressed = false;
-    const bool in_hand = decoding.has_value() || pending;
-    const core::Result<bool> got =
-        client.next(in_hand ? std::chrono::milliseconds{0} : kSlice, &record,
-                    nullptr, &progressed);
-    if (!got.ok()) {
-      return end(got.status());
-    }
-    // A complete record is due now, including any wait or recovery needed
-    // to finish the preceding decode before this record can be decoded.
-    const Clock::time_point arrived = Clock::now();
-    if (!track && client.session() != nullptr) {
-      track = first_geometry_track(*client.session());
-      if (!track) {
-        return end(core::Status::not_found(
-            "the sender's session has no geometry track"));
+    if (connection.unread) {
+      const core::Status read = hold_unread(client, connection);
+      if (!read.ok()) {
+        return end(read);
       }
-      std::lock_guard<std::mutex> lock(mutex_);
-      live_status_.state = LiveState::kConnected;
+      progressed = !connection.unread;
     }
-    if (*got && record.info.track == *track) {
-      ++records;
-      record_bytes += record.size;
-      {
+    for (bool first = true; !connection.unread; first = false) {
+      const bool take_wanted = connection.in_hand() && !connection.waiting;
+      bool received = false;
+      const core::Result<bool> got =
+          client.next(first && !take_wanted ? idle_wait(connection)
+                                            : std::chrono::milliseconds{0},
+                      &record, nullptr, &received);
+      progressed = progressed || received;
+      if (!got.ok()) {
+        return end(got.status());
+      }
+      // A whole record arrived now: its due time, and the clock's sample.
+      const Clock::time_point arrived = Clock::now();
+      if (!connection.track && client.session() != nullptr) {
+        connection.track = first_geometry_track(*client.session());
+        if (!connection.track) {
+          return end(core::Status::not_found(
+              "the sender's session has no geometry track"));
+        }
         std::lock_guard<std::mutex> lock(mutex_);
-        live_status_.state = LiveState::kLive;
-        live_status_.seq = record.info.seq;
-        live_status_.set = record.info.set;
-        live_status_.last_record = arrived;
+        live_status_.state = LiveState::kConnected;
       }
-      // The decode before it finishes first: the next parses against the
-      // reference it leaves.
-      if (decoding) {
-        VKC_ASSIGN(const bool decoded, finish_decode(std::move(*decoding),
-                                                     &newest, &newest_blocks));
-        decoding.reset();
-        pending = pending || decoded;
+      if (!*got) {
+        break;
       }
-      Step step(*this, Step::kNoWait);  // from its recording to its finish
-      if (!step) {
-        return end({});  // quit or parked: the record is dropped
-      }
-      FrameStamp stamp;
-      stamp.index = record.info.seq;
-      stamp.pts_ns = record.info.pts_ns;
-      stamp.bytes = record.size;
-      stamp.key = record.info.key;
-      stamp.set = record.info.set;
-      stamp.due = arrived;
-      stamp.timed = time_next_frame();
-      // The body straight into one of the decoder's input slots: the other
-      // is free, as the decode before has finished.
-      core::Result<core::HostSlot> slot = decoder_->claim_input(record.size);
-      if (slot.ok()) {
-        const core::Status read = client.read(
-            record, slot->data(), static_cast<std::size_t>(slot->capacity()));
+      if (record.info.track == *connection.track) {
+        note_arrival(record, arrived);
+        connection.unread = HeldRecords::Held{record, arrived, 0};
+        const core::Status read = hold_unread(client, connection);
         if (!read.ok()) {
           return end(read);
         }
-        VKC_TRY(finish_hook_batch_before_growing(
-            *slot, static_cast<std::size_t>(record.size), stamp));
-        core::CommandBatch batch = new_batch(stamp.timed);
-        core::Result<codec::PendingDecode> decode = record_decode(
-            batch, *slot, static_cast<std::size_t>(record.size), stamp);
-        if (decode.ok()) {
-          core::Result<Batch> submitted = submit(batch, nullptr, &stamp.stages);
-          if (!submitted.ok()) {
-            decoder_->abandon(*decode);
-            return submitted.status();
-          }
-          decoding.emplace(InFlight{std::move(stamp), std::move(decode).value(),
-                                    std::nullopt, std::move(step),
-                                    std::move(submitted).value()});
-        } else if (!skippable(decode.status())) {
-          return decode.status();
-        }
-      } else if (!skippable(slot.status())) {
-        return slot.status();
+      } else {
+        pass_other(record, arrived);
       }
-      // TODO: show why records are skipped while none of this connection's
-      // has decoded: a sender this version cannot decode shows as live, with
-      // no picture.
+    }
+    // Every record the clock lets go, in order, but for the mesh rule's
+    // turn: once the consumer is free, the connection's first frame, or
+    // kMeshEvery since the last publish, meshes before the next is released,
+    // so a backlog shows as it drains.
+    Release released = Release::kNone;
+    for (;;) {
+      VKC_ASSIGN(const Release one, release_front(connection));
+      if (one == Release::kStopped) {
+        return end({});
+      }
+      if (one == Release::kNone) {
+        break;
+      }
+      released = Release::kReleased;
+      if ((!connection.published ||
+           Clock::now() - *connection.published >= kMeshEvery) &&
+          exchange_->release_and_may_publish(*extractor_)) {
+        break;
+      }
+    }
+    if (!connection.in_hand() || connection.waiting) {
+      if (connection.unread && !progressed && released == Release::kNone) {
+        // The ring is full and nothing moved: wait for the front's release,
+        // a quit or a park, rather than spin.
+        std::unique_lock<std::mutex> lock(mutex_);
+        changed_.wait_for(lock, idle_wait(connection),
+                          [this] { return quit_ || parked_; });
+      }
+      continue;
     }
     // Free: the consumer took the last mesh, so the newest frame may be
     // meshed. Never bypassed: a superseded mesh keeps its ring slot. Wait
-    // for taken() only after input is drained, so queued records and partial
-    // receives do not each pay a slice while a mesh is left untaken.
+    // for taken() only once nothing moved, so queued records and partial
+    // receives do not each pay a slice while a mesh is left untaken, and no
+    // longer than until the front's release.
+    const std::chrono::milliseconds wait = idle_wait(connection);
     bool free = false;
-    if (decoding || pending) {
+    {
       std::unique_lock<std::mutex> lock(mutex_);
-      if (progressed) {
+      if (progressed || released == Release::kReleased || wait.count() == 0) {
         free = exchange_->release_and_may_publish(*extractor_);
       } else {
-        free = changed_.wait_for(lock, kSlice, [this] {
+        free = changed_.wait_for(lock, wait, [this] {
           return quit_ || parked_ ||
                  exchange_->release_and_may_publish(*extractor_);
         });
@@ -811,42 +916,248 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
         return end({});
       }
     }
-    // The newest, once its decode is judged: once nothing more has come, at
-    // once for the connection's first frame, or every kMeshEvery while
-    // records keep coming (DECISIONS.md).
-    if (free && (!progressed || !published ||
-                 Clock::now() - *published >= kMeshEvery)) {
-      if (decoding) {
-        VKC_ASSIGN(const bool decoded, finish_decode(std::move(*decoding),
-                                                     &newest, &newest_blocks));
-        decoding.reset();
-        pending = pending || decoded;
-      }
-      if (pending) {
-        const Step step(*this, Step::kNoWait);  // the mesh, published within
-        if (!step) {
-          return end({});
-        }
-        newest.records = std::exchange(records, 0);
-        newest.record_bytes = std::exchange(record_bytes, 0);
-        VKC_ASSIGN(std::optional<mesh::DeviceMesh> shown,
-                   mesh_alone(newest, newest_blocks, "mesh"));
-        if (shown) {
-          VKC_TRY(run_after_mesh(*shown, newest));
-          std::lock_guard<std::mutex> lock(mutex_);
-          publish_now(*shown, std::move(newest));
-        }
-        newest = FrameStamp();
-        pending = false;
-        published = Clock::now();
+    // The newest, by the mesh rule: at once for the connection's first
+    // frame, once no held record is due, or every kMeshEvery while records
+    // keep coming due (DECISIONS.md).
+    const std::optional<Playout> playout = live_clock_->time();
+    const Clock::time_point now = Clock::now();
+    std::optional<std::uint64_t> next_pts;
+    if (!held_->empty()) {
+      next_pts = held_->front().record.info.pts_ns;
+    }
+    std::optional<std::chrono::nanoseconds> since_publish;
+    if (connection.published) {
+      since_publish = now - *connection.published;
+    }
+    if (playout &&
+        mesh_now(free, since_publish, next_pts,
+                 live_clock_->now_pts(*playout, now), playout->lead)) {
+      VKC_ASSIGN(const bool going, mesh_newest(connection));
+      if (!going) {
+        return end({});
       }
     }
   }
 }
 
+std::chrono::milliseconds StreamPlayer::idle_wait(
+    const Connection& connection) const {
+  if (connection.waiting) {
+    return kAskEvery;
+  }
+  const std::optional<Playout> playout = live_clock_->time();
+  if (held_->empty() || !playout) {
+    return kSlice;
+  }
+  const std::chrono::nanoseconds left =
+      release_wait(held_->front().record.info.pts_ns,
+                   live_clock_->now_pts(*playout, Clock::now()), playout->lead);
+  return std::min<std::chrono::milliseconds>(
+      kSlice, std::chrono::ceil<std::chrono::milliseconds>(left));
+}
+
+void StreamPlayer::note_arrival(const stream::Record& record,
+                                Clock::time_point arrived) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    live_status_.state = LiveState::kLive;
+    live_status_.seq = record.info.seq;
+    live_status_.set = record.info.set;
+    live_status_.last_record = arrived;
+  }
+  live_clock_->arrived(record.info.pts_ns, arrived,
+                       hooks_ != nullptr && hooks_->live_delay
+                           ? hooks_->live_delay()
+                           : std::chrono::nanoseconds(0));
+}
+
+core::Status StreamPlayer::hold_unread(networking::StreamClient& client,
+                                       Connection& connection) {
+  const HeldRecords::Held& unread = *connection.unread;
+  const std::size_t size = static_cast<std::size_t>(unread.record.size);
+  std::uint8_t* const at = held_->room(size);
+  if (at == nullptr) {
+    return {};  // full: read once the front is released
+  }
+  VKC_TRY(client.read(unread.record, at, size));
+  held_->push(unread.record, unread.arrived, at);
+  connection.unread.reset();
+  return {};
+}
+
+void StreamPlayer::pass_other(const stream::Record& /*record*/,
+                              Clock::time_point /*arrived*/) {
+  // Passed over unread: StreamClient::next skips its payload.
+}
+
+core::Result<StreamPlayer::Release> StreamPlayer::release_front(
+    Connection& connection) {
+  if (connection.waiting || held_->empty()) {
+    return Release::kNone;
+  }
+  const std::optional<Playout> playout = live_clock_->time();
+  const HeldRecords::Held& front = held_->front();
+  if (!playout || release_wait(front.record.info.pts_ns,
+                               live_clock_->now_pts(*playout, Clock::now()),
+                               playout->lead) > std::chrono::nanoseconds(0)) {
+    return Release::kNone;
+  }
+  // The decode before it finishes first: the next parses against the
+  // reference it leaves.
+  if (connection.decoding) {
+    VKC_ASSIGN(
+        const bool decoded,
+        finish_decode(std::move(*connection.decoding), &connection.newest,
+                      &connection.newest_blocks, &connection.decoding_took));
+    connection.decoding.reset();
+    if (decoded) {
+      connection.newest_took = connection.decoding_took;
+    }
+    connection.pending = connection.pending || decoded;
+  }
+  Step step(*this, Step::kNoWait);  // from its recording to its finish
+  if (!step) {
+    return Release::kStopped;  // quit or parked: the records are dropped
+  }
+  const stream::Record record = front.record;
+  const std::size_t size = static_cast<std::size_t>(record.size);
+  FrameStamp stamp;
+  stamp.index = record.info.seq;
+  stamp.pts_ns = record.info.pts_ns;
+  stamp.bytes = record.size;
+  stamp.key = record.info.key;
+  stamp.set = record.info.set;
+  stamp.due = front.arrived;
+  stamp.released = Clock::now();
+  stamp.timed = time_next_frame();
+  ++connection.records;
+  connection.record_bytes += record.size;
+  // Its bytes into one of the decoder's input slots: the other is free, as
+  // the decode before has finished.
+  core::Result<core::HostSlot> slot = decoder_->claim_input(record.size);
+  if (slot.ok()) {
+    {
+      const core::StageScope copy(stamp.stages, "decode");
+      std::memcpy(slot->data(), held_->bytes(front), size);
+    }
+    held_->pop();
+    VKC_TRY(finish_hook_batch_before_growing(*slot, size, stamp));
+    core::CommandBatch batch = new_batch(stamp.timed);
+    core::Result<codec::PendingDecode> decode =
+        record_decode(batch, *slot, size, stamp);
+    if (decode.ok()) {
+      core::Result<Batch> submitted = submit(batch, nullptr, &stamp.stages);
+      if (!submitted.ok()) {
+        decoder_->abandon(*decode);
+        return submitted.status();
+      }
+      const Clock::time_point released = stamp.released;
+      connection.decoding.emplace(
+          InFlight{std::move(stamp), std::move(decode).value(), std::nullopt,
+                   std::move(step), std::move(submitted).value()});
+      connection.decoding_took = Clock::now() - released;
+    } else if (!skippable(decode.status())) {
+      return decode.status();
+    }
+  } else if (!skippable(slot.status())) {
+    return slot.status();
+  } else {
+    held_->pop();
+  }
+  // TODO: show why records are skipped while none of this connection's has
+  // decoded: a sender this version cannot decode shows as live, with no
+  // picture.
+  return Release::kReleased;
+}
+
+core::Result<bool> StreamPlayer::mesh_newest(Connection& connection) {
+  if (connection.decoding) {
+    VKC_ASSIGN(
+        const bool decoded,
+        finish_decode(std::move(*connection.decoding), &connection.newest,
+                      &connection.newest_blocks, &connection.decoding_took));
+    connection.decoding.reset();
+    if (decoded) {
+      connection.newest_took = connection.decoding_took;
+    }
+    connection.pending = connection.pending || decoded;
+  }
+  if (!connection.pending) {
+    return true;
+  }
+  FrameStamp stamp = std::exchange(connection.newest, FrameStamp());
+  connection.pending = false;
+  std::optional<mesh::PendingExtract> extract;
+  {
+    Step step(*this, Step::kNoWait);  // the mesh, up to its program's say
+    if (!step) {
+      return false;
+    }
+    const Clock::time_point began = Clock::now();
+    VKC_ASSIGN(extract, extract_alone(stamp, connection.newest_blocks, "mesh"));
+    connection.newest_took += Clock::now() - began;
+  }
+  connection.waiting.emplace(
+      Waiting{*extract, std::move(stamp), connection.newest_took});
+  return ask_program(connection);
+}
+
+core::Result<bool> StreamPlayer::ask_program(Connection& connection) {
+  Waiting& waiting = *connection.waiting;
+  const Clock::time_point asked = Clock::now();
+  const FrameCommit answer = hooks_ != nullptr && hooks_->data_ready
+                                 ? hooks_->data_ready(waiting.stamp)
+                                 : FrameCommit::kDraw;
+  if (answer == FrameCommit::kHold) {
+    return true;  // asked again within kAskEvery
+  }
+  if (answer == FrameCommit::kSkip) {
+    // Never to come: its slot is freed unpublished, the shown frame stays,
+    // and its records count to the next frame published.
+    extractor_->abandon(waiting.extract);
+    connection.waiting.reset();
+    return true;
+  }
+  const Step step(*this, Step::kNoWait);  // its finish, up to its publish
+  if (!step) {
+    return false;
+  }
+  FrameStamp stamp = std::move(waiting.stamp);
+  const mesh::PendingExtract extract = waiting.extract;
+  const std::chrono::nanoseconds took = waiting.took;
+  connection.waiting.reset();
+  core::StageMetrics breakdowns;
+  core::Result<std::optional<mesh::DeviceMesh>> shown = [&] {
+    const core::StageScope host(stamp.stages, "mesh");
+    return extractor_->finish(extract, *grid_, nullptr,
+                              stamp.timed ? &breakdowns : nullptr);
+  }();
+  forward_breakdowns(breakdowns, stamp.stages);
+  VKC_TRY(shown.status());
+  if (!*shown) {
+    return true;  // its slot came back unpublished
+  }
+  stamp.records = std::exchange(connection.records, 0);
+  stamp.record_bytes = std::exchange(connection.record_bytes, 0);
+  VKC_TRY(run_after_mesh(**shown, stamp));
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    publish_now(**shown, std::move(stamp));
+  }
+  const Clock::time_point now = Clock::now();
+  // The lead leaves out a connection's first frame, which built the grid.
+  if (connection.published) {
+    live_clock_->published(took + (now - asked), now);
+  }
+  connection.published = now;
+  return true;
+}
+
 core::Result<bool> StreamPlayer::finish_decode(InFlight decoding,
                                                FrameStamp* newest,
-                                               std::uint32_t* blocks) {
+                                               std::uint32_t* blocks,
+                                               std::chrono::nanoseconds* took) {
+  const Clock::time_point began = Clock::now();
   FrameStamp& stamp = decoding.stamp;
   VKC_TRY(wait_batch(decoding));  // as at a file's frame's finish
   core::StageMetrics breakdowns;
@@ -866,6 +1177,7 @@ core::Result<bool> StreamPlayer::finish_decode(InFlight decoding,
   stamp_deblock(stamp);
   *blocks = decoding.decode.blocks;
   *newest = std::move(stamp);
+  *took += Clock::now() - began;
   return true;
 }
 
@@ -969,13 +1281,13 @@ void StreamPlayer::note_batch(const Batch& batch, FrameStamp& stamp) {
   last_submits_ = batch.submits_before + 1;
 }
 
-core::Result<std::optional<mesh::DeviceMesh>> StreamPlayer::mesh_alone(
+core::Result<mesh::PendingExtract> StreamPlayer::extract_alone(
     FrameStamp& stamp, std::uint32_t blocks, const char* row) {
   const bool timed = row != nullptr && stamp.timed;
   core::StageMetrics breakdowns;  // as record_decode's
   std::optional<Batch> ran;
-  core::Result<std::optional<mesh::DeviceMesh>> meshed =
-      [&]() -> core::Result<std::optional<mesh::DeviceMesh>> {
+  core::Result<mesh::PendingExtract> extracted =
+      [&]() -> core::Result<mesh::PendingExtract> {
     const core::StageScope host(row != nullptr ? &stamp.stages : nullptr,
                                 row != nullptr ? row : "mesh");
     core::CommandBatch batch = new_batch(timed);
@@ -990,13 +1302,28 @@ core::Result<std::optional<mesh::DeviceMesh>> StreamPlayer::mesh_alone(
     }
     ran.emplace(std::move(submitted).value());
     VKC_TRY(ran->pending.wait());
+    return extract;
+  }();
+  forward_breakdowns(breakdowns, stamp.stages);
+  if (ran && extracted.ok()) {
+    note_batch(*ran, stamp);
+  }
+  return extracted;
+}
+
+core::Result<std::optional<mesh::DeviceMesh>> StreamPlayer::mesh_alone(
+    FrameStamp& stamp, std::uint32_t blocks, const char* row) {
+  VKC_ASSIGN(const mesh::PendingExtract extract,
+             extract_alone(stamp, blocks, row));
+  const bool timed = row != nullptr && stamp.timed;
+  core::StageMetrics breakdowns;  // a refit's
+  core::Result<std::optional<mesh::DeviceMesh>> meshed = [&] {
+    const core::StageScope host(row != nullptr ? &stamp.stages : nullptr,
+                                row != nullptr ? row : "mesh");
     return extractor_->finish(extract, *grid_, nullptr,
                               timed ? &breakdowns : nullptr);
   }();
   forward_breakdowns(breakdowns, stamp.stages);
-  if (ran && meshed.ok()) {
-    note_batch(*ran, stamp);
-  }
   return meshed;
 }
 

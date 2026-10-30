@@ -22,9 +22,10 @@ namespace volumetric_kit::player {
 /// `vp_probe (--file PATH | --connect HOST[:PORT]) [--frames N] [--passes P]
 /// [--timing off|sampled|all] [--tile-depth 0|1] [--labels on|off]
 /// [--share-vertices on|off] [--panel on|off] [--size WxH] [--csv PATH]
-/// [--latency] [--save-meshes DIR] [--worker]` plays a .vrst file or a
-/// sender's live stream through PlayerView on gfx's headless surface, 640 ×
-/// 480 unless `--size`, at 60 ticks a second, and prints the status line, the
+/// [--latency] [--save-meshes DIR] [--live-delay MS] [--worker]` plays a
+/// .vrst file or a sender's live stream through PlayerView on gfx's headless
+/// surface, 640 × 480 unless `--size`, at 60 ticks a second, and prints the
+/// status line, the
 /// stats lines and the stage tables once a second. `--panel on` opens a
 /// program's panel (FrameHooks::panel) at start. With
 /// `--worker` it runs the worker alone, with no view, on the GPU the core
@@ -37,7 +38,12 @@ namespace volumetric_kit::player {
 /// last line says how many of their records are left unreleased. With
 /// `--save-meshes`, each mesh is read back in its after_mesh batch and
 /// written as DIR/<frame>.ply once that batch has finished, a line each. Both
-/// install their hooks as `config.view.make_hooks`. A file plays P passes of
+/// install their hooks as `config.view.make_hooks`. With `--live-delay`, a
+/// live stream's program need gets a floor: probe_view_config wraps
+/// `config.view.make_hooks`, so that the hooks' live_delay returns the larger
+/// of MS and the program's own (or MS alone with none), under the hooks of
+/// `--latency` and `--save-meshes` too. Every need still applies. MS is 0 to
+/// 1000; the log's `run` names it. A file plays P passes of
 /// its track, 1 unless given; the run ends once N stream frames are taken,
 /// or once the last pass ends, and never on a network error, which the
 /// status line shows. It validates in Debug and as the core's test policy
@@ -67,7 +73,8 @@ namespace volumetric_kit::player {
 ///         extension or feature of `config.view.device_requirements` among
 ///         them), a latency record left, an error the validation layer
 ///         reports or a layer the policy asks for that did not load; 2 for
-///         its usage (`--panel on` or `--size` with `--worker` among it), or
+///         its usage (`--panel on` or `--size` with `--worker`, and
+///         `--live-delay` with `--file` or past 1000, among it), or
 ///         for `--latency` or `--save-meshes` with `config.view.make_hooks`
 ///         set.
 int run_probe(int argc, char** argv, const AppConfig& config = {});
@@ -85,9 +92,10 @@ int run_probe(int argc, char** argv, const AppConfig& config = {});
 ///         the command line's validation (on in Debug, else as the core's
 ///         test policy asks), device timing, tile depth, labels, vertex
 ///         sharing and the panel open at start (`panel.state.open`), given
-///         or not; none for a command line refused with the usage.
+///         or not, and with `--live-delay` make_hooks wrapped under its
+///         floor; none for a command line refused with the usage.
 ///         `--latency` and `--save-meshes` install their hooks over an
-///         empty make_hooks as run_probe starts.
+///         empty make_hooks as run_probe starts, under the floor too.
 std::optional<PlayerViewConfig> probe_view_config(const AppConfig& config,
                                                   int argc, char** argv);
 

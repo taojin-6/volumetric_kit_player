@@ -15,7 +15,9 @@ paced by the stream's timestamps or by the sender.
 > an orbit camera, a controls panel and a stats panel on any window system;
 > the per-frame hooks (`src/volumetric_kit/player/frame_hooks.hpp`), a
 > caller's work on the worker after each mesh, at the take and before the
-> draw, and a line in the stats panel; the desktop app
+> draw, live its need for delay and whether a frame's data is ready, and a
+> line in the stats panel; the live playout clock
+> (`src/volumetric_kit/player/live_clock.hpp`); the desktop app
 > (`apps/volumetric_kit_player/`), a GLFW window over the view; and the iOS
 > app (`apps/ios/`), a UIKit shell over the view.
 
@@ -150,6 +152,16 @@ nothing has come, or reconnecting with why, about every second until Esc.
 The keys that play, pause, step and loop do nothing. The stats show the
 bitrate and the records a second over the last second.
 
+Each live frame is drawn at its present time on a playout clock
+(`live_clock.hpp`): its pts, plus the least arrival − pts over the last
+10 s, plus a delay D, the largest need stated, at most 1 s. The needs are
+the stream's own lateness with the worker's lead, and a program's
+(`FrameHooks::live_delay`); with none D is 0. Records wait as bytes before
+their decode, and a program may hold a frame until its own data is ready, or
+refuse it (`FrameHooks::data_ready`), while the frame before stays shown. The
+stats show D and the need that set it ("delay 123 ms · program"), and the
+latency's legs begin with "buffer", the wait as bytes.
+
 `"$root/build/tests/vp_probe" --connect host[:port]` plays a live stream
 with no window, and prints the status and stats lines once a second (below).
 
@@ -222,7 +234,7 @@ are claimed.
 
 A measurement is one CSV log per run, which the player writes itself
 ([measure_log.hpp](src/volumetric_kit/player/measure_log.hpp) gives the
-format, version 4): a header naming the commits, the build, the device, how
+format, version 5): a header naming the commits, the build, the device, how
 grid's rings run on it, the stream, how it ran, the timing, the tile depth,
 the labels, whether vertices were shared and the time (and on a phone its
 thermal state and Low Power Mode), then each stream frame's stage rows
@@ -231,7 +243,9 @@ profiler's, two display frames behind), and its frame row: the worker's
 device counts (submits, waits, blocked time, staging buffers, dispatches,
 barriers), what the deblock did, the rounds its decode ran, the queue's idle
 and latency, its latency from due to published, taken and presented, its
-mesh's vertices, and its record's set.
+mesh's vertices, its record's set, and live its wait as bytes and its
+playout as taken: D, its target, the need that set it and how late it was
+taken after its present time.
 
 `vp_probe` writes one on a desktop, with no window:
 
@@ -247,7 +261,9 @@ worker alone on the GPU the core picks, for a GPU with no headless surface
 "mesh" alone (0, every scope, by default); `--labels off` asks for no debug
 labels; `--share-vertices off` gives each triangle three vertices of its
 own (shared by default); `--frames N` stops after N frames;
-`--connect host[:port]` plays a sender. Through the view, `--panel on` opens
+`--connect host[:port]` plays a sender, and with `--live-delay MS` (0 to
+1000) a program's need there is at least MS, so a delay is measured with no
+program; the log's `run` names it. Through the view, `--panel on` opens
 a program's panel at start, and `--size WxH` draws at that size in pixels
 (640x480 by default), so the panel's cost shows at a screen's size; the
 log's `run` names both.
@@ -301,11 +317,13 @@ the owner's go-ahead. Each log is named `<utc>-<commit>-<mode>-<timing>.csv`.
 For `--share-vertices off`, phone runs require each returned log to confirm
 `share_vertices: off`; a missing or different setting fails the run before
 summarizing it. Default sharing still accepts older logs.
-`summarize` reads formats 1 to 4, and gives the settings, per stage, the
+`summarize` reads formats 1 to 5, and gives the settings, per stage, the
 worker's and the renderer's, the mean, p50 and p95 of host, wait and GPU, the
 counts and vertices per frame, the frames' figures (device time, queue idle
 and latency, the latency to the present, or to taken for frames with none,
-its legs, rounds), a run's load, and with two logs their diff.
+its legs, rounds; live, the delay, its target, how late each frame was
+taken, and the needs that set it), a run's load, and with two logs their
+diff.
 
 ## Development
 

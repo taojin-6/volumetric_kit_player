@@ -6,7 +6,7 @@
 usage: summarize.py LOG.csv [LOG.csv ...]
 
 A log is the player's (src/volumetric_kit/player/measure_log.hpp, format 1
-to 4), as vp_probe and the iOS app's measure launch write it. Per log,
+to 5), as vp_probe and the iOS app's measure launch write it. Per log,
 under what it measured (format 3 adds whether vertices were shared; format 4
 names the grid's commit where the earlier named recon's), and
 after its device the machine's load before the run if a <log>.load beside it
@@ -18,7 +18,11 @@ and, from format 3, its mesh's vertices; then the frames' figures: the device
 time of a timed frame (its stages' GPU, breakdowns aside) and, from format 2,
 its queue idle and queue latency, its latency from due to the present call,
 or for a frame with no present (the worker alone) from due to taken, apart,
-and its legs, and the rounds its decode ran on the device. Given two logs, a
+and its legs (from format 5, a live frame's wait as bytes first, and its
+publish leg from its release, which a file's due is), then from format 5 a
+live frame's playout delay, its target and how late it was taken after its
+present time; the rounds its decode ran on the device; and from format 5 the
+needs that set the delay. Given two logs, a
 before/after diff of the first and the second follows; a figure one log lacks
 shows as "-". A log of several passes leaves out its first, which warms up.
 p50 and p95 are nearest-rank. A stage first seen in a later frame, or only in
@@ -38,7 +42,8 @@ FORMAT_1 = "volumetric_kit_player measure 1"
 FORMAT_2 = "volumetric_kit_player measure 2"
 FORMAT_3 = "volumetric_kit_player measure 3"
 FORMAT_4 = "volumetric_kit_player measure 4"
-FORMATS = {FORMAT_1: 1, FORMAT_2: 2, FORMAT_3: 3, FORMAT_4: 4}
+FORMAT_5 = "volumetric_kit_player measure 5"
+FORMATS = {FORMAT_1: 1, FORMAT_2: 2, FORMAT_3: 3, FORMAT_4: 4, FORMAT_5: 5}
 HEADER_KEYS = (
     "format",
     "player",
@@ -107,6 +112,11 @@ COLUMNS_2 = [
 ]
 # Format 3's frame row adds its mesh's vertices and its record's set.
 COLUMNS_3 = COLUMNS_2 + ["vertices", "set"]
+# Format 5's adds a live frame's wait as bytes and its playout as taken.
+PLAYOUT = ("delay_ms", "target_ms", "late_ms")
+COLUMNS_5 = COLUMNS_3 + ["buffer_ms", "delay_ms", "target_ms", "need",
+                         "late_ms"]
+NEEDS = ("none", "arrival", "program")
 DEVICES = ("none", "measured", "not_timed", "unavailable")
 COUNTS = ("submits", "host_waits", "blocked_ns", "staging_buffers")
 COUNTS_2 = COUNTS + ("dispatches", "barriers")
@@ -115,13 +125,15 @@ COUNTS_3 = COUNTS_2 + ("vertices",)
 LAYOUTS = {1: (COLUMNS, HEADER_KEYS, COUNTS),
            2: (COLUMNS_2, HEADER_KEYS_2, COUNTS_2),
            3: (COLUMNS_3, HEADER_KEYS_3, COUNTS_3),
-           4: (COLUMNS_3, HEADER_KEYS_4, COUNTS_3)}
+           4: (COLUMNS_3, HEADER_KEYS_4, COUNTS_3),
+           5: (COLUMNS_5, HEADER_KEYS_4, COUNTS_3)}
 LEGS = ("publish_ms", "take_ms", "present_ms")
 # The frames' figures, in the order the tables show them: a frame's device
 # time, read from its stages in either format, then format 2's own: the
-# latency of a frame presented, and of one taken with no present, apart.
+# latency of a frame presented, and of one taken with no present, apart;
+# its legs, format 5's buffer first; and format 5's playout.
 FIGURES = ("gpu_ms", "idle_ms", "queue_ms", "latency_ms",
-           "taken_latency_ms") + LEGS
+           "taken_latency_ms", "buffer_ms") + LEGS + PLAYOUT
 TABLES = ("worker", "render")
 BREAKDOWN = "  .."
 
@@ -162,6 +174,7 @@ class Log:
     counts: dict = field(default_factory=lambda: {key: [] for key in COUNTS_3})
     figures: dict = field(default_factory=lambda: {k: [] for k in FIGURES})
     rounds: dict = field(default_factory=dict)  # rounds -> frames
+    needs: dict = field(default_factory=dict)  # format 5: need -> frames
     load: str = ""  # the machine's load before the run (read_load)
 
     @property
@@ -221,8 +234,8 @@ def read_header(path, lines):
         at += 1
     if "format" in header and header["format"] not in FORMATS:
         raise LogError(f"{path}: format {header['format']!r}, not "
-                       f"{FORMAT_1!r}, {FORMAT_2!r}, {FORMAT_3!r} or "
-                       f"{FORMAT_4!r}")
+                       f"{FORMAT_1!r}, {FORMAT_2!r}, {FORMAT_3!r}, "
+                       f"{FORMAT_4!r} or {FORMAT_5!r}")
     version = FORMATS.get(header.get("format"), 1)
     _, keys, _ = LAYOUTS[version]
     missing = [key for key in keys if key not in header]
@@ -274,14 +287,33 @@ def read_frame(log, row, path, frame_gpu):
     for key in ("idle_ms", "queue_ms") + LEGS:
         if row[key] != "":
             log.figures[key].append(number(row, key, path))
+    # Format 5, live: its wait as bytes leads its legs; a file's has none.
+    buffer = 0.0
+    if log.format >= 5:
+        buffer = read_playout(log, row, path)
     if all(row[key] != "" for key in LEGS):
         log.figures["latency_ms"].append(
-            sum(number(row, key, path) for key in LEGS))
+            buffer + sum(number(row, key, path) for key in LEGS))
     elif row["publish_ms"] != "" and row["take_ms"] != "":
         log.figures["taken_latency_ms"].append(
-            number(row, "publish_ms", path) + number(row, "take_ms", path))
+            buffer + number(row, "publish_ms", path)
+            + number(row, "take_ms", path))
     rounds = number(row, "rounds", path, int)
     log.rounds[rounds] = log.rounds.get(rounds, 0) + 1
+
+
+def read_playout(log, row, path):
+    """A format-5 frame row's live figures and need; its buffer leg, 0 for a
+    file's, whose five are empty."""
+    for key in ("buffer_ms",) + PLAYOUT:
+        if row[key] != "":
+            log.figures[key].append(number(row, key, path))
+    need = row["need"]
+    if need != "":
+        if need not in NEEDS:
+            raise LogError(f"{path}: need {need!r} is none of {NEEDS}")
+        log.needs[need] = log.needs.get(need, 0) + 1
+    return number(row, "buffer_ms", path) if row["buffer_ms"] != "" else 0.0
 
 
 def read_log(path):
@@ -364,9 +396,13 @@ def figure_label(key):
         "queue_ms": "queue latency ms",
         "latency_ms": "latency ms (due -> present)",
         "taken_latency_ms": "latency ms (due -> taken; no present)",
-        "publish_ms": "  ..due -> published ms",
+        "buffer_ms": "  ..due -> released ms (live)",
+        "publish_ms": "  ..released (a file's due) -> published ms",
         "take_ms": "  ..published -> taken ms",
         "present_ms": "  ..taken -> presented ms",
+        "delay_ms": "playout delay ms (live, as taken)",
+        "target_ms": "  ..its target ms",
+        "late_ms": "taken after its present time ms",
     }[key]
 
 
@@ -405,6 +441,10 @@ def summary(log):
     if log.rounds:
         out += ["", "- rounds on the device: " + ", ".join(
             f"{rounds}: {frames}" for rounds, frames in sorted(log.rounds.items()))
+            + " frames"]
+    if log.needs:
+        out += ["- delay set by: " + ", ".join(
+            f"{need}: {log.needs[need]}" for need in NEEDS if need in log.needs)
             + " frames"]
     return "\n".join(out)
 

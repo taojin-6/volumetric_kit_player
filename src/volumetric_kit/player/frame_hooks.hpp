@@ -10,6 +10,7 @@
 ///        its own beside the scene (@ref PanelHooks); and the take that the
 ///        view and a consumer with no view share (@ref FrameTaker).
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -28,6 +29,7 @@
 #include "volumetric_kit/gfx/ui/docked_panel.hpp"
 #include "volumetric_kit/grid/mesh/device_mesh.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/player/live_clock.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
 namespace volumetric_kit::gfx::pipelines {
@@ -46,15 +48,17 @@ struct DrawBinding {
   std::uint32_t mesh_flags_clear = 0;
 };
 
-/// @brief What a commit hook does with a frame taken for drawing.
+/// @brief What a hook does with a frame: FrameHooks::commit with one taken
+///        for drawing, FrameHooks::data_ready with one meshed.
 enum class FrameCommit {
-  kDraw,  ///< It becomes the shown frame.
+  kDraw,  ///< It becomes the shown frame; data_ready: it is published.
   kHold,  ///< Kept back, the shown frame drawn; asked again next display
-          ///< frame.
+          ///< frame. data_ready: not yet (see there).
   kSkip,  ///< Let go undrawn: the shown frame stays, and the next frame
           ///< published is taken at the next display frame. One frame at
           ///< most is skipped between two drawn: a kSkip with a skip and no
-          ///< draw since holds the frame, as kHold does.
+          ///< draw since holds the frame, as kHold does. data_ready: never,
+          ///< any number in a row.
 };
 
 /// @brief One display frame of a program's panel (@ref PanelHooks), in
@@ -214,6 +218,29 @@ struct FrameHooks {
   /// The program's panel beside the scene; with no title, none. The view's
   /// alone: with no view it is never shown.
   PanelHooks panel;
+  /// Worker, live alone, as each record of the played track arrives whole:
+  /// the least playout delay D the program needs (live_clock.hpp). That is
+  /// how long after a frame's earliest arrival (`earliest`) the program's
+  /// own data for that frame is ready, plus the margin it wants. It may rise
+  /// at once, as after a frame it held. D is the largest need, clamped to
+  /// [0, kMaxLiveDelay]. It must not block. Empty, or a file: no need.
+  std::function<std::chrono::nanoseconds()> live_delay;
+  /// Worker, live alone, once the newest decode's extract has run on the
+  /// device, and before that extract is finished, after_mesh runs and the
+  /// frame is published: whether the program's own data for that frame is
+  /// ready.
+  /// - kDraw: it is finished and published.
+  /// - kHold: not yet. It is asked again about every millisecond, and the
+  ///   shown frame stays. The extract stays unfinished, holding its ring
+  ///   slot. No record is released meanwhile, so the grid still holds the
+  ///   frame for the finish and after_mesh.
+  /// - kSkip: its data will never come. The extract is abandoned
+  ///   (grid's MarchingCubes::abandon), which frees its slot unpublished.
+  ///   The shown frame stays, and the next frame meshed is asked in turn,
+  ///   any number in a row.
+  /// So the take is never handed a frame its program cannot draw. It must
+  /// not block. Empty, or a file: kDraw.
+  std::function<FrameCommit(const FrameStamp& stamp)> data_ready;
 };
 
 /// @brief What hooks are made with, valid during MakeHooks' call alone: a
@@ -234,6 +261,10 @@ struct HookContext {
   /// PanelHooks::record's pass has, so a panel can draw with a pipeline of
   /// its own; empty with no view.
   gfx::RenderTargetLayout target_layout{};
+  /// A live player's playout clock (StreamPlayer::live_clock), for a program
+  /// to measure its own need against `earliest`; null for a file. It
+  /// outlives the hooks.
+  const LiveClock* live_clock = nullptr;
 };
 
 /// Makes a run's hooks, once, before its worker starts.
@@ -255,6 +286,15 @@ using MakeHooks = std::function<core::Result<FrameHooks>(const HookContext&)>;
 /// (mesh_wiring's `holds`). Each slot keeps the extra (FrameStamp::extra) of
 /// the frame it drew until its next take, so an extra lives until the GPU has
 /// finished every display frame that drew its frame.
+///
+/// **Live**, a mesh whose present time has not come is held, without asking
+/// the hook and without counting it in frames_held. The test is
+/// `release_wait(pts, clock.now_pts(*clock.time(), now), 0) > 0`, read
+/// afresh at each take, so a D raised after the record's release delays the
+/// frame too. A wait past kMaxLiveDelay plus the lead is no frame of this
+/// clock's, as one an earlier connection published, and is not held. Once
+/// due, the hook decides as for a file. A frame drawn carries the clock as it
+/// was taken (FrameStamp::playout).
 ///
 /// @code
 /// FrameTaker taker(*player, exchange, kFramesInFlight, &hooks);
@@ -291,7 +331,7 @@ class FrameTaker {
   std::uint64_t frames_skipped() const noexcept { return skipped_; }
   /// @return The frames held at least once before their commit or skip:
   ///         by the hook's kHold, a skip read as one, or a ready value not
-  ///         yet reached.
+  ///         yet reached; never by the live gate alone.
   std::uint64_t frames_held() const noexcept { return held_; }
 
  private:
