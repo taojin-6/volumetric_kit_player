@@ -209,11 +209,11 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 /// geometry through an AudioOut made at @ref start, fed by an AudioFeeder on
 /// a thread of its own from the first geometry pts. The geometry's pacing is
 /// as without it: the frames are the master clock. The audio follows the
-/// controls: a pause or a step pauses it, so its position holds, and a play
-/// plays it; each pass of the track, a loop's or a play's after the end,
-/// flushes it and starts its cursor again; @ref set_muted sets its gain to 0,
-/// its clock running. A file without one has no feeder and no output.
-/// Live, there is no audio.
+/// controls: a pause, a step, or the end of the track with loop off pauses
+/// it, so its position holds, and a play plays it; each pass of the track, a
+/// loop's or a play's after the end, flushes it and starts its cursor again;
+/// @ref set_muted sets its gain to 0, its clock running. A file without one
+/// has no feeder and no output. Live, there is no audio.
 ///
 /// **Timing.** Each frame's stamp has its stages' host and wait times, and
 /// the worker's device counts, always; its device times only as
@@ -493,8 +493,11 @@ class StreamPlayer {
   // The worker: builds, then plays the track or the live stream until quit or
   // a fatal error, into status_.
   void run();
-  // Make audio_ and start feeder_, at start, with the controls as set.
+  // Make audio_ and start feeder_, at start, with the controls as set; on a
+  // failure, none is left.
   core::Status start_audio();
+  // A failed start's: stop and join feeder_, then drop audio_.
+  void drop_audio();
   // Build decoder_, extractor_ and timer_ on the worker.
   core::Status build();
   core::Status play_track();

@@ -28,9 +28,12 @@ output and the feeder, with a silent output only.
   sound, and tests then run the ring on two threads, under ThreadSanitizer
   too, with no device: no test opens an audio device.
 - **Video stays the master.** The frames are paced as before; the audio
-  follows the controls: a pause and a step pause it, so its position holds;
-  a play plays it; each pass, a loop's or a play's after the end, flushes it
-  and restarts its cursor; a mute is gain 0 with its clock running. Why:
+  follows the controls: a pause, a step and the end of the track with loop
+  off pause it, so its position holds; a play plays it; each pass, a loop's
+  or a play's after the end, flushes it and restarts its cursor; a mute is
+  gain 0 with its clock running. Until the file's pacing is decided, the
+  audio is not held to the frames: it starts at `start`, before the first
+  frame, and steps, late frames and parks shift the frames alone. Why:
   which clock paces a file is decided by measuring how often frames are
   late, and one design ships then, not a switch.
 - **The feeder reads 200-500 ms ahead,** on a thread of its own with a second
@@ -44,10 +47,11 @@ output and the feeder, with a silent output only.
   chunk the pts' jitter should move nothing.
 - **The first Audio track on the geometry's clock that the player can
   play:** PCM s16, 8 to 384 kHz, with records; the others are skipped. The
-  first two channels play; more are downmixed to them. Why: pts on another
-  clock cannot be placed against the frames'.
+  first two channels play; channels past the second are dropped. Why: pts
+  on another clock cannot be placed against the frames'.
 - **No Audio track, nothing new:** no output, no ring, no feeder thread.
-- **An output or a feeder that cannot start fails `start`.** Why: the null
+- **An output or a feeder that cannot start fails `start`,** and a failed
+  `start` leaves neither, so a `start` again makes its own. Why: the null
   output fails only where a thread cannot start, as the worker would.
 
 ## 2026-10-29 — A program's docked panel
@@ -170,10 +174,11 @@ recon.
   order varies from run to run on either). Why: a re-pin is then a rename,
   and a forwarding name would be one more to retire.
 - **grid is declared after the core and before gfx, and checked with
-  `vkc_require_sibling(volumetric_kit::grid 0.1.0 TARGETS …)`**, its tests
-  and examples off. Why: the core comes first so every sibling shares it
-  (2026-10-18), and the check (core 0.27.0's) refuses, at configure time, an
-  older grid or an override without a tier the player links.
+  `vkc_require_sibling(volumetric_kit::grid <version> TARGETS …)`** at the
+  version the player needs, its tests and examples off. Why: the core comes
+  first so every sibling shares it (2026-10-18), and the check (core
+  0.27.0's) refuses, at configure time, an older grid or an override without
+  a tier the player links.
 - **The device asks for grid's requirements:** `scalarBlockLayout`, without
   the external-memory and Metal-object extensions recon asked for, where
   offered, for its camera decoders. Why: the player never used them.

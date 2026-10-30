@@ -32,11 +32,15 @@ struct AudioFormat {
   std::uint16_t channels = 1;         ///< Samples a frame, interleaved: 1 or 2.
 };
 
+/// @param frames       A count of frames.
+/// @param sample_rate  Frames a second.
 /// @return The time @p frames frames last at @p sample_rate, in ns, rounded
 ///         down.
 /// @pre `sample_rate > 0`.
 std::uint64_t audio_ns(std::uint64_t frames, std::uint32_t sample_rate);
 
+/// @param ns           A time, in ns.
+/// @param sample_rate  Frames a second.
 /// @return The frames @p ns nanoseconds hold at @p sample_rate, rounded to
 ///         the nearest.
 /// @pre `sample_rate > 0`.

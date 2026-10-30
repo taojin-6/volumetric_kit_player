@@ -56,18 +56,20 @@ std::optional<AudioTrackChoice> find_audio_track(
     const grid::stream::Session& session,
     const std::vector<grid::stream::TrackStats>& stats, std::uint16_t geometry);
 
+/// @param channels  A track's channels.
 /// @return The channels an output plays of a track of @p channels: up to
 ///         the first two.
 std::uint16_t played_channels(std::uint16_t channels) noexcept;
 
+/// @param params  A track's params.
 /// @return The format an output plays @p params in: their rate, and
 ///         played_channels of their channels.
 AudioFormat played_format(const grid::stream::AudioParams& params) noexcept;
 
 /// @brief Signed 16-bit little-endian frames as an output plays them: each
 ///        sample over 32768, so -32768 is -1, and of each frame the first
-///        played_channels(@p channels) samples: more than two channels are
-///        downmixed to the first two.
+///        played_channels(@p channels) samples: channels past the second
+///        are dropped.
 ///
 /// @code
 /// std::vector<float> out(frames * played_channels(channels));

@@ -300,8 +300,10 @@ core::Status StreamPlayer::start(core::Device& device,
   try {
     worker_ = std::thread([this] { run(); });
   } catch (...) {
-    return core::exception_status("StreamPlayer::start",
-                                  core::Status::Code::IoError);
+    core::Status failed = core::exception_status("StreamPlayer::start",
+                                                 core::Status::Code::IoError);
+    drop_audio();  // a start again makes its own
+    return failed;
   }
   return {};
 }
@@ -329,10 +331,20 @@ core::Status StreamPlayer::start_audio() {
     audio_ = std::move(out);
   }
   // Audio starts at the first geometry pts (DECISIONS.md).
-  VKC_ASSIGN(feeder_,
-             AudioFeeder::start(*reader_, *audio_track_,
-                                reader_->stats()[track_].min_pts_ns, *audio_));
+  core::Result<std::unique_ptr<AudioFeeder>> feeder = AudioFeeder::start(
+      *reader_, *audio_track_, reader_->stats()[track_].min_pts_ns, *audio_);
+  if (!feeder.ok()) {
+    drop_audio();
+    return std::move(feeder).status();
+  }
+  feeder_ = std::move(feeder).value();
   return {};
+}
+
+void StreamPlayer::drop_audio() {
+  feeder_.reset();  // joined first: it writes into the output
+  std::lock_guard<std::mutex> lock(mutex_);
+  audio_.reset();
 }
 
 template <typename Change>
@@ -424,6 +436,8 @@ bool StreamPlayer::deblock() const {
   return deblock_;
 }
 
+// TODO: with a device output, a park stops the audio and an unpark resumes
+// it; the null output and the feeder run on through a park.
 bool StreamPlayer::park(std::chrono::milliseconds timeout) {
   const Clock::time_point deadline = Clock::now() + timeout;
   {
@@ -1311,11 +1325,14 @@ bool StreamPlayer::wait_hook_batch(std::uint64_t timeout_ns) {
 core::Result<bool> StreamPlayer::wait_at_end() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    // With loop off the last frame holds: played into, it pauses there;
-    // stepped onto, or paused on, it is held already, so a play, even one
-    // since that step, restarts.
+    // With loop off the last frame holds: played into, it pauses there, and
+    // the audio with it; stepped onto, or paused on, it is held already, so
+    // a play, even one since that step, restarts.
     if (!loop_ && clock_.playing() && !last_by_step_) {
       clock_.pause();
+      if (audio_) {
+        audio_->pause();
+      }
     }
   }
   for (;;) {

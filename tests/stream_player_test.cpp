@@ -3428,6 +3428,49 @@ TEST_F(AudioPlayerTest, AStepIsTheFramesAloneAndSilent) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
+// A step while playing pauses the audio too, its position held where it was.
+// Mutant: a step that leaves the audio playing.
+TEST_F(AudioPlayerTest, AStepWhilePlayingPausesTheAudio) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(fed());
+  EXPECT_EQ(advance(50ms), pts_of(0) + ns(50ms));
+  player->step();
+  EXPECT_FALSE(out_->playing());
+  EXPECT_EQ(advance(100ms), pts_of(0) + ns(50ms));
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// With loop off, the frames played into the end pause there, and the audio
+// with them: its position holds, with no underrun counted, until a play,
+// which plays it from the first pts again.
+// Mutant: an end that pauses the frames alone.
+TEST_F(AudioPlayerTest, WithLoopOffTheEndPausesTheAudioWithTheFrames) {
+  StreamPlayer* player = start(/*playing=*/true);
+  ASSERT_NE(player, nullptr);
+  player->set_loop(false);
+  ASSERT_TRUE(fed());
+  for (std::uint64_t i = 0; i < kFrames; ++i) {
+    ASSERT_TRUE(next_frame().has_value()) << "no frame " << i;
+  }
+  ASSERT_TRUE(eventually([&] { return !player->playing(); }));
+  EXPECT_FALSE(out_->playing());
+  const std::optional<std::uint64_t> held = advance(0ms);
+  const std::uint64_t underrun = out_->stats().underrun_frames;
+  EXPECT_EQ(advance(1s), held);
+  EXPECT_EQ(out_->stats().underrun_frames, underrun);
+  player->play();
+  EXPECT_TRUE(out_->playing());
+  ASSERT_TRUE(eventually([&] {
+    out_->tick();
+    return out_->stats().flushes == 2;
+  })) << "the play after the end did not flush the audio";
+  EXPECT_EQ(out_->position(), pts_of(0));
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
 // At a loop the output is flushed, back to the first geometry pts, and the
 // feeder reads the track from its start again.
 // Mutant: a loop that does not flush the audio.
