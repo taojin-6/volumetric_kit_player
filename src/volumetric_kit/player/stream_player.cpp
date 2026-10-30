@@ -18,6 +18,7 @@
 #include "volumetric_kit/grid/codec/decode_grid.hpp"
 #include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/player/frame_hooks.hpp"
+#include "volumetric_kit/player/held_records.hpp"
 
 namespace volumetric_kit::player {
 namespace {
@@ -33,9 +34,6 @@ using Clock = Playback::Clock;
 constexpr std::chrono::milliseconds kSlice{10};
 // Live: how often a frame waiting for its program is asked again.
 constexpr std::chrono::milliseconds kAskEvery{1};
-// Live: the most records held before their release (kLiveHoldBytes holds
-// their bytes); past it, as past those bytes, nothing more is read.
-constexpr std::size_t kHeldRecords = 1024;
 
 // A record or frame to skip, rather than an error that stops the worker:
 // damage (InvalidArgument), what this version cannot read (Unsupported), and
@@ -213,70 +211,6 @@ struct StreamPlayer::InFlight {
   std::optional<mesh::PendingExtract> extract;  // none live
   Step step;                                    // what a park waits for
   Batch batch;  // last, so destroyed first: a quit waits for the GPU
-};
-
-// The bytes in one buffer of kLiveHoldBytes, made at the first use and kept,
-// each record's contiguous, oldest first; their headers in a fixed ring. A
-// record larger than the buffer waits until nothing is held, which grows the
-// buffer to it. Nothing is allocated per record, and the buffer is not
-// cleared: its pages are touched as records are written, so making it costs
-// no 16 MiB write on the first record's way.
-class StreamPlayer::HeldRecords {
- public:
-  struct Held {
-    stream::Record record;
-    Clock::time_point arrived;
-    std::size_t at = 0;  // its bytes' start in the buffer
-  };
-
-  // Where `size` bytes more go: null while full.
-  std::uint8_t* room(std::size_t size) {
-    if (size_ == kHeldRecords) {
-      return nullptr;
-    }
-    if (size_ == 0) {
-      if (bytes_ == nullptr || size > capacity_) {
-        capacity_ = std::max(kLiveHoldBytes, size);  // larger: held alone
-        bytes_.reset(new std::uint8_t[capacity_]);
-      }
-      return bytes_.get();
-    }
-    const Held& first = held_[head_];
-    const Held& last = held_[(head_ + size_ - 1) % kHeldRecords];
-    const std::size_t end =
-        last.at + static_cast<std::size_t>(last.record.size);
-    if (last.at >= first.at) {  // one span, [first.at, end)
-      if (capacity_ - end >= size) {
-        return bytes_.get() + end;
-      }
-      return first.at >= size ? bytes_.get() : nullptr;  // wrapped
-    }
-    return first.at - end >= size ? bytes_.get() + end : nullptr;
-  }
-  // The record whose bytes were just written where room said.
-  void push(const stream::Record& record, Clock::time_point arrived,
-            const std::uint8_t* at) {
-    held_[(head_ + size_) % kHeldRecords] =
-        Held{record, arrived, static_cast<std::size_t>(at - bytes_.get())};
-    ++size_;
-  }
-  bool empty() const { return size_ == 0; }
-  const Held& front() const { return held_[head_]; }
-  const std::uint8_t* bytes(const Held& held) const {
-    return bytes_.get() + held.at;
-  }
-  void pop() {
-    head_ = (head_ + 1) % kHeldRecords;
-    --size_;
-  }
-  // Drop every record, keeping the buffer.
-  void clear() { head_ = size_ = 0; }
-
- private:
-  std::unique_ptr<std::uint8_t[]> bytes_;  // capacity_ bytes, uncleared
-  std::size_t capacity_ = 0;
-  std::array<Held, kHeldRecords> held_{};
-  std::size_t head_ = 0, size_ = 0;
 };
 
 struct StreamPlayer::Waiting {
@@ -775,12 +709,11 @@ core::Status StreamPlayer::play_live() {
 core::Status StreamPlayer::play_connection(networking::StreamClient& client,
                                            core::Status* ended) {
   if (held_ == nullptr) {
-    held_ = std::make_unique<HeldRecords>();
+    held_ = std::make_unique<HeldRecords>(kLiveHoldBytes);
   }
   held_->clear();
   live_clock_->reset();  // a new connection: no pts base yet
   Connection connection;
-  stream::Record record;
   // The connection's end, for `why`: a frame waiting for its program is
   // abandoned, a decode in flight is waited out, submitting nothing, and
   // dropped, as are the records held and one unread.
@@ -814,60 +747,28 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
         return end({});
       }
     }
-    // Read into the ring, the record left unread first, then every whole
-    // record that has come, so each is stamped as near its arrival as the
-    // worker's last step allows. Drain before waiting for a take: even
-    // without a whole record, a partial receive is progress, as another
-    // nonblocking read may advance it. With nothing in hand, the first read
-    // waits on the socket, until the front's release at the latest.
+    // Drain before waiting for a take: even without a whole record, a
+    // partial receive is progress, as another nonblocking read may advance
+    // it. With nothing in hand, the first read waits on the socket, until the
+    // front's release at the latest.
     bool progressed = false;
-    if (connection.unread) {
-      const core::Status read = hold_unread(client, connection);
-      if (!read.ok()) {
-        return end(read);
-      }
-      progressed = !connection.unread;
-    }
-    for (bool first = true; !connection.unread; first = false) {
-      const bool take_wanted = connection.in_hand() && !connection.waiting;
-      bool received = false;
-      const core::Result<bool> got =
-          client.next(first && !take_wanted ? idle_wait(connection)
-                                            : std::chrono::milliseconds{0},
-                      &record, nullptr, &received);
-      progressed = progressed || received;
-      if (!got.ok()) {
-        return end(got.status());
-      }
-      // A whole record arrived now: its due time, and the clock's sample.
-      const Clock::time_point arrived = Clock::now();
-      if (!connection.track && client.session() != nullptr) {
-        connection.track = first_geometry_track(*client.session());
-        if (!connection.track) {
-          return end(core::Status::not_found(
-              "the sender's session has no geometry track"));
-        }
-        std::lock_guard<std::mutex> lock(mutex_);
-        live_status_.state = LiveState::kConnected;
-      }
-      if (!*got) {
-        break;
-      }
-      if (record.info.track == *connection.track) {
-        note_arrival(record, arrived);
-        connection.unread = HeldRecords::Held{record, arrived, 0};
-        const core::Status read = hold_unread(client, connection);
-        if (!read.ok()) {
-          return end(read);
-        }
-      } else {
-        pass_other(record, arrived);
+    {
+      const core::Result<bool> going =
+          read_records(client, connection,
+                       connection.in_hand() && !connection.waiting
+                           ? std::chrono::milliseconds{0}
+                           : idle_wait(connection),
+                       &progressed);
+      if (!going.ok() || !*going) {
+        return end(going.status());
       }
     }
     // Every record the clock lets go, in order, but for the mesh rule's
     // turn: once the consumer is free, the connection's first frame, or
     // kMeshEvery since the last publish, meshes before the next is released,
-    // so a backlog shows as it drains.
+    // so a backlog shows as it drains. The socket is read after each
+    // release, so a record that comes while a backlog drains is stamped
+    // late by one release at most, not by the drain.
     Release released = Release::kNone;
     for (;;) {
       VKC_ASSIGN(const Release one, release_front(connection));
@@ -878,6 +779,11 @@ core::Status StreamPlayer::play_connection(networking::StreamClient& client,
         break;
       }
       released = Release::kReleased;
+      const core::Result<bool> going = read_records(
+          client, connection, std::chrono::milliseconds{0}, &progressed);
+      if (!going.ok() || !*going) {
+        return end(going.status());
+      }
       if ((!connection.published ||
            Clock::now() - *connection.published >= kMeshEvery) &&
           exchange_->release_and_may_publish(*extractor_)) {
@@ -956,7 +862,50 @@ std::chrono::milliseconds StreamPlayer::idle_wait(
       kSlice, std::chrono::ceil<std::chrono::milliseconds>(left));
 }
 
-void StreamPlayer::note_arrival(const stream::Record& record,
+core::Result<bool> StreamPlayer::read_records(networking::StreamClient& client,
+                                              Connection& connection,
+                                              std::chrono::milliseconds wait,
+                                              bool* progressed) {
+  if (connection.unread) {
+    VKC_TRY(hold_unread(client, connection));
+    *progressed = *progressed || !connection.unread;
+  }
+  stream::Record record;
+  for (bool first = true; !connection.unread; first = false) {
+    bool received = false;
+    const core::Result<bool> got =
+        client.next(first ? wait : std::chrono::milliseconds{0}, &record,
+                    nullptr, &received);
+    *progressed = *progressed || received;
+    VKC_TRY(got.status());
+    // A whole record arrived now: its due time, and the clock's sample.
+    const Clock::time_point arrived = Clock::now();
+    if (!connection.track && client.session() != nullptr) {
+      connection.track = first_geometry_track(*client.session());
+      if (!connection.track) {
+        return core::Status::not_found(
+            "the sender's session has no geometry track");
+      }
+      std::lock_guard<std::mutex> lock(mutex_);
+      live_status_.state = LiveState::kConnected;
+    }
+    if (!*got) {
+      break;
+    }
+    if (record.info.track == *connection.track) {
+      if (!note_arrival(record, arrived)) {
+        return false;
+      }
+      connection.unread = HeldRecords::Held{record, arrived, 0};
+      VKC_TRY(hold_unread(client, connection));
+    } else {
+      pass_other(record, arrived);
+    }
+  }
+  return true;
+}
+
+bool StreamPlayer::note_arrival(const stream::Record& record,
                                 Clock::time_point arrived) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -965,10 +914,18 @@ void StreamPlayer::note_arrival(const stream::Record& record,
     live_status_.set = record.info.set;
     live_status_.last_record = arrived;
   }
-  live_clock_->arrived(record.info.pts_ns, arrived,
-                       hooks_ != nullptr && hooks_->live_delay
-                           ? hooks_->live_delay()
-                           : std::chrono::nanoseconds(0));
+  std::chrono::nanoseconds need(0);
+  if (hooks_ != nullptr && hooks_->live_delay) {
+    // A step of its own, so a park waits for the hook and on_park never
+    // overlaps it.
+    const Step step(*this, Step::kNoWait);
+    if (!step) {
+      return false;
+    }
+    need = hooks_->live_delay();
+  }
+  live_clock_->arrived(record.info.pts_ns, arrived, need);
+  return true;
 }
 
 core::Status StreamPlayer::hold_unread(networking::StreamClient& client,
@@ -1103,6 +1060,12 @@ core::Result<bool> StreamPlayer::mesh_newest(Connection& connection) {
 }
 
 core::Result<bool> StreamPlayer::ask_program(Connection& connection) {
+  // The ask and, for a draw, the finish up to the publish: a step, so a park
+  // waits for the hook and on_park never overlaps it.
+  const Step step(*this, Step::kNoWait);
+  if (!step) {
+    return false;
+  }
   Waiting& waiting = *connection.waiting;
   const Clock::time_point asked = Clock::now();
   const FrameCommit answer = hooks_ != nullptr && hooks_->data_ready
@@ -1117,10 +1080,6 @@ core::Result<bool> StreamPlayer::ask_program(Connection& connection) {
     extractor_->abandon(waiting.extract);
     connection.waiting.reset();
     return true;
-  }
-  const Step step(*this, Step::kNoWait);  // its finish, up to its publish
-  if (!step) {
-    return false;
   }
   FrameStamp stamp = std::move(waiting.stamp);
   const mesh::PendingExtract extract = waiting.extract;

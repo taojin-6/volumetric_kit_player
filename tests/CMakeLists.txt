@@ -29,11 +29,13 @@ function(vp_add_test name)
   gtest_discover_tests(vp_${name}_test PROPERTIES ${properties})
 endfunction()
 
-# The pacing clock, the live playout clock and the stats panel's figures, host
-# only; the live clock's test counts allocations.
+# The pacing clock, the live playout clock, the live records held as bytes and
+# the stats panel's figures, host only; the live clock's test counts
+# allocations.
 vp_add_test(playback volumetric_kit::player)
 vp_add_test(live_clock volumetric_kit::player)
 target_sources(vp_live_clock_test PRIVATE test_allocation_failure.cpp)
+vp_add_test(held_records volumetric_kit::player)
 vp_add_test(playback_stats volumetric_kit::player)
 # The decode and mesh worker, on a device (the core's fixtures), over the tests'
 # streams.

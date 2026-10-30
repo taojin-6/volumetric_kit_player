@@ -31,8 +31,9 @@ inline constexpr std::chrono::nanoseconds kLiveWindow{std::chrono::seconds{10}};
 /// The samples a window holds: past 102.4 records a second it spans less
 /// than kLiveWindow.
 inline constexpr std::size_t kLiveSamples = 1024;
-/// How far the applied point falls a second elapsed (@ref step_point): 1 ms
-/// a record at 25 Hz. It rises at once.
+/// How far the applied point falls a second elapsed (@ref step_point), and
+/// how far the offset rises (LiveClock): 1 ms a record at 25 Hz. Each moves
+/// the other way at once.
 inline constexpr std::chrono::nanoseconds kPointFall{
     std::chrono::milliseconds{25}};
 /// The least time between two meshes while records keep coming due
@@ -61,8 +62,9 @@ const char* to_string(DelayNeed need) noexcept;
 ///        taken (FrameStamp::playout).
 struct Playout {
   /// The least `arrival − pts` (steady ns less pts ns) over the window of
-  /// the played track's records: a frame of pts p arrives no earlier than
-  /// p + offset (@ref earliest).
+  /// the played track's records, which it follows down at once and up at
+  /// most kPointFall a second (LiveClock): a frame of pts p arrives no
+  /// earlier than p + offset (@ref earliest).
   std::chrono::nanoseconds offset{0};
   /// The applied point: a frame is presented at pts + point (@ref present).
   /// It is the offset plus the applied D, moved by @ref step_point.
@@ -131,24 +133,24 @@ bool mesh_now(bool free, std::optional<std::chrono::nanoseconds> since_publish,
 
 /// @brief The applied point's step toward its target: the one rule an
 ///        audio master would replace with a slew of its own.
-/// @param applied   The applied point.
-/// @param target    The offset plus D's target.
-/// @param elapsed   The time since the last step.
-/// @param settling  Within a connection's first kLiveWindow, while the
-///                  least is still being found: a fall applies at once, so
-///                  a join's backlog lands at the live edge.
-/// @return @p target when at or above @p applied, or when @p settling;
-///         else @p applied less kPointFall a second of @p elapsed, no lower
-///         than @p target.
+/// @param applied  The applied point, carried by the offset's fall while
+///                 settling (LiveClock).
+/// @param target   The offset plus D's target.
+/// @param elapsed  The time since the last step.
+/// @return @p target when at or above @p applied; else @p applied less
+///         kPointFall a second of @p elapsed, no lower than @p target.
 std::chrono::nanoseconds step_point(std::chrono::nanoseconds applied,
                                     std::chrono::nanoseconds target,
-                                    std::chrono::nanoseconds elapsed,
-                                    bool settling) noexcept;
+                                    std::chrono::nanoseconds elapsed) noexcept;
 
 /// @brief A live player's playout clock (StreamPlayer::live_clock).
 ///
 /// **Offset.** The least `arrival − pts` over kLiveWindow of the played
-/// track's records, never another track's.
+/// track's records, never another track's. It follows the least down at
+/// once, and up at most kPointFall a second, never more than kMaxLiveDelay
+/// below it. So a fast record leaving the window moves neither @ref earliest
+/// nor a program's target point (offset + its need) at once: a program's
+/// need counts from the offset.
 ///
 /// **Needs.** The arrival need is the largest lateness over the window, plus
 /// the lead. A record's lateness is its `arrival − pts` less the larger of
@@ -160,8 +162,10 @@ std::chrono::nanoseconds step_point(std::chrono::nanoseconds applied,
 /// to [0, kMaxLiveDelay].
 ///
 /// **Point.** At each write, the applied point steps toward the offset plus
-/// the target (@ref step_point). The step takes the time since the last one,
-/// and is settling within kLiveWindow of the connection's first record.
+/// the target (@ref step_point), with the time since the last step. Within
+/// kLiveWindow of the connection's first record, while the least is still
+/// being found, the offset's fall carries the point with it at once, so a
+/// join's backlog lands at the live edge; a fall of D is stepped as ever.
 ///
 /// **Lead.** The largest time over the window that the worker took from a
 /// record's release to its frame's publish. The waits for the consumer's take
@@ -227,7 +231,7 @@ class LiveClock {
   void reset();
 
  private:
-  // One record: when it arrived, its arrival − pts, and the least as it
+  // One record: when it arrived, its arrival − pts, and the offset as it
   // arrived.
   struct Arrival {
     Clock::time_point at;
@@ -239,8 +243,9 @@ class LiveClock {
     Clock::time_point at;
     std::chrono::nanoseconds took;
   };
-  // Under mutex_: expire, recompute the needs, step the point, and store it.
-  void update(Clock::time_point at);
+  // Under mutex_: expire, move the offset, recompute the needs, step the
+  // point, and store it; for an `arrival`, set the newest's offset.
+  void update(Clock::time_point at, bool arrival);
 
   static constexpr std::int64_t kNoPoint =
       std::numeric_limits<std::int64_t>::min();

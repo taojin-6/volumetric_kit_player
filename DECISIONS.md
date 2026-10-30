@@ -10,29 +10,37 @@ A live player presents each frame at its pts plus one playout point, on a
 clock of its own (`live_clock.hpp`); a program states how long its own data
 for a frame needs (`FrameHooks::live_delay`) and whether that data is ready
 (`FrameHooks::data_ready`). It replaces "No jitter buffer in v1" in "Live
-mode" below. Why: a program that pairs each frame with data arriving later on
-its own connection draws every frame with its own data only if the frame
-waits for it; latency gives, the pairing never does.
+mode" below. Why: a program whose own data for a frame is ready only some
+time after the frame arrives draws every frame with its own data only if the
+frame waits for it; the latency grows instead.
 
 - **One clock: present(pts) = pts + offset + D.** The offset is the least
   `arrival − pts` over 10 s of the played track's records, never another
   track's. D is the largest need stated: the arrival need (the records'
   lateness over that window, plus the worker's lead) or a program's. There
   is no fixed floor, and D is clamped at 1 s; a frame that needed more is
-  late by the excess, which the stats and the log flag. Why from pts and not
+  late by the excess: the stats flag it ("over 1 s"), and the log's
+  `target_ms` reads 1000. Why from pts and not
   from each record's arrival: a wait counted from arrival carries the
   arrival's jitter onto the screen.
-- **A record's lateness counts against the larger of the least as it
-  arrived and the least now.** Why: against the least now alone, a join's
+- **The offset follows the least down at once, and up at most 25 ms a
+  second, never more than 1 s below it.** Why: a program's need counts from
+  the offset (`earliest`), so an offset that rose at once as a fast record
+  left the window would raise the program's target point at once, and frames
+  already due would repeat; more than 1 s below, D could not cover the gap.
+- **A record's lateness counts against the larger of the offset as it
+  arrived and the offset now.** Why: against the offset now alone, a join's
   burst, each record of it a new least, would raise D by the GOP for 10 s;
-  against the least as it arrived alone, a fast record leaving the window
+  against the offset as it arrived alone, a fast record leaving the window
   would leave the records after it late by its lead.
-- **The applied point rises at once and falls 25 ms a second, at once
-  during a connection's first 10 s.** Why: a rise that waited would make
-  frames late; a fall at once would make the records held due together, and
-  the mesh rule meshes only the newest of them. 25 ms a second is 1 ms a
-  record at 25 Hz. While the least is still being found, a slow fall would
-  leave a joined GOP a second late for 40 s.
+- **The applied point rises at once and falls 25 ms a second; during a
+  connection's first 10 s the offset's fall carries it at once.** Why: a
+  rise that waited would make frames late; a fall at once would make the
+  records held due together, and the mesh rule meshes only the newest of
+  them. 25 ms a second is 1 ms a record at 25 Hz. While the least is still
+  being found, a slow fall of the offset would leave a joined GOP a second
+  late for 40 s; a program's need that falls then is still stepped, so its
+  records come due one by one.
 - **The wait is as host bytes, before the decode,** in one 16 MiB ring the
   player reuses, its records' headers in a fixed ring: nothing is allocated
   per record. A record is released at present − lead, the lead the largest
@@ -43,8 +51,10 @@ waits for it; latency gives, the pairing never does.
   stay as they were. While the ring is full nothing more is read, so a
   reader that falls behind still backs up the socket for the sender's
   newest-key rule. Each pass drains every whole record that has come before
-  it releases one, so records are stamped as near their arrival as the
-  worker's last step allows.
+  it releases one, and again after each release, so a record is stamped
+  late by one release at most, even while a backlog drains. Whether the
+  bytes have wrapped is kept, not read from their offsets, so a record of no
+  bytes is placed like any other.
 - **data_ready is asked on the worker, after the extract has run and before
   it is finished:** draw (published), not yet (asked again about every
   millisecond, the shown frame staying, nothing released), or never
@@ -52,6 +62,9 @@ waits for it; latency gives, the pairing never does.
   Why: no frame its program cannot draw ever reaches the take; a check before
   the mesh misses data lost while the frame before is held, and asking after
   the extract adds no mesh time to a frame whose data comes just in time.
+- **live_delay and data_ready each run in a step of the worker's,** as
+  after_mesh does: a park waits for one under way, none runs while parked,
+  and so on_park overlaps none.
 - **The take holds a live frame until its present time** (`FrameTaker`),
   read afresh at each take, so a D raised after a release delays the frame
   too; without the commit hook and outside `frames_held`. A wait past 1 s

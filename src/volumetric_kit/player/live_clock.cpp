@@ -21,6 +21,15 @@ nanoseconds pts_ns_of(std::uint64_t pts_ns) {
   return nanoseconds(static_cast<std::int64_t>(pts_ns));
 }
 
+// kPointFall a second of `elapsed`, exactly and with no overflow: whole
+// seconds, then the rest, under a second, scaled.
+nanoseconds fall_over(nanoseconds elapsed) {
+  constexpr std::int64_t kSecond = 1'000'000'000;
+  const std::int64_t ns = std::max<std::int64_t>(elapsed.count(), 0);
+  return nanoseconds((ns / kSecond) * kPointFall.count() +
+                     (ns % kSecond) * kPointFall.count() / kSecond);
+}
+
 // The ring entry `i` places after the oldest at `head`.
 std::size_t at_of(std::size_t head, std::size_t i) {
   return (head + i) % kLiveSamples;
@@ -97,17 +106,11 @@ bool mesh_now(bool free, std::optional<nanoseconds> since_publish,
 }
 
 nanoseconds step_point(nanoseconds applied, nanoseconds target,
-                       nanoseconds elapsed, bool settling) noexcept {
-  if (target >= applied || settling) {
+                       nanoseconds elapsed) noexcept {
+  if (target >= applied) {
     return target;
   }
-  // kPointFall a second of `elapsed`, exactly and with no overflow: whole
-  // seconds, then the rest, under a second, scaled.
-  constexpr std::int64_t kSecond = 1'000'000'000;
-  const std::int64_t ns = std::max<std::int64_t>(elapsed.count(), 0);
-  const nanoseconds fall((ns / kSecond) * kPointFall.count() +
-                         (ns % kSecond) * kPointFall.count() / kSecond);
-  return std::max(target, applied - fall);
+  return std::max(target, applied - fall_over(elapsed));
 }
 
 std::optional<Playout> LiveClock::time() const {
@@ -136,13 +139,10 @@ void LiveClock::arrived(std::uint64_t pts_ns, Clock::time_point at,
   }
   expire(arrivals_, &arrivals_head_, &arrivals_size_, at);
   const nanoseconds ahead = since_epoch(at) - pts_ns_of(pts_ns);
-  nanoseconds least = ahead;  // the least with it
-  for (std::size_t i = 0; i < arrivals_size_; ++i) {
-    least = std::min(least, arrivals_[at_of(arrivals_head_, i)].ahead);
-  }
-  push(arrivals_, &arrivals_head_, &arrivals_size_, Arrival{at, ahead, least});
+  // Its offset as it arrived: update's.
+  push(arrivals_, &arrivals_head_, &arrivals_size_, Arrival{at, ahead, ahead});
   program_need_ = std::max(program_need, nanoseconds(0));
-  update(at);
+  update(at, /*arrival=*/true);
 }
 
 void LiveClock::published(nanoseconds took, Clock::time_point at) {
@@ -150,7 +150,7 @@ void LiveClock::published(nanoseconds took, Clock::time_point at) {
   push(leads_, &leads_head_, &leads_size_,
        Lead{at, std::max(took, nanoseconds(0))});
   if (state_) {
-    update(at);
+    update(at, /*arrival=*/false);
   }
 }
 
@@ -164,25 +164,36 @@ void LiveClock::reset() {
   point_ns_.store(kNoPoint, std::memory_order_release);
 }
 
-void LiveClock::update(Clock::time_point at) {
+void LiveClock::update(Clock::time_point at, bool arrival) {
   expire(arrivals_, &arrivals_head_, &arrivals_size_, at);
   expire(leads_, &leads_head_, &leads_size_, at);
+  const nanoseconds elapsed = at - stepped_at_;
   Playout next;
-  // The offset: the least over the window; with none left, as it was.
+  // The offset: the least over the window, followed down at once and up at
+  // most kPointFall a second, never more than kMaxLiveDelay below it; with
+  // none left, as it was.
   if (arrivals_size_ == 0) {
     next.offset = state_ ? state_->offset : nanoseconds(0);
   } else {
-    next.offset = arrivals_[arrivals_head_].ahead;
+    nanoseconds least = arrivals_[arrivals_head_].ahead;
     for (std::size_t i = 1; i < arrivals_size_; ++i) {
-      next.offset =
-          std::min(next.offset, arrivals_[at_of(arrivals_head_, i)].ahead);
+      least = std::min(least, arrivals_[at_of(arrivals_head_, i)].ahead);
+    }
+    next.offset =
+        !state_ || least <= state_->offset
+            ? least
+            : std::max(least - kMaxLiveDelay,
+                       std::min(least, state_->offset + fall_over(elapsed)));
+    if (arrival) {
+      arrivals_[at_of(arrivals_head_, arrivals_size_ - 1)].least = next.offset;
     }
   }
   for (std::size_t i = 0; i < leads_size_; ++i) {
     next.lead = std::max(next.lead, leads_[at_of(leads_head_, i)].took);
   }
-  // Each record's lateness against the larger of the least as it arrived and
-  // the least now, so a fast record entering or leaving moves no target.
+  // Each record's lateness against the larger of the offset as it arrived
+  // and the offset now, so a fast record entering or leaving moves no
+  // target point.
   nanoseconds late(0);
   for (std::size_t i = 0; i < arrivals_size_; ++i) {
     const Arrival& arrival = arrivals_[at_of(arrivals_head_, i)];
@@ -199,10 +210,16 @@ void LiveClock::update(Clock::time_point at) {
   next.clamped = need > kMaxLiveDelay;
   next.target = std::min(need, kMaxLiveDelay);
   const nanoseconds target_point = next.offset + next.target;
-  next.point = !state_
-                   ? target_point
-                   : step_point(state_->point, target_point, at - stepped_at_,
-                                at - first_at_ < kLiveWindow);
+  if (!state_) {
+    next.point = target_point;
+  } else {
+    // Settling, the offset's fall carries the point at once; D's is stepped.
+    nanoseconds applied = state_->point;
+    if (at - first_at_ < kLiveWindow && next.offset < state_->offset) {
+      applied -= state_->offset - next.offset;
+    }
+    next.point = step_point(applied, target_point, elapsed);
+  }
   stepped_at_ = at;
   state_ = next;
   point_ns_.store(next.point.count(), std::memory_order_release);

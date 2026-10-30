@@ -41,6 +41,7 @@
 namespace volumetric_kit::player {
 
 struct FrameHooks;  // frame_hooks.hpp
+class HeldRecords;  // held_records.hpp
 
 /// @brief Where a live player's connection stands.
 enum class LiveState {
@@ -297,7 +298,9 @@ class StreamPlayer {
   /// backs up the socket. Records of other tracks are passed over unread. A
   /// park, a stop or a connection's end drops the held records and a frame
   /// waiting for its program. It drains available input before waiting for a
-  /// take, which wakes it immediately. A connection that ends or cannot be
+  /// take, which wakes it immediately, and again after each release, so a
+  /// record that comes while a backlog drains is stamped late by one release
+  /// at most. A connection that ends or cannot be
   /// made is never an error:
   /// the worker shows why (@ref live_status), and @ref kLiveRetry later
   /// connects again (@ref LiveConnection), with a new grid, until stopped.
@@ -480,9 +483,6 @@ class StreamPlayer {
   // A frame recorded and submitted, until finished: its stamp, its pending
   // decode and extract (live, none), its step and its batch.
   struct InFlight;
-  // Live: the played track's records held as host bytes until released, in
-  // one ring reused across connections.
-  class HeldRecords;
   // Live: a frame meshed whose extract waits, unfinished, for its program
   // (FrameHooks::data_ready).
   struct Waiting;
@@ -529,9 +529,19 @@ class StreamPlayer {
                                    std::chrono::nanoseconds* took);
   // Live: what one try at releasing the front held record did.
   enum class Release { kNone, kReleased, kStopped };
+  // Live: read into the ring the record left unread, then every whole
+  // record that has come, each stamped as it is read; the first read waits
+  // up to `wait`. `*progressed` is set once a byte or a record came. False
+  // on quit or a park; a failed read, or a session with no geometry track,
+  // is returned.
+  core::Result<bool> read_records(grid::networking::StreamClient& client,
+                                  Connection& connection,
+                                  std::chrono::milliseconds wait,
+                                  bool* progressed);
   // Live: a whole record of the played track arrived at `arrived`: the
-  // status line and the clock take it.
-  void note_arrival(const grid::stream::Record& record,
+  // status line and the clock take it, with the program's need asked in a
+  // step of its own. False on quit or a park, the need not asked.
+  bool note_arrival(const grid::stream::Record& record,
                     Playback::Clock::time_point arrived);
   // Live: the record left unread, read from `client` into the ring if it has
   // room; left unread while it is full. A failed read is returned.
@@ -661,7 +671,9 @@ class StreamPlayer {
   std::uint16_t track_ = 0;
   LiveAddress address_;                  // live
   std::optional<LiveClock> live_clock_;  // live alone; the worker writes it
-  std::unique_ptr<HeldRecords> held_;    // live: the worker's, made at need
+  // Live: the played track's records held as host bytes until released,
+  // the worker's, made at need and reused across connections.
+  std::unique_ptr<HeldRecords> held_;
 
   // The worker's: start sets what it builds on, and the worker builds the
   // rest; destroyed hook batch first, then the extractor, after the join.

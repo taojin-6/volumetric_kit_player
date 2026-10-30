@@ -201,7 +201,9 @@ struct FrameHooks {
                                           const FrameStamp& stamp)>
       before_draw;
   /// In StreamPlayer::park, on its thread, once the worker is idle with
-  /// nothing in flight and before a park that returns true returns.
+  /// nothing in flight and before a park that returns true returns. No
+  /// worker hook (after_mesh, live_delay, data_ready) runs then, nor until
+  /// the unpark.
   std::function<void()> on_park;
   /// In StreamPlayer::unpark, before the worker's next step; only after an
   /// on_park.
@@ -223,7 +225,8 @@ struct FrameHooks {
   /// how long after a frame's earliest arrival (`earliest`) the program's
   /// own data for that frame is ready, plus the margin it wants. It may rise
   /// at once, as after a frame it held. D is the largest need, clamped to
-  /// [0, kMaxLiveDelay]. It must not block. Empty, or a file: no need.
+  /// [0, kMaxLiveDelay]. It must not block: a park waits for it (on_park).
+  /// Empty, or a file: no need.
   std::function<std::chrono::nanoseconds()> live_delay;
   /// Worker, live alone, once the newest decode's extract has run on the
   /// device, and before that extract is finished, after_mesh runs and the
@@ -239,7 +242,8 @@ struct FrameHooks {
   ///   The shown frame stays, and the next frame meshed is asked in turn,
   ///   any number in a row.
   /// So the take is never handed a frame its program cannot draw. It must
-  /// not block. Empty, or a file: kDraw.
+  /// not block: a park waits for it, and for a kDraw's publish (on_park).
+  /// Empty, or a file: kDraw.
   std::function<FrameCommit(const FrameStamp& stamp)> data_ready;
 };
 

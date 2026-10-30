@@ -5,20 +5,22 @@
 // earliest and pts_at exactly, a negative offset included; the release rule
 // to the nanosecond, and with no lead as the take's gate; the mesh rule's
 // cases, kMeshEvery to the microsecond; the point's step, rising at once and
-// falling exactly kPointFall a second, never below its target, and at once
-// while settling. LiveClock: the offset is the least over the window, a
-// sample exactly kLiveWindow old kept and one a nanosecond older gone; the
-// arrival need raises the target at once by a late record's lateness, on top
-// of the lead, and a join's burst adds nothing; arrival jitter is the
-// lateness over the window, which expires, so the point then falls at
-// kPointFall a second once the connection's first 10 s are past, and at once
-// within them; a fast record entering or leaving moves no steady record's
-// present time later, nor earlier by more than the fall; a 1 s GOP arriving
-// together at a join lands at the steady point; a program's need sets the
-// target, a tie named arrival; the clamp at kMaxLiveDelay; the lead is the
-// largest over the window; point() is time()'s point after each write; reset
-// forgets everything; and after a warm-up, ten thousand records and
-// publishes allocate nothing.
+// falling exactly kPointFall a second, never below its target. LiveClock:
+// the offset is the least over the window, a sample exactly kLiveWindow old
+// kept and one a nanosecond older gone, followed down at once and up at
+// kPointFall a second, never more than kMaxLiveDelay below it; the arrival
+// need raises the target at once by a late record's lateness, on top of the
+// lead, and a join's burst adds nothing; arrival jitter is the lateness over
+// the window, which expires, so the point then falls at kPointFall a second
+// once the connection's first 10 s are past, and within them the offset's
+// fall carries it at once while a fall of D is stepped; a fast record
+// entering or leaving moves no steady record's present time later, nor
+// earlier by more than the fall, at the arrival need and at a program's; a
+// 1 s GOP arriving together at a join lands at the steady point; a program's
+// need sets the target, a tie named arrival; the clamp at kMaxLiveDelay; the
+// lead is the largest over the window; point() is time()'s point after each
+// write; reset forgets everything; and after a warm-up, ten thousand records
+// and publishes allocate nothing.
 
 #include "volumetric_kit/player/live_clock.hpp"
 
@@ -114,19 +116,16 @@ TEST(LiveClockTimes, TheMeshRule) {
 
 TEST(LiveClockTimes, ThePointRisesAtOnceAndFallsAtKPointFallASecond) {
   // Rises at once, however little time passed.
-  EXPECT_EQ(vkp::step_point(ms(100), ms(250), nanoseconds(0), false), ms(250));
+  EXPECT_EQ(vkp::step_point(ms(100), ms(250), nanoseconds(0)), ms(250));
   // Falls exactly kPointFall a second, never below its target.
-  EXPECT_EQ(vkp::step_point(ms(250), ms(100), seconds(1), false),
+  EXPECT_EQ(vkp::step_point(ms(250), ms(100), seconds(1)),
             ms(250) - vkp::kPointFall);
-  EXPECT_EQ(vkp::step_point(ms(250), ms(100), milliseconds(40), false),
-            ms(249));
-  EXPECT_EQ(vkp::step_point(ms(250), ms(100), milliseconds(500), false),
-            ms(237.5));
-  EXPECT_EQ(vkp::step_point(ms(250), ms(100), seconds(100), false), ms(100));
-  EXPECT_EQ(vkp::step_point(ms(250), ms(100), seconds(3'600), false), ms(100))
+  EXPECT_EQ(vkp::step_point(ms(250), ms(100), milliseconds(40)), ms(249));
+  EXPECT_EQ(vkp::step_point(ms(250), ms(100), milliseconds(500)), ms(237.5));
+  EXPECT_EQ(vkp::step_point(ms(250), ms(100), seconds(100)), ms(100));
+  EXPECT_EQ(vkp::step_point(ms(250), ms(100), seconds(3'600)), ms(100))
       << "no overflow";
-  // Settling, a fall applies at once.
-  EXPECT_EQ(vkp::step_point(ms(250), ms(100), nanoseconds(0), true), ms(100));
+  EXPECT_EQ(vkp::step_point(ms(250), ms(100), nanoseconds(0)), ms(250));
   EXPECT_EQ(vkp::kPointFall, ms(25));
 }
 
@@ -164,10 +163,15 @@ TEST(LiveClock, NoneBeforeTheFirstRecordAndAfterAReset) {
 }
 
 TEST(LiveClock, TheOffsetIsTheLeastOverTheWindow) {
+  // The fastest record, 3 ms early, then two more; then one record seconds
+  // later, so the offset may rise to the least of the rest at once.
+  const auto first_three = [](LiveClock& clock) {
+    steady(clock, 0, ms(-3));
+    steady(clock, 1);
+    steady(clock, 2, ms(2));
+  };
   LiveClock clock;
-  steady(clock, 0, ms(-3));  // the fastest: 3 ms early
-  steady(clock, 1);
-  steady(clock, 2, ms(2));
+  first_three(clock);
   const Playout playout = now_of(clock);
   EXPECT_EQ(playout.offset, t0.time_since_epoch() - ms(3));
   EXPECT_EQ(clock.now_pts(playout, t0), vkp::pts_at(playout.point, t0));
@@ -175,9 +179,54 @@ TEST(LiveClock, TheOffsetIsTheLeastOverTheWindow) {
   clock.arrived(249 * kPeriodNs, t0 - ms(3) + vkp::kLiveWindow, nanoseconds(0));
   EXPECT_EQ(now_of(clock).offset, t0.time_since_epoch() - ms(3));
   // ...and a nanosecond later it is gone: the least of the rest.
-  clock.arrived(249 * kPeriodNs, t0 - ms(3) + vkp::kLiveWindow + nanoseconds(1),
+  LiveClock later;
+  first_three(later);
+  later.arrived(249 * kPeriodNs, t0 - ms(3) + vkp::kLiveWindow + nanoseconds(1),
                 nanoseconds(0));
-  EXPECT_EQ(now_of(clock).offset, t0.time_since_epoch());
+  EXPECT_EQ(now_of(later).offset, t0.time_since_epoch());
+}
+
+// Past the join, the least rising by 30 ms: the offset follows at kPointFall
+// a second, 1 ms a record, and at once down again; risen by 2 s, it is at
+// most kMaxLiveDelay below it.
+TEST(LiveClock, TheOffsetRisesAtKPointFallASecondNoFurtherThanTheClampBelow) {
+  LiveClock clock;
+  std::uint64_t k = 0;
+  steady(clock, k++, ms(-30));  // the fastest, alone
+  for (; k < 250; ++k) {
+    steady(clock, k);
+  }
+  ASSERT_EQ(now_of(clock).offset, t0.time_since_epoch() - ms(30));
+  // Record 250 comes 10.03 s after the fastest, which leaves: the offset
+  // rises 1 ms a record from there.
+  for (; k < 260; ++k) {
+    steady(clock, k);
+  }
+  EXPECT_EQ(now_of(clock).offset, t0.time_since_epoch() - ms(20));
+  for (; k < 300; ++k) {
+    steady(clock, k);
+  }
+  EXPECT_EQ(now_of(clock).offset, t0.time_since_epoch()) << "never past it";
+  steady(clock, k++, ms(-12));
+  EXPECT_EQ(now_of(clock).offset, t0.time_since_epoch() - ms(12))
+      << "down at once";
+  // Every record 2 s later than its pts says, from record 500: once the last
+  // before it has left, at record 700, the offset is kMaxLiveDelay below the
+  // least, and rises from there.
+  for (; k < 500; ++k) {
+    steady(clock, k);
+  }
+  for (; k < 700; ++k) {
+    steady(clock, k, seconds(2));
+  }
+  ASSERT_EQ(now_of(clock).offset, t0.time_since_epoch());
+  for (; k <= 700; ++k) {
+    steady(clock, k, seconds(2));
+  }
+  EXPECT_EQ(now_of(clock).offset,
+            t0.time_since_epoch() + seconds(2) - vkp::kMaxLiveDelay);
+  steady(clock, k++, seconds(2));
+  EXPECT_EQ(now_of(clock).offset, t0.time_since_epoch() + seconds(1) + ms(1));
 }
 
 TEST(LiveClock, ALateRecordRaisesTheTargetAtOnceByItsLateness) {
@@ -298,6 +347,56 @@ TEST(LiveClock, AFastRecordEnteringOrLeavingMovesNoPresentLater) {
   }
   EXPECT_EQ(now_of(clock).offset, t0.time_since_epoch()) << "it left";
   EXPECT_EQ(now_of(clock).point, steady_point);
+}
+
+// A program's need of 120 ms, steady past the join: a record 20 ms fast
+// enters the window, then leaves it 10 s later. The point never moves more
+// than kPointFall a second, 1 ms a record, either way, and ends where it
+// was.
+TEST(LiveClock, AFastRecordMovesAProgramsPointNoFasterThanTheFall) {
+  LiveClock clock;
+  const nanoseconds need = ms(120);
+  std::uint64_t k = 0;
+  for (; k < 300; ++k) {
+    steady(clock, k, {}, need);
+  }
+  const nanoseconds steady_point = now_of(clock).point;
+  ASSERT_EQ(steady_point, t0.time_since_epoch() + need);
+  steady(clock, k++, ms(-20), need);
+  nanoseconds before = now_of(clock).point;
+  // The most either way: the fall over the 60 ms after the fast record.
+  const nanoseconds most = ms(1.5);
+  for (int i = 0; i < 400; ++i, ++k) {
+    steady(clock, k, {}, need);
+    const nanoseconds point = now_of(clock).point;
+    ASSERT_LE(point - before, most) << "record " << k << ": a jump later";
+    ASSERT_GE(point - before, -most) << "record " << k << ": a jump earlier";
+    ASSERT_EQ(now_of(clock).need, DelayNeed::kProgram) << "record " << k;
+    before = point;
+  }
+  EXPECT_EQ(now_of(clock).point, steady_point);
+}
+
+// Within the join's first kLiveWindow, a fall of the offset carries the point
+// at once, while a program's need falling from 150 to 50 ms is stepped at
+// kPointFall a second, so the records it held come due one by one.
+TEST(LiveClock, SettlingTheOffsetsFallIsAtOnceAndDsFallIsStepped) {
+  LiveClock clock;
+  steady(clock, 0, {}, ms(150));
+  ASSERT_EQ(now_of(clock).delay(), ms(150));
+  steady(clock, 1, {}, ms(50));
+  EXPECT_EQ(now_of(clock).target, ms(50));
+  EXPECT_EQ(now_of(clock).delay(), ms(149)) << "1 ms a record";
+  // Record 3 (none 2), 40 ms fast, so 40 ms after record 1: the offset
+  // falls 40.
+  steady(clock, 3, ms(-40), ms(50));
+  EXPECT_EQ(now_of(clock).offset, t0.time_since_epoch() - ms(40));
+  EXPECT_EQ(now_of(clock).delay(), ms(148))
+      << "the offset's fall at once, D's stepped";
+  for (std::uint64_t k = 4; k < 104; ++k) {
+    steady(clock, k, ms(-40), ms(50));
+  }
+  EXPECT_EQ(now_of(clock).delay(), ms(50));
 }
 
 // At a join a 1 s GOP arrives together, then the stream runs steady at the

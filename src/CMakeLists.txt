@@ -12,6 +12,7 @@ add_library(
   volumetric_kit/player/command_line.cpp
   volumetric_kit/player/controls.cpp
   volumetric_kit/player/frame_hooks.cpp
+  volumetric_kit/player/held_records.cpp
   volumetric_kit/player/live_clock.cpp
   volumetric_kit/player/live_connection.cpp
   volumetric_kit/player/measure_log.cpp

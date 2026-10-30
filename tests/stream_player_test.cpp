@@ -104,12 +104,15 @@
 // one drawn for all their records; its not yet holds a frame, the one before
 // shown and nothing released, then publishes it once; a need raised after a
 // frame's release delays its take, which counts as no hold; at a need of
-// 150 ms each record is a frame of its own, in order, and as D falls the
-// order holds; a need past a second is clamped; and a park drops the records
-// held as bytes, the unpark joining at the key. A file asks no live hook and
-// is released when due, with no playout. On the
-// host: open refuses
-// what it cannot play, and connect an empty host or port 0. The device tests
+// 150 ms each record is a frame of its own, in order, and as the need goes D
+// falls step by step, each record still a frame of its own; a need past a
+// second is clamped; a park drops the records held as bytes, the unpark
+// joining at the key; a full ring of records held stops the reads until they
+// are released; records that come while a backlog drains are stamped as they
+// come; and a park waits for a program's live hook, on_park overlapping
+// none. A file asks no live hook and is released when due, with no playout.
+// On the host: open refuses what it cannot play, and connect an empty host
+// or port 0. The device tests
 // skip with no device. A stop that no control can wake fails only on ctest's
 // timeout.
 
@@ -163,6 +166,7 @@
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/player/frame_hooks.hpp"
+#include "volumetric_kit/player/held_records.hpp"
 #include "volumetric_kit/player/live_clock.hpp"
 #include "volumetric_kit/player/playback_stats.hpp"
 
@@ -180,7 +184,10 @@ using volumetric_kit::player::FrameExchange;
 using volumetric_kit::player::FrameHooks;
 using volumetric_kit::player::FrameStamp;
 using volumetric_kit::player::FrameTaker;
+using volumetric_kit::player::kHeldRecords;
+using volumetric_kit::player::kLiveWindow;
 using volumetric_kit::player::kMaxLiveDelay;
+using volumetric_kit::player::kPointFall;
 using volumetric_kit::player::LiveState;
 using volumetric_kit::player::LiveStatus;
 using volumetric_kit::player::PlaybackStats;
@@ -3311,7 +3318,11 @@ TEST_F(StreamPlayerTest, AFileAsksNoLiveHookAndIsReleasedWhenDue) {
 
 // Live, the tests' records are a second of pts apart: at the tests' paces a
 // record never comes late on its pts, so no test's own pace raises the
-// playout delay (live_clock.hpp); the tests of the delay state theirs.
+// playout delay (live_clock.hpp); the tests of the delay state theirs. Each
+// record is then a new least, and the offset falls about a second a record,
+// which the point follows at once only within a connection's first
+// kLiveWindow: so a flow's pts are its period apart (Publisher), and a test
+// paced by its takes stays within kLiveWindow on one connection.
 constexpr std::uint64_t kLiveStepNs = 1'000'000'000;
 
 // The stream as a sender sends it, its pts kLiveStepNs apart.
@@ -3521,8 +3532,10 @@ Bytes no_stream(std::uint64_t piece) {
   return piece == 0 ? Bytes(http.begin(), http.end()) : Bytes();
 }
 
-// Publishes the tests' stream to a server on a thread of its own, looped and
-// restamped, one record each `period`, until destroyed.
+// Publishes the tests' stream to a server on a thread of its own, looped,
+// one record each `period`, until destroyed: record n's seq is n and its pts
+// n periods, a sender's pace, which the playout clock follows on a
+// connection of any age.
 class Publisher {
  public:
   Publisher(networking::StreamServer& server, const Recording& recording,
@@ -3531,8 +3544,10 @@ class Publisher {
           SteadyClock::time_point due = SteadyClock::now();
           for (std::uint64_t n = 0; !stop_; ++n) {
             const std::uint64_t i = n % kFrames;
-            const stream::RecordInfo info =
-                restamped(recording.infos[i], n / kFrames);
+            stream::RecordInfo info = recording.infos[i];
+            info.seq = n;
+            info.pts_ns = n * static_cast<std::uint64_t>(
+                                  std::chrono::nanoseconds(period).count());
             const core::Status published =
                 server.publish(info, recording.payloads[i].data(),
                                recording.payloads[i].size());
@@ -4212,6 +4227,7 @@ TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
   StreamPlayer* player = start_live(server->port());
   ASSERT_NE(player, nullptr);
   ASSERT_TRUE(reaches(LiveState::kConnected));
+  const SteadyClock::time_point connected = SteadyClock::now();
   std::uint64_t n = 0;
   // The stream's next record, looped and restamped: whether it came.
   const auto send = [&] {
@@ -4245,6 +4261,11 @@ TEST_F(LivePlayerTest, ATakeWithAFrameInHandIsMeshedAtOnce) {
   std::vector<double> late;   // ms, each B's
   std::vector<double> waits;  // ms, each C's
   while (waits.size() < kSamples) {
+    if (SteadyClock::now() - connected > kLiveWindow - 2s) {
+      GTEST_SKIP() << "too slow a host: past kLiveWindow on one connection, "
+                      "records a second of pts apart outrun the point's "
+                      "fall (kLiveStepNs)";
+    }
     ASSERT_TRUE(send());
     ASSERT_TRUE(take(kArrival).has_value());
     // B's mesh sets the value after this one's on the extractor's timeline.
@@ -4308,8 +4329,9 @@ TEST_F(LivePlayerTest, RecordsFasterThanTheirDecodeStillShowNewerFrames) {
 // takes going into PlaybackStats as the view takes it: status() stays OK, as
 // the ring has 3 slots and an extract per record would run out of them; the
 // frame that waited, then the newest decoded since, which stands for every
-// record of the pause, come a moment apart, yet the records a second read at
-// most twice the flow's; and a second of frames on, they read again.
+// record of the pause, the newest come by then once the playout clock has
+// released it, come a moment apart, yet the records a second read at most
+// twice the flow's; and a second of frames on, they read again.
 TEST_F(LivePlayerTest, AConsumerPauseLeavesStatusOkThenGetsTheNewest) {
   const std::unique_ptr<networking::StreamServer> server = serve();
   ASSERT_NE(server, nullptr);
@@ -4329,6 +4351,15 @@ TEST_F(LivePlayerTest, AConsumerPauseLeavesStatusOkThenGetsTheNewest) {
   std::this_thread::sleep_for(1500ms);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
   const std::uint64_t newest = player->live_status().seq;
+  // Released at its present time less the lead (its pts the flow's periods,
+  // Publisher), seen within a slice of the worker's.
+  ASSERT_TRUE(eventually([&] {
+    const Playout playout = player->live_clock()->time().value();
+    return SteadyClock::now() >=
+           present(playout.point,
+                   newest * std::chrono::nanoseconds(kFlow).count()) -
+               playout.lead + 10ms;
+  }));
   ASSERT_TRUE(taken().has_value());  // the frame that waited
   const std::optional<FrameStamp> next = taken();
   ASSERT_TRUE(next.has_value());
@@ -4934,13 +4965,14 @@ TEST_F(LivePlayerTest, ANeedRaisedAfterAReleaseDelaysTheTakeByTheRise) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-// A sender's steady stream at a program's need of 150 ms, then of none:
-// at the need, every record is a frame of its own, in order; as D falls,
-// the order is kept, and the need no longer sets it.
-TEST_F(LivePlayerTest, AtANeedEachRecordIsAFrameInOrderAndAsDFallsOrderHolds) {
+// A sender's steady stream at a program's need of 150 ms, then of none: at
+// the need, every record is a frame of its own, in order; as the need goes,
+// within the connection's first kLiveWindow, D falls no faster than
+// kPointFall a second, so every record stays a frame of its own.
+TEST_F(LivePlayerTest, AtANeedEachRecordIsAFrameInOrderAndDFallsStepByStep) {
   constexpr std::uint64_t kAtNeed = 15;
-  constexpr std::uint64_t kAll = 25;
-  constexpr auto kPace = 100ms;  // the sender's, and its pts' step
+  constexpr std::uint64_t kAll = 35;  // 2 s of the fall
+  constexpr auto kPace = 100ms;       // the sender's, and its pts' step
   const auto asks = std::make_shared<LiveAsks>();
   asks->need_ns = std::chrono::nanoseconds(150ms).count();
   live_hooks(asks);
@@ -4980,14 +5012,29 @@ TEST_F(LivePlayerTest, AtANeedEachRecordIsAFrameInOrderAndAsDFallsOrderHolds) {
   for (std::size_t i = 0; i < frames.size(); ++i) {
     SCOPED_TRACE(::testing::Message() << "frame " << frames[i].index);
     expect_taken_when_due(frames[i]);
+    EXPECT_EQ(frames[i].index, i) << "a record coalesced";
+    EXPECT_EQ(frames[i].records, 1u);
     if (i > 0) {
-      EXPECT_GT(frames[i].index, frames[i - 1].index) << "out of order";
-    }
-    if (frames[i].index <= kAtNeed) {
-      EXPECT_EQ(frames[i].index, i) << "a record coalesced at the need";
-      EXPECT_EQ(frames[i].records, 1u);
+      // The point steps at each record and publish: between two takes, by
+      // the fall over the time between them and a record more.
+      const SteadyClock::duration between =
+          *frames[i].taken - *frames[i - 1].taken + kPace;
+      const auto most =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              kPointFall * std::chrono::duration<double>(between).count()) +
+          1ms;
+      EXPECT_LE(frames[i - 1].playout->delay() - frames[i].playout->delay(),
+                most)
+          << "D fell at once";
     }
   }
+  ASSERT_FALSE(frames.empty());
+  // Down by a second's fall at least, or to its target: a slow host's
+  // arrival need may be above that.
+  EXPECT_LE(frames.back().playout->delay(),
+            std::max<std::chrono::nanoseconds>(150ms - kPointFall,
+                                               frames.back().playout->target))
+      << "D never fell";
   EXPECT_NE(frames.back().playout->need, DelayNeed::kProgram)
       << "the program's need gone";
   EXPECT_LT(stop_time(*player), kPrompt);
@@ -5035,20 +5082,241 @@ TEST_F(LivePlayerTest, AParkDropsTheHeldRecordsAndTheUnparkJoinsAtTheKey) {
     ASSERT_TRUE(eventually([&] { return player->live_status().seq == n; }));
   }
   const std::atomic<bool> cancel{false};
-  EXPECT_TRUE(exchange_.wait_collected(0ms, cancel)) << "one released";
+  if (!exchange_.wait_collected(0ms, cancel)) {
+    GTEST_SKIP() << "too slow a host: a record was released before the "
+                    "park, a second after the first came";
+  }
   ASSERT_TRUE(player->park(kArrival));
+  // Closed, before the unpark: a park and an unpark both within the worker's
+  // wait on the socket leave the connection as it was.
+  ASSERT_TRUE(eventually(
+      [&] { return player->live_status().state == LiveState::kConnecting; }));
+  const SteadyClock::time_point parked = SteadyClock::now();
   asks->need_ns = 0;
   player->unpark();
   FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  // Counted from the new connection's frames alone: one released as the
+  // park came came before it.
   std::uint64_t records = 0;
   std::optional<FrameStamp> frame;
-  while (!frame || frame->index < kIntraPeriod - 1) {
+  while (!frame || frame->due < parked || frame->index < kIntraPeriod - 1) {
     frame = take_with(taker);
     ASSERT_TRUE(frame.has_value()) << player->status().message();
-    records += frame->records;
+    if (frame->due >= parked) {
+      records += frame->records;
+    }
   }
   EXPECT_EQ(records, kIntraPeriod) << "the new connection's alone";
   EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A frame its program holds while records keep coming: kHeldRecords of them
+// are held as bytes, the next is noted and left unread, and nothing more is
+// read, so the sender backs up; once the frame is let go, the records held
+// are released, reading resumes, and a key sent after them is shown, every
+// frame in order.
+TEST_F(LivePlayerTest, AFullRingStopsTheReadsUntilItsRecordsAreReleased) {
+  const auto hold = std::make_shared<std::atomic<bool>>(true);
+  const auto asks = std::make_shared<LiveAsks>();
+  live_hooks(asks, [hold](const FrameStamp& stamp) {
+    return stamp.index == 1 && *hold ? FrameCommit::kHold : FrameCommit::kDraw;
+  });
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  ASSERT_NO_FATAL_FAILURE(publish_steady(*server, 0));
+  ASSERT_TRUE(take_with(taker).has_value());
+  ASSERT_NO_FATAL_FAILURE(publish_steady(*server, 1));
+  ASSERT_TRUE(eventually([&] { return asks->count(1) > 0; }));
+  // P-frames of one byte, which none decodes: with no newer key the server
+  // skips none of them, and every one goes out at once.
+  constexpr std::uint64_t kPast = 50;
+  const std::uint64_t last = 1 + kHeldRecords + kPast;
+  stream::RecordInfo info = recording_.infos[1];
+  const Bytes byte(1, 0);
+  for (std::uint64_t n = 2; n <= last; ++n) {
+    info.seq = n;
+    info.pts_ns = n * kLiveStepNs;
+    ASSERT_TRUE(server->publish(info, byte.data(), byte.size()).ok());
+  }
+  // 2 to kHeldRecords + 1 held, the next noted but unread, and no more.
+  const std::uint64_t unread = 2 + kHeldRecords;
+  ASSERT_TRUE(eventually([&] { return player->live_status().seq >= unread; }))
+      << "seq " << player->live_status().seq;
+  std::this_thread::sleep_for(kQuiet);
+  EXPECT_EQ(player->live_status().seq, unread)
+      << "read while the ring was full";
+  // The stream's records at a multiple of kIntraPeriod are keys.
+  const std::uint64_t key = (last / kIntraPeriod + 1) * kIntraPeriod;
+  ASSERT_NO_FATAL_FAILURE(publish_at(*server, key, key * kLiveStepNs));
+  std::this_thread::sleep_for(kQuiet);
+  EXPECT_EQ(player->live_status().seq, unread)
+      << "read while the ring was full";
+  *hold = false;
+  std::vector<FrameStamp> frames;
+  while (frames.empty() || frames.back().index < key) {
+    const std::optional<FrameStamp> frame = take_with(taker);
+    ASSERT_TRUE(frame.has_value())
+        << "after " << frames.size() << ": " << player->status().message();
+    if (!frames.empty()) {
+      EXPECT_GT(frame->index, frames.back().index) << "out of order";
+    }
+    frames.push_back(*frame);
+  }
+  EXPECT_EQ(frames.front().index, 1u);
+  std::uint64_t records = 0;
+  for (std::size_t i = 1; i < frames.size(); ++i) {
+    records += frames[i].records;
+  }
+  EXPECT_GE(records, kHeldRecords + 1) << "the records held, each released";
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// While a backlog drains, the records that come meanwhile are read between
+// its releases, each stamped as it comes: a program holds a frame while
+// records come every 5 ms, then lets it go, left untaken, so the backlog
+// drains with no mesh between. The lateness the clock holds (its arrival
+// need less the lead) rises by less than half the drain.
+TEST_F(LivePlayerTest, RecordsThatComeWhileABacklogDrainsAreStampedAsTheyCome) {
+  constexpr auto kPace = 5ms;  // the sender's, and its pts' step
+  constexpr std::uint64_t kBacklog = 200;
+  const std::uint64_t step_ns = std::chrono::nanoseconds(kPace).count();
+  const auto hold = std::make_shared<std::atomic<bool>>(true);
+  const auto asks = std::make_shared<LiveAsks>();
+  live_hooks(asks, [hold](const FrameStamp& stamp) {
+    return stamp.index > 0 && *hold ? FrameCommit::kHold : FrameCommit::kDraw;
+  });
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  ASSERT_TRUE(reaches(LiveState::kConnected));
+  std::atomic<bool> stop{false};
+  std::atomic<std::uint64_t> sent{0};
+  std::thread sender([&] {
+    SteadyClock::time_point due = SteadyClock::now();
+    for (std::uint64_t n = 0; !stop; ++n) {
+      stream::RecordInfo info = recording_.infos[n % kFrames];
+      info.seq = n;
+      info.pts_ns = n * step_ns;
+      const Bytes& payload = recording_.payloads[n % kFrames];
+      EXPECT_TRUE(server->publish(info, payload.data(), payload.size()).ok());
+      sent = n;
+      due += kPace;
+      std::this_thread::sleep_until(due);
+    }
+  });
+  const auto finish = [&] {
+    stop = true;
+    sender.join();
+  };
+  FrameTaker taker(*player, exchange_, kFramesInFlight, &*hooks_);
+  const std::optional<FrameStamp> first = take_with(taker);
+  std::uint64_t held = 0;  // the frame held
+  const bool built =
+      first.has_value() && eventually([&] {
+        const std::vector<std::uint64_t> asked = asks->all();
+        const auto it = std::find_if(asked.begin(), asked.end(),
+                                     [](std::uint64_t i) { return i > 0; });
+        held = it == asked.end() ? 0 : *it;
+        return held > 0 && player->live_status().seq >= held + kBacklog;
+      });
+  if (!built) {
+    finish();
+    FAIL() << "no backlog behind a held frame";
+  }
+  const std::uint64_t submits = device().counters().submits;
+  const Playout before = player->live_clock()->time().value();
+  const SteadyClock::time_point let_go = SteadyClock::now();
+  *hold = false;
+  // A decode submitted a record released, and no mesh while it is untaken.
+  const bool drained = eventually(
+      [&] { return device().counters().submits >= submits + kBacklog; });
+  const SteadyClock::duration drain = SteadyClock::now() - let_go;
+  const std::uint64_t since = sent;
+  const bool read =
+      eventually([&] { return player->live_status().seq >= since; });
+  const Playout after = player->live_clock()->time().value();
+  finish();
+  ASSERT_TRUE(drained) << "the backlog never drained";
+  ASSERT_TRUE(read);
+  if (drain < 20ms) {
+    GTEST_SKIP() << "too short a drain to tell: "
+                 << std::chrono::duration<double, std::milli>(drain).count()
+                 << " ms";
+  }
+  const std::chrono::nanoseconds rise =
+      (after.target - after.lead) - (before.target - before.lead);
+  EXPECT_LT(rise, drain / 2)
+      << std::chrono::duration<double, std::milli>(rise).count()
+      << " ms of lateness over a drain of "
+      << std::chrono::duration<double, std::milli>(drain).count() << " ms";
+  EXPECT_LT(stop_time(*player), kPrompt);
+  EXPECT_TRUE(player->status().ok()) << player->status().message();
+}
+
+// A park while a program's live hooks keep being called: it waits for the
+// one under way, and none runs from on_park to on_resume, so on_park never
+// overlaps one. 10 parks, while records come every 5 ms, each a need asked,
+// and every frame held, asked again each millisecond; each hook takes a
+// millisecond.
+TEST_F(LivePlayerTest, AParkWaitsForAProgramsLiveHookAndOnParkOverlapsNone) {
+  constexpr auto kPace = 5ms;
+  struct Seen {
+    std::atomic<int> inside{0};
+    std::atomic<int> calls{0};
+    std::atomic<int> overlaps{0};
+    std::atomic<bool> parked{false};
+  };
+  const auto seen = std::make_shared<Seen>();
+  const auto in_hook = [seen] {
+    ++seen->inside;
+    ++seen->calls;
+    if (seen->parked) {
+      ++seen->overlaps;  // run between on_park and on_resume
+    }
+    std::this_thread::sleep_for(1ms);
+    --seen->inside;
+  };
+  hooks_.emplace();
+  hooks_->live_delay = [in_hook] {
+    in_hook();
+    return std::chrono::nanoseconds(0);
+  };
+  hooks_->data_ready = [in_hook](const FrameStamp&) {
+    in_hook();
+    return FrameCommit::kHold;
+  };
+  hooks_->on_park = [seen] {
+    if (seen->inside != 0) {
+      ++seen->overlaps;
+    }
+    seen->parked = true;
+    std::this_thread::sleep_for(2ms);
+    if (seen->inside != 0) {
+      ++seen->overlaps;
+    }
+  };
+  hooks_->on_resume = [seen] { seen->parked = false; };
+  const std::unique_ptr<networking::StreamServer> server = serve();
+  ASSERT_NE(server, nullptr);
+  const Publisher flow(*server, recording_, kPace);
+  StreamPlayer* player = start_live(server->port());
+  ASSERT_NE(player, nullptr);
+  for (int n = 0; n < 10; ++n) {
+    SCOPED_TRACE(::testing::Message() << "park " << n);
+    const int calls = seen->calls;
+    ASSERT_TRUE(eventually([&] { return seen->calls >= calls + 5; }));
+    ASSERT_TRUE(player->park(kArrival));
+    std::this_thread::sleep_for(5ms);
+    player->unpark();
+  }
+  EXPECT_EQ(seen->overlaps, 0);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
