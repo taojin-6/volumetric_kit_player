@@ -239,7 +239,7 @@ struct StreamPlayer::Connection {
 };
 
 core::Result<std::unique_ptr<StreamPlayer>> StreamPlayer::open(
-    const std::string& path) {
+    const std::string& path, AudioOutMaker make_audio) {
   try {
     VKC_ASSIGN(std::unique_ptr<stream::StreamReader> reader,
                stream::StreamReader::open(path));
@@ -248,8 +248,10 @@ core::Result<std::unique_ptr<StreamPlayer>> StreamPlayer::open(
     if (!track || reader->stats()[*track].records == 0) {
       return core::Status::not_found(path + ": no geometry to play");
     }
-    return std::unique_ptr<StreamPlayer>(
-        new StreamPlayer(std::move(reader), *track));
+    std::optional<AudioTrackChoice> audio =
+        find_audio_track(reader->session(), reader->stats(), *track);
+    return std::unique_ptr<StreamPlayer>(new StreamPlayer(
+        std::move(reader), *track, std::move(audio), std::move(make_audio)));
   } catch (...) {
     return core::exception_status("StreamPlayer::open",
                                   core::Status::Code::IoError);
@@ -272,9 +274,13 @@ core::Result<std::unique_ptr<StreamPlayer>> StreamPlayer::connect(
 }
 
 StreamPlayer::StreamPlayer(std::unique_ptr<stream::StreamReader> reader,
-                           std::uint16_t track)
+                           std::uint16_t track,
+                           std::optional<AudioTrackChoice> audio,
+                           AudioOutMaker make_audio)
     : reader_(std::move(reader)),
       track_(track),
+      audio_track_(std::move(audio)),
+      make_audio_(std::move(make_audio)),
       clock_(reader_->session().tracks[track].rate.num,
              reader_->session().tracks[track].rate.den) {}
 
@@ -318,13 +324,57 @@ core::Status StreamPlayer::start(core::Device& device,
   config_ = config;
   exchange_ = &exchange;
   hooks_ = hooks;
+  if (audio_track_) {
+    VKC_TRY(start_audio());
+  }
   try {
     worker_ = std::thread([this] { run(); });
   } catch (...) {
-    return core::exception_status("StreamPlayer::start",
-                                  core::Status::Code::IoError);
+    core::Status failed = core::exception_status("StreamPlayer::start",
+                                                 core::Status::Code::IoError);
+    drop_audio();  // a start again makes its own
+    return failed;
   }
   return {};
+}
+
+core::Status StreamPlayer::start_audio() {
+  const AudioFormat format = played_format(audio_track_->params);
+  std::unique_ptr<AudioOut> out;
+  try {
+    VKC_ASSIGN(out, make_audio_ ? make_audio_(format)
+                                : AudioOut::open_default(format));
+  } catch (...) {
+    return core::exception_status("StreamPlayer's audio output",
+                                  core::Status::Code::IoError);
+  }
+  if (out == nullptr) {
+    return core::Status::invalid_argument(
+        "StreamPlayer: the audio output maker made none");
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    out->set_gain(muted_ ? 0.0f : 1.0f);
+    if (clock_.playing()) {
+      out->play();
+    }
+    audio_ = std::move(out);
+  }
+  // Audio starts at the first geometry pts (DECISIONS.md).
+  core::Result<std::unique_ptr<AudioFeeder>> feeder = AudioFeeder::start(
+      *reader_, *audio_track_, reader_->stats()[track_].min_pts_ns, *audio_);
+  if (!feeder.ok()) {
+    drop_audio();
+    return std::move(feeder).status();
+  }
+  feeder_ = std::move(feeder).value();
+  return {};
+}
+
+void StreamPlayer::drop_audio() {
+  feeder_.reset();  // joined first: it writes into the output
+  std::lock_guard<std::mutex> lock(mutex_);
+  audio_.reset();
 }
 
 template <typename Change>
@@ -339,19 +389,35 @@ void StreamPlayer::control(Change&& change) {
 // Live, the playback controls do nothing: the sender paces.
 void StreamPlayer::play() {
   if (!live()) {
-    control([this] { clock_.play(); });
+    control([this] {
+      clock_.play();
+      if (audio_) {
+        audio_->play();
+      }
+    });
   }
 }
 
 void StreamPlayer::pause() {
   if (!live()) {
-    control([this] { clock_.pause(); });
+    control([this] {
+      clock_.pause();
+      if (audio_) {
+        audio_->pause();
+      }
+    });
   }
 }
 
+// A step is the frames' alone: the audio pauses.
 void StreamPlayer::step() {
   if (!live()) {
-    control([this] { clock_.step(); });
+    control([this] {
+      clock_.step();
+      if (audio_) {
+        audio_->pause();
+      }
+    });
   }
 }
 
@@ -371,6 +437,25 @@ bool StreamPlayer::loop() const {
   return loop_;
 }
 
+void StreamPlayer::set_muted(bool on) {
+  control([this, on] {
+    muted_ = on;
+    if (audio_) {
+      audio_->set_gain(on ? 0.0f : 1.0f);
+    }
+  });
+}
+
+bool StreamPlayer::muted() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return muted_;
+}
+
+std::optional<std::uint64_t> StreamPlayer::audio_position() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return audio_ ? audio_->position() : std::nullopt;
+}
+
 // Live too: the decoder takes it at the next record.
 void StreamPlayer::set_deblock(bool on) {
   control([this, on] { deblock_ = on; });
@@ -381,6 +466,8 @@ bool StreamPlayer::deblock() const {
   return deblock_;
 }
 
+// TODO: with a device output, a park stops the audio and an unpark resumes
+// it; the null output and the feeder run on through a park.
 bool StreamPlayer::park(std::chrono::milliseconds timeout) {
   const Clock::time_point deadline = Clock::now() + timeout;
   {
@@ -414,9 +501,17 @@ void StreamPlayer::taken() {
 }
 
 void StreamPlayer::stop() {
-  control([this] { quit_ = true; });
+  control([this] {
+    quit_ = true;
+    if (audio_) {
+      audio_->pause();
+    }
+  });
   if (worker_.joinable()) {
     worker_.join();
+  }
+  if (feeder_) {
+    feeder_->stop();
   }
 }
 
@@ -491,6 +586,11 @@ core::CommandBatch StreamPlayer::new_batch(bool timed) {
 
 core::Status StreamPlayer::play_track() {
   for (std::uint64_t number = 1;; ++number) {
+    // Each pass after the first, a loop's or a play's after the end, plays
+    // the audio from the start again: the feeder flushes the output.
+    if (number > 1 && feeder_) {
+      feeder_->restart();
+    }
     Pass pass(number);
     stream::Position pos = reader_->begin();
     std::optional<InFlight> frame;  // recorded and submitted
@@ -945,6 +1045,8 @@ core::Status StreamPlayer::hold_unread(networking::StreamClient& client,
 void StreamPlayer::pass_other(const stream::Record& /*record*/,
                               Clock::time_point /*arrived*/) {
   // Passed over unread: StreamClient::next skips its payload.
+  // TODO: live audio, on the live playout clock: today every record of
+  // another track is passed over.
 }
 
 core::Result<StreamPlayer::Release> StreamPlayer::release_front(
@@ -1509,11 +1611,14 @@ bool StreamPlayer::wait_hook_batch(std::uint64_t timeout_ns) {
 core::Result<bool> StreamPlayer::wait_at_end() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    // With loop off the last frame holds: played into, it pauses there;
-    // stepped onto, or paused on, it is held already, so a play, even one
-    // since that step, restarts.
+    // With loop off the last frame holds: played into, it pauses there, and
+    // the audio with it; stepped onto, or paused on, it is held already, so
+    // a play, even one since that step, restarts.
     if (!loop_ && clock_.playing() && !last_by_step_) {
       clock_.pause();
+      if (audio_) {
+        audio_->pause();
+      }
     }
   }
   for (;;) {

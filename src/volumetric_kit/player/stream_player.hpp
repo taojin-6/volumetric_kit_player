@@ -34,6 +34,8 @@
 #include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/grid/stream/stream_reader.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/player/audio_feeder.hpp"
+#include "volumetric_kit/player/audio_out.hpp"
 #include "volumetric_kit/player/live_clock.hpp"
 #include "volumetric_kit/player/live_connection.hpp"
 #include "volumetric_kit/player/playback.hpp"
@@ -219,6 +221,16 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 /// @ref status reports it. Live, a network or protocol failure is none
 /// (@ref connect).
 ///
+/// **Audio.** A file's Audio track (find_audio_track) plays beside its
+/// geometry through an AudioOut made at @ref start, fed by an AudioFeeder on
+/// a thread of its own from the first geometry pts. The geometry's pacing is
+/// as without it: the frames are the master clock. The audio follows the
+/// controls: a pause, a step, or the end of the track with loop off pauses
+/// it, so its position holds, and a play plays it; each pass of the track, a
+/// loop's or a play's after the end, flushes it and starts its cursor again;
+/// @ref set_muted sets its gain to 0, its clock running. A file without one
+/// has no feeder and no output. Live, there is no audio.
+///
 /// **Timing.** Each frame's stamp has its stages' host and wait times, and
 /// the worker's device counts, always; its device times only as
 /// @ref set_device_timing asks, off until then.
@@ -235,7 +247,8 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 /// and data_ready says whether a frame meshed is published (@ref connect).
 ///
 /// **Threads.** The controls (@ref play, @ref pause, @ref step,
-/// @ref set_loop, @ref set_deblock), their reads, @ref park, @ref unpark and
+/// @ref set_loop, @ref set_deblock, @ref set_muted), their reads,
+/// @ref audio_position, @ref park, @ref unpark and
 /// @ref taken lock the mutex the worker waits under, so they are safe from
 /// any thread, and each change and each @ref taken wakes the worker;
 /// @ref start, @ref stop and the destructor run on one thread at a time. Only
@@ -271,7 +284,10 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 class StreamPlayer {
  public:
   /// @brief Open @p path and find what to play, on the host alone.
-  /// @param path  A `.vrst` file.
+  /// @param path        A `.vrst` file.
+  /// @param make_audio  What makes the output its Audio track, if it has one
+  ///                    (find_audio_track), plays through, at @ref start;
+  ///                    empty for AudioOut::open_default.
   /// @return The player, playing with loop on once started;
   ///         `StreamReader::open`'s refusal, such as
   ///         `Status::Code::NotFound` for a missing file and
@@ -279,7 +295,7 @@ class StreamPlayer {
   ///         or `Status::Code::NotFound` for a stream with no geometry
   ///         track, or none with a record.
   static core::Result<std::unique_ptr<StreamPlayer>> open(
-      const std::string& path);
+      const std::string& path, AudioOutMaker make_audio = {});
 
   /// @brief A player of what a sender serves at @p address
   ///        (grid::networking::StreamServer). It does no I/O, so it is safe
@@ -339,6 +355,9 @@ class StreamPlayer {
   const LiveClock* live_clock() const noexcept {
     return live_clock_ ? &*live_clock_ : nullptr;
   }
+  /// @return Whether a file's Audio track plays beside its geometry; false
+  ///         live.
+  bool has_audio() const noexcept { return audio_track_.has_value(); }
 
   /// @brief Start the worker on @p device; it builds first (above).
   /// @param device     The compute device; it must outlive this.
@@ -352,8 +371,9 @@ class StreamPlayer {
   /// @param hooks      Whose after_mesh, on_park and on_resume run, and
   ///                   live its live_delay and data_ready, or null for none;
   ///                   it must outlive the worker.
-  /// @return OK; `Status::Code::InvalidArgument` once started or stopped; or
-  ///         the thread's failure.
+  /// @return OK; `Status::Code::InvalidArgument` once started or stopped, or
+  ///         for an audio output maker that made none; the audio output's
+  ///         or the feeder's failure, with audio; or the thread's failure.
   core::Status start(core::Device& device, core::Allocator& allocator,
                      const grid::mesh::MarchingCubesConfig& config,
                      FrameExchange& exchange,
@@ -372,6 +392,16 @@ class StreamPlayer {
   bool playing() const;
   /// @return Whether it loops.
   bool loop() const;
+  /// @brief Mutes or unmutes the audio: its gain 0 or 1, its clock running
+  ///        either way. Safe before @ref start, and without audio.
+  /// @param on  Whether it is muted.
+  void set_muted(bool on);
+  /// @return Whether the audio is muted: false until @ref set_muted.
+  bool muted() const;
+  /// @return The pts the audio output is playing (AudioOut::position);
+  ///         none without audio, before @ref start, or until the output
+  ///         has taken the feeder's first flush.
+  std::optional<std::uint64_t> audio_position() const;
 
   /// @brief Turns the decoder-side deblock on or off (grid's
   ///        `codec::Decoder::set_deblock`), on by default: from the next
@@ -458,14 +488,16 @@ class StreamPlayer {
   ///        rather than polling the exchange.
   void taken();
 
-  /// @brief Stop the worker, playing or paused, and join it. Idempotent.
+  /// @brief Stop the worker, playing or paused, and join it, then the audio
+  ///        feeder, the audio paused. Idempotent.
   void stop();
   /// @return OK, or the fatal error that stopped the worker.
   core::Status status() const;
 
  private:
   StreamPlayer(std::unique_ptr<grid::stream::StreamReader> reader,
-               std::uint16_t track);
+               std::uint16_t track, std::optional<AudioTrackChoice> audio,
+               AudioOutMaker make_audio);
   explicit StreamPlayer(LiveAddress address);
 
   // A step of the worker's, as park counts them: its build, a record's read,
@@ -499,6 +531,11 @@ class StreamPlayer {
   // The worker: builds, then plays the track or the live stream until quit or
   // a fatal error, into status_.
   void run();
+  // Make audio_ and start feeder_, at start, with the controls as set; on a
+  // failure, none is left.
+  core::Status start_audio();
+  // A failed start's: stop and join feeder_, then drop audio_.
+  void drop_audio();
   // Build decoder_, extractor_ and timer_ on the worker.
   core::Status build();
   core::Status play_track();
@@ -674,6 +711,12 @@ class StreamPlayer {
   // Live: the played track's records held as host bytes until released,
   // the worker's, made at need and reused across connections.
   std::unique_ptr<HeldRecords> held_;
+  // A file's Audio track to play, and what makes its output. start makes
+  // the output, under mutex_, and the feeder, its producer, destroyed first.
+  std::optional<AudioTrackChoice> audio_track_;
+  AudioOutMaker make_audio_;
+  std::unique_ptr<AudioOut> audio_;
+  std::unique_ptr<AudioFeeder> feeder_;
 
   // The worker's: start sets what it builds on, and the worker builds the
   // rest; destroyed hook batch first, then the extractor, after the join.
@@ -719,6 +762,7 @@ class StreamPlayer {
   std::condition_variable changed_;
   Playback clock_;
   bool loop_ = true;
+  bool muted_ = false;
   bool deblock_ = true;  // the decoder's, from its next decode
   bool parked_ = false;  // no step starts
   int busy_ = 0;         // steps under way

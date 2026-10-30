@@ -37,6 +37,10 @@ vp_add_test(live_clock volumetric_kit::player)
 target_sources(vp_live_clock_test PRIVATE test_allocation_failure.cpp)
 vp_add_test(held_records volumetric_kit::player)
 vp_add_test(playback_stats volumetric_kit::player)
+# The audio ring, the outputs and the feeder, on the host with synthetic frames:
+# no device, no sound.
+vp_add_test(audio_out volumetric_kit::player)
+vp_add_test(audio_feeder volumetric_kit::player)
 # The decode and mesh worker, on a device (the core's fixtures), over the tests'
 # streams.
 vp_add_test(stream_player STREAMS volumetric_kit::player

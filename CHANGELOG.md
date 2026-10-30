@@ -208,10 +208,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The stats' live "delay" line, D and the need that set it, and the
   latency's "buffer" leg, the wait as bytes.
 
+- A file's audio: its first Audio track on the geometry's clock (grid's
+  `TrackKind::Audio`) plays beside its geometry through `AudioOut`
+  (`audio_out.hpp`), fed ahead by `AudioFeeder` (`audio_feeder.hpp`)
+  through a lock-free `AudioRing` and placed by pts, starting at the
+  geometry's first pts; for now through the silent `NullAudioOut`
+  everywhere. The frames are paced as before. A pause, a step or the end
+  with loop off pauses the audio, a play plays it, each pass flushes it and
+  reads the track again, and a mute is gain 0. `StreamPlayer::open` takes an
+  `AudioOutMaker`; `StreamPlayer::has_audio`, `set_muted`, `muted` and
+  `audio_position`. A file with no Audio track plays as before, with no
+  output or feeder.
+
 ### Changed
 
 - build: the iOS app needs iOS 26 or newer: `cmake --preset ios` targets
   iOS 26.0, the family's iOS floor.
+- build: grid at #9's merge (01bdc64, 0.4.0), for its Audio tracks, and
+  core at #70's merge (2120e62, 0.30.0), grid's floor; the player requires
+  both versions. Since its last pin, grid's marching cubes give each vertex
+  the field's gradient at it as its normal, and its encoder holds P-frames
+  a quantization step against their reference, as the tests' streams are
+  now written. CI's lint job takes the core's trigger check at the core
+  pin.
 - build: the player builds on core, volumetric_kit_grid and gfx, and no
   longer fetches recon. grid, split out of recon (recon #309), holds all the
   player took from recon (the stream reader and client, the codec, Marching
