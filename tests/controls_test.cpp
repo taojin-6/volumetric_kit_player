@@ -37,11 +37,10 @@
 // work area wider than tall, the rate and a program's lines over it, the
 // worker's column as tall with them as without, and a line breaks against the
 // room its column has. Beside a program's panel (gfx's DockedPanel), docked
-// right
-// or at the bottom, safe areas kept clear, the controls, Source and the stats
-// sit in the scene's part of the work area, clear of the panel's handle and
-// header; and the panel's box is drawn only when given, after Texture, and a
-// tap opens and closes the panel.
+// right or at the bottom, safe areas kept clear, the controls, Source and the
+// stats sit in the scene's part of the work area, clear of the panel's handle
+// and header; and the panel's box is drawn only when given, after Texture, and
+// a tap opens and closes the panel.
 
 #include "volumetric_kit/player/controls.hpp"
 

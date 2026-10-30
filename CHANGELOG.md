@@ -202,7 +202,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   core main at #65's merge (a4a6fff, 0.29.0), grid main (cbf7a6e, 0.1.0) and
   gfx main at #160's merge (17b3192), and requires core 0.29.0, its pin's
   version and grid's floor, and grid 0.1.0 with each tier it links; gfx
-  since moved to #166's head (fc459a1), on #165's merge, for
+  since moved to #166's merge (0b750b0), on #165's merge, for
   `HybridMeshFrame::viewport` and `ui::DockedPanel`. The
   worker's device asks for grid's requirements, without the external-memory
   and Metal-object extensions recon asked for, where offered, for its camera
