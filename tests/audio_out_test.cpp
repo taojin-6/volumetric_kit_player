@@ -128,27 +128,34 @@ TEST(AudioRing, ASkipDropsTheFramesBeforeItsIndex) {
 
 // One thread writes a count, another reads it, through a ring much shorter
 // than the count: every frame arrives, once and in order. Under
-// ThreadSanitizer, the ring's handoff.
+// ThreadSanitizer, the ring's handoff. The ring copies with memmove, which
+// macOS's sanitizer does not watch, so the first frame of each batch also
+// goes in a plain array beside the ring: written before the ring takes the
+// batch and read after the ring gives that frame, so only the ring orders
+// the two. One store a batch, as a loop of them is vectorized at -O2 into
+// stores the sanitizer does not watch either.
 TEST(AudioRing, OneThreadWritesAndAnotherReadsEveryFrameInOrder) {
   constexpr std::size_t kTotal = 1 << 18;  // exact in a float's 24 bits
+  constexpr std::size_t kBatch = 64;
   AudioRing ring(256, 2);
+  std::vector<std::size_t> firsts(kTotal / kBatch, 0);  // each batch's
   std::thread producer([&] {
-    std::vector<float> frames(2 * 64);
+    std::vector<float> frames(2 * kBatch);
     std::size_t sent = 0;
     while (sent < kTotal) {
-      const std::size_t n = std::min<std::size_t>(64, kTotal - sent);
-      for (std::size_t i = 0; i < n; ++i) {
+      for (std::size_t i = 0; i < kBatch; ++i) {
         frames[2 * i] = static_cast<float>(sent + i);
         frames[2 * i + 1] = -static_cast<float>(sent + i);
       }
+      firsts[sent / kBatch] = sent;
       std::size_t done = 0;
-      while (done < n) {
-        done += ring.write(frames.data() + 2 * done, n - done);
-        if (done < n) {
+      while (done < kBatch) {
+        done += ring.write(frames.data() + 2 * done, kBatch - done);
+        if (done < kBatch) {
           std::this_thread::yield();
         }
       }
-      sent += n;
+      sent += kBatch;
     }
   });
   std::vector<float> out(2 * 100);
@@ -157,8 +164,10 @@ TEST(AudioRing, OneThreadWritesAndAnotherReadsEveryFrameInOrder) {
   while (got < kTotal) {
     const std::size_t n = ring.read(out.data(), 100);
     for (std::size_t i = 0; i < n && in_order; ++i) {
-      in_order = out[2 * i] == static_cast<float>(got + i) &&
-                 out[2 * i + 1] == -static_cast<float>(got + i);
+      const std::size_t frame = got + i;
+      in_order = out[2 * i] == static_cast<float>(frame) &&
+                 out[2 * i + 1] == -static_cast<float>(frame) &&
+                 (frame % kBatch != 0 || firsts[frame / kBatch] == frame);
     }
     got += n;
     if (n == 0) {
@@ -376,9 +385,9 @@ TEST(NullAudioOut, ItsOwnThreadPlaysBySteadyClock) {
   ASSERT_TRUE(at.has_value());
   EXPECT_GT(*at, kStart);
   // A tick renders the time since the last, so the first after play may
-  // count up to a period before it.
-  const auto most =
-      passed + std::chrono::nanoseconds(volumetric_kit::player::kNullPeriod);
+  // count time before it: a period on time, at most a second (a tick's
+  // most) on a runner slow to wake it.
+  const auto most = passed + std::chrono::nanoseconds(1s);
   EXPECT_LE(*at, kStart + static_cast<std::uint64_t>(most.count()));
 }
 

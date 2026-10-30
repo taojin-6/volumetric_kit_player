@@ -13,10 +13,10 @@
 // audio starts at the first geometry pts, records before it dropped or
 // trimmed and a later first record led by silence; a gap past one chunk is
 // silence and jitter within one follows on; an overlap past one chunk is
-// dropped; it plays the first playable track on the geometry's clock,
-// downmixed; a restart flushes the output and reads from the start; it
-// keeps between its low and high lead; and on threads, under
-// ThreadSanitizer, the null output on its own clock plays what it writes.
+// dropped; it plays the first playable track on the geometry's clock, its
+// channels past the second dropped; a restart flushes the output and reads
+// from the start; it keeps between its low and high lead; and on threads,
+// the null output on its own clock plays what it writes.
 
 #include "volumetric_kit/player/audio_feeder.hpp"
 
@@ -323,7 +323,7 @@ TEST(ToPlayed, SamplesAreOver32768) {
                                      32767.0f / 32768.0f}));
 }
 
-TEST(ToPlayed, MoreThanTwoChannelsAreDownmixedToTheFirstTwo) {
+TEST(ToPlayed, ChannelsPastTheSecondAreDropped) {
   EXPECT_EQ(played_channels(1), 1u);
   EXPECT_EQ(played_channels(2), 2u);
   EXPECT_EQ(played_channels(6), 2u);
@@ -475,7 +475,8 @@ TEST(AudioFeeder, AnOverlapPastOneChunkIsDropped) {
 }
 
 // Of an Audio track on another clock, one of an unknown codec, the first
-// playable one (4 channels, downmixed) and one after it, the third plays.
+// playable one (4 channels, the last two dropped) and one after it, the
+// third plays.
 TEST(AudioFeeder, ItPlaysTheFirstPlayableTrackOnTheGeometrysClock) {
   Scratch scratch;
   const std::vector<std::int16_t> other = ramp(10000, kChunk);
@@ -549,7 +550,9 @@ TEST(AudioFeeder, ItKeepsBetweenItsLowAndHighLead) {
 }
 
 // The null output's own thread drains what the feeder's writes, on
-// steady_clock: under ThreadSanitizer, the ring's two sides and the flush.
+// steady_clock, as in the player: under ThreadSanitizer, the feeder's thread
+// beside the output's, and a restart. The ring's handoff is AudioRing's
+// two-thread test's.
 TEST(AudioFeeder, OnThreadsTheNullOutputPlaysWhatItWrites) {
   Scratch scratch;
   std::vector<Rec> records = {{0, 0, {}}};
