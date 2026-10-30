@@ -78,6 +78,10 @@ core::Status LiveAudio::begin(const std::optional<AudioTrackChoice>& track,
     }
   }
   track_ = track;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tracked_ = true;
+  }
   period_ = period;
   underruns_ = out_->stats().underruns;
   counting_ = false;
@@ -103,6 +107,13 @@ void LiveAudio::end() {
   need_ns_.store(0, std::memory_order_relaxed);
   late_ns_.store(0, std::memory_order_relaxed);
   set_playing(false);
+  // What the output holds is the connection's: dropped at its next render,
+  // so neither an unpark nor the next connection plays it stale.
+  std::lock_guard<std::mutex> lock(mutex_);
+  tracked_ = false;
+  if (out_ != nullptr) {
+    out_->flush(0);
+  }
 }
 
 void LiveAudio::unplace() {
@@ -303,7 +314,7 @@ std::optional<std::int64_t> LiveAudio::heard_pts(
 
 std::optional<std::uint64_t> LiveAudio::position() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return out_ != nullptr ? out_->position() : std::nullopt;
+  return out_ != nullptr && tracked_ ? out_->position() : std::nullopt;
 }
 
 LiveAudioStats LiveAudio::stats() const {

@@ -186,8 +186,9 @@ class LiveAudio final : public AudioMaster {
   core::Status begin(const std::optional<AudioTrackChoice>& track,
                      std::chrono::nanoseconds period);
   /// @brief The worker, at a connection's end: no track, no need, and audio
-  ///        no longer plays on the clock. The output plays out what it
-  ///        holds.
+  ///        no longer plays on the clock. What the output holds is dropped
+  ///        (AudioOut::flush), so neither an @ref unpark nor the next
+  ///        connection plays it stale.
   void end();
 
   /// @brief The worker: a record of the track arrived whole at @p at:
@@ -222,7 +223,8 @@ class LiveAudio final : public AudioMaster {
   ///         not in step.
   std::optional<std::int64_t> heard_pts(
       Playback::Clock::time_point now) const noexcept override;
-  /// @return The output's position (AudioOut::position); none without one.
+  /// @return The output's position (AudioOut::position); none without a
+  ///         track or an output.
   std::optional<std::uint64_t> position() const;
   /// @return What it did.
   LiveAudioStats stats() const;
@@ -248,11 +250,13 @@ class LiveAudio final : public AudioMaster {
   const Now now_;
 
   // The output, swapped under mutex_ by the worker alone, so the worker
-  // reads it without; the gain and the park, for an output made later.
+  // reads it without; the gain and the park, for an output made later; and
+  // whether a track plays, for position().
   mutable std::mutex mutex_;
   std::unique_ptr<AudioOut> out_;
   float gain_ = 1.0f;
   bool parked_ = false;
+  bool tracked_ = false;
   LiveAudioStats stats_;
 
   // The worker's.

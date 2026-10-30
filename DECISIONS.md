@@ -56,6 +56,9 @@ owner chose live first.
   differ by up to about 200 ppm, and D is set by needs alone.
 - **An underrun places the audio afresh**, its late frames dropped. Why: it
   stays in sync rather than playing late.
+- **A connection's end drops what the output holds.** Why: a parked output
+  keeps its ring and an unpark starts it at once, so each return to the
+  iOS app would play up to D of the last connection's audio.
 - **The null output's position runs on from its last render by its clock**,
   through what it holds, as a device output's is mapped to now. Why: as the
   master it would lag up to a render and step.

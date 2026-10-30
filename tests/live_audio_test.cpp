@@ -9,7 +9,9 @@
 // states no need and makes no output; an output of the track's format is
 // kept across connections and one of another made; a maker's failure leaves
 // no track; the gain and a park reach an output made later. A connection's
-// first record is heard at its present time. Simulated, on a manual clock:
+// first record is heard at its present time, and its end drops what the
+// output holds, so an unpark plays nothing stale and the position is none.
+// Simulated, on a manual clock:
 // geometry and audio records muxed by pts, with network jitter, the
 // sender's clock, its mic and the viewer's output each up to 100 ppm off,
 // and a 200 ms stall: the audio is heard within its band of the clock
@@ -140,6 +142,26 @@ std::function<Clock::time_point()> reader_of(const vp_test::ManualClock& now) {
   return [&now] { return now(); };
 }
 
+// A maker of device outputs over a fake device (fake_audio_device.hpp),
+// which keeps the last it made in `made`, for the test to render.
+vkp::AudioOutMaker device_maker(std::shared_ptr<vp_test::FakeDeviceState> state,
+                                vkp::DeviceAudioOut** made) {
+  return [state, made](const vkp::AudioFormat& format)
+             -> core::Result<std::unique_ptr<AudioOut>> {
+    VKC_ASSIGN(
+        std::unique_ptr<vkp::DeviceAudioOut> out,
+        vkp::DeviceAudioOut::create(format, vp_test::fake_device(state)));
+    *made = out.get();
+    return std::unique_ptr<AudioOut>(std::move(out));
+  };
+}
+
+// The samples of `samples` that are not silence.
+std::ptrdiff_t sounded(const std::vector<float>& samples) {
+  return std::count_if(samples.begin(), samples.end(),
+                       [](float sample) { return sample != 0.0f; });
+}
+
 TEST(LiveAudio, WithNoTrackItPlaysNothingAndStatesNoNeed) {
   vp_test::ManualClock now;
   Outputs outputs;
@@ -220,6 +242,39 @@ TEST(LiveAudio, AConnectionsFirstRecordIsHeardAtItsPresentTime) {
   EXPECT_EQ(Clock::time_point(now()), vkp::present(playout.point, kPts0));
   EXPECT_EQ(audio.stats().placements, 1u);
   EXPECT_EQ(audio.stats().records, 1u);
+}
+
+// A connection's end drops what the output holds: a parked device output
+// keeps its ring and an unpark starts it at once, so it would play the last
+// connection's audio stale. Its position is then none. Mutant: an end that
+// leaves the output's frames.
+TEST(LiveAudio, AnEndDropsWhatTheOutputHoldsSoAnUnparkPlaysNothingStale) {
+  auto state = std::make_shared<vp_test::FakeDeviceState>();
+  vkp::DeviceAudioOut* device = nullptr;
+  LiveClock clock;
+  LiveAudio audio(clock, device_maker(state, &device));
+  ASSERT_TRUE(audio.begin(mono_track(), kPeriod).ok());
+  ASSERT_NE(device, nullptr);
+  const Clock::time_point at = Clock::now();
+  clock.arrived(kPts0, at, 0ns, audio.need());
+  const std::vector<std::uint8_t> pcm = tone();
+  for (std::uint64_t i = 0; i < 3; ++i) {
+    stream::RecordInfo info;
+    info.track = 1;
+    info.key = true;
+    info.pts_ns = kPts0 + i * 20'000'000;
+    audio.arrived(info, pcm.data(), pcm.size(), at);
+  }
+  // 70 ms of silence before them (D less the route's 10 ms), then 10 ms of
+  // the tone; 50 ms of it left.
+  ASSERT_GT(sounded(vp_test::render(*device, kChunk * 4, state->host_ns)), 0);
+  ASSERT_TRUE(audio.position().has_value());
+  audio.park();
+  audio.end();
+  audio.unpark();
+  EXPECT_EQ(sounded(vp_test::render(*device, kChunk * 10, state->host_ns)), 0)
+      << "nothing of the last connection";
+  EXPECT_FALSE(audio.position().has_value()) << "none without a track";
 }
 
 // A sender and a viewer, simulated on the test's clock in 1 ms steps: the
