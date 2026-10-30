@@ -11,19 +11,19 @@
 // no track; the gain and a park reach an output made later. A connection's
 // first record is heard at its present time, and its end drops what the
 // output holds, so an unpark plays nothing stale and the position is none.
-// Simulated, on a manual clock:
-// geometry and audio records muxed by pts, with network jitter, the
-// sender's clock, its mic and the viewer's output each up to 100 ppm off,
-// and a 200 ms stall: the audio is heard within its band of the clock
-// before the stall and again soon after it, following the clock's point in
-// moves of kFollowBand or more, few a minute, the applied D rising by at most
-// kSlewRise a kSlewEvery while audio plays and falling back slowly, the
-// stall's underruns raising audio's need; an output 1000 ppm fast or slow
-// is trimmed back into the band, D never moving; underruns raise the need a
-// step a run of them, up to its ceiling, and it falls a step each
-// kLiveWindow without; a join's settling fall past kAudioReach places the
-// audio afresh; and a route of more latency than the clamp leaves the audio
-// late by the excess. On threads, under ThreadSanitizer: what is heard, the
+// Simulated, on a manual clock: geometry and audio records muxed by pts,
+// with network jitter, the sender's clock, its mic and the viewer's output
+// each up to 100 ppm off, and a 200 ms stall: the audio is heard within its
+// band of the clock before the stall and again soon after it, following the
+// clock's point in moves of kFollowBand or more, few a minute, the applied D
+// rising by at most kSlewRise a kSlewEvery while audio plays and falling
+// back slowly, the stall's underruns raising audio's need; an output
+// 1000 ppm fast or slow is trimmed back into the band, D never moving;
+// underruns raise the need a step a run of them, up to its ceiling, and it
+// falls a step each kLiveWindow without; a join's settling fall past
+// kAudioReach places the audio afresh; and through a route of more latency
+// than the clamp the audio is heard late by the excess, still the master on
+// the clock's pts. On threads, under ThreadSanitizer: what is heard, the
 // need and the stats are read while the worker feeds the audio and the null
 // output renders on its own thread.
 
@@ -37,6 +37,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -630,28 +631,70 @@ TEST(LiveAudioSim, ASettlingFallPastTheReachPlacesTheAudioAfresh) {
 }
 
 // A route of more latency than D's clamp: audio's need passes it, the
-// clock clamps D, and the audio plays late by the excess, which heard_pts
-// adds back onto the clock's pts.
+// clock clamps D, and the audio is heard late by the excess, which
+// heard_pts adds back onto the clock's pts, so what is heard is still the
+// master. Simulated on the test's clock, which is the fake device's too:
+// geometry 25 a second and the audio in 20 ms chunks, each arriving as its
+// pts comes; a look every 5 ms and a render every 10 ms. Mutant: heard_pts
+// without the lateness.
 TEST(LiveAudio, ARoutePastTheClampLeavesTheAudioLateByTheExcess) {
   auto state = std::make_shared<vp_test::FakeDeviceState>();
   state->route.presentation_latency_s = 1.2;
+  vp_test::ManualClock now;
+  const auto host = [&] {
+    state->host_ns =
+        static_cast<std::uint64_t>(now().time_since_epoch().count());
+  };
+  host();
+  vkp::DeviceAudioOut* device = nullptr;
   LiveClock clock;
-  LiveAudio audio(clock,
-                  [state](const vkp::AudioFormat& format)
-                      -> core::Result<std::unique_ptr<AudioOut>> {
-                    VKC_ASSIGN(std::unique_ptr<vkp::DeviceAudioOut> out,
-                               vkp::DeviceAudioOut::create(
-                                   format, vp_test::fake_device(state)));
-                    return std::unique_ptr<AudioOut>(std::move(out));
-                  });
+  LiveAudio audio(clock, device_maker(state, &device), reader_of(now));
+  clock.set_audio_master(&audio);
   ASSERT_TRUE(audio.begin(mono_track(), kPeriod).ok());
   EXPECT_EQ(audio.need(), 1260ms);
   EXPECT_EQ(audio.late(), 260ms);
-  clock.arrived(kPts0, Clock::now(), 0ns, audio.need());
+  const std::vector<std::uint8_t> pcm = tone();
+  std::uint64_t chunk = 0;
+  for (std::uint64_t ms = 0; ms <= 1500; ++ms, now.advance(1ms)) {
+    host();
+    if (ms % 40 == 0) {
+      const std::uint64_t pts = kPts0 + ms * 1'000'000;
+      clock.arrived(pts, now(), 0ns, audio.need());
+      for (; kPts0 + chunk * 20'000'000 <= pts; ++chunk) {
+        stream::RecordInfo info;
+        info.track = 1;
+        info.key = true;
+        info.pts_ns = kPts0 + chunk * 20'000'000;
+        info.seq = chunk;
+        audio.arrived(info, pcm.data(), pcm.size(), now());
+      }
+    }
+    if (ms % 5 == 0) {
+      audio.look(now());
+    }
+    if (ms % 10 == 0) {
+      vp_test::render(*device, kChunk / 2, state->host_ns);
+    }
+  }
+  host();
   const Playout playout = clock.time().value();
   EXPECT_EQ(playout.target, vkp::kMaxLiveDelay);
   EXPECT_TRUE(playout.clamped);
   EXPECT_EQ(playout.need, DelayNeed::kAudio);
+  // What is heard runs late() behind the picture's now ...
+  const std::int64_t picture = vkp::pts_at(playout.point, now());
+  const std::optional<std::uint64_t> heard = audio.position();
+  ASSERT_TRUE(heard.has_value());
+  EXPECT_NEAR(static_cast<double>(static_cast<std::int64_t>(*heard) - picture),
+              -260e6, 1e6);
+  // ... and on the clock's pts it is the master.
+  EXPECT_TRUE(audio.playing());
+  const std::optional<std::int64_t> master = audio.heard_pts(now());
+  ASSERT_TRUE(master.has_value()) << "not heard in step";
+  EXPECT_LE(std::abs(*master - picture), vkp::kTrimBand.count());
+  EXPECT_EQ(clock.now_pts(playout, now()), *master);
+  EXPECT_EQ(audio.stats().placements, 1u);
+  EXPECT_EQ(audio.stats().underruns, 0u);
   audio.end();
   EXPECT_EQ(audio.late(), 0ns);
 }
