@@ -27,8 +27,7 @@ inline constexpr std::chrono::nanoseconds kMaxLiveDelay{
     std::chrono::seconds{1}};
 /// The window the offset is the least over, and the arrival need and the
 /// lead the largest over.
-inline constexpr std::chrono::nanoseconds kLiveWindow{
-    std::chrono::seconds{10}};
+inline constexpr std::chrono::nanoseconds kLiveWindow{std::chrono::seconds{10}};
 /// The samples a window holds: past 102.4 records a second it spans less
 /// than kLiveWindow.
 inline constexpr std::size_t kLiveSamples = 1024;
@@ -247,7 +246,7 @@ class LiveClock {
       std::numeric_limits<std::int64_t>::min();
   static_assert(std::atomic<std::int64_t>::is_always_lock_free);
 
-  mutable std::mutex mutex_;  // what follows, but point_ns_
+  mutable std::mutex mutex_;                      // what follows, but point_ns_
   std::array<Arrival, kLiveSamples> arrivals_{};  // a ring, oldest first
   std::size_t arrivals_head_ = 0, arrivals_size_ = 0;
   std::array<Lead, kLiveSamples> leads_{};  // a ring, oldest first

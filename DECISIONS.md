@@ -78,15 +78,15 @@ waits for it; latency gives, the pairing never does.
   and other tracks' records pass `pass_other`, which touches no clock.
 - **A file is unchanged:** paced by its pts, released when due, asked no
   live hook, with no playout; its log rows end with five empty fields.
-- **Measured** on the M5 Max: Rafa2 (30 fps) served on loopback by grid's
-  `serve_stream`, played by `vp_probe --connect` through the view, 1,500
-  frames a run. With no program, D is 26.6 / 30.1 ms (p50 / p95), set by
-  arrival, and due to presented 28.9 / 35.5 ms; 2 of 1,502 records were
-  meshed with a newer one. At `--live-delay 150`, D is 150 ms, due to
-  presented 146.0 / 157.1 ms, and every record is a frame. Frames are taken
-  7.6 / 10.0 ms after their present time, within the probe's 60 Hz tick. The
-  worker's host time a frame is as before (decode 0.19, submit 0.6, mesh
-  0.25 ms); a steady hold touches the ring's 16 MiB (RSS 58 MB against 41).
+- **Measured** on the M5 Max, two runs: Rafa2 (30 fps) served on loopback
+  by grid's `serve_stream`, played by `vp_probe --connect` through the view,
+  1,500 frames each. With no program, D is 23-27 ms at p50 (p95 25-30), set
+  by arrival, and due to presented 21-29 ms at p50 (p95 36-39). At
+  `--live-delay 150`, D is 150 ms and due to presented 146-148 ms at p50
+  (p95 157-166). Past the join's first frame, every record was a frame of
+  its own, in order. The worker's host time a frame stays under 1 ms
+  (decode, submit and mesh); a steady hold touches the ring's 16 MiB (RSS
+  58 MB against 41).
 
 ## 2026-10-29 — A program's docked panel
 

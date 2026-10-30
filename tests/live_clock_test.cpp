@@ -140,9 +140,8 @@ TEST(LiveClockNames, EachNeedHasItsName) {
 // after its steady time t0 + k periods.
 void steady(LiveClock& clock, std::uint64_t k, nanoseconds late = {},
             nanoseconds program = {}) {
-  clock.arrived(k * kPeriodNs, t0 + kPeriod * static_cast<std::int64_t>(k) +
-                                   late,
-                program);
+  clock.arrived(k * kPeriodNs,
+                t0 + kPeriod * static_cast<std::int64_t>(k) + late, program);
 }
 
 TEST(LiveClock, NoneBeforeTheFirstRecordAndAfterAReset) {
@@ -173,8 +172,7 @@ TEST(LiveClock, TheOffsetIsTheLeastOverTheWindow) {
   EXPECT_EQ(playout.offset, t0.time_since_epoch() - ms(3));
   EXPECT_EQ(clock.now_pts(playout, t0), vkp::pts_at(playout.point, t0));
   // Exactly kLiveWindow after the fastest, it stays...
-  clock.arrived(249 * kPeriodNs, t0 - ms(3) + vkp::kLiveWindow,
-                nanoseconds(0));
+  clock.arrived(249 * kPeriodNs, t0 - ms(3) + vkp::kLiveWindow, nanoseconds(0));
   EXPECT_EQ(now_of(clock).offset, t0.time_since_epoch() - ms(3));
   // ...and a nanosecond later it is gone: the least of the rest.
   clock.arrived(249 * kPeriodNs, t0 - ms(3) + vkp::kLiveWindow + nanoseconds(1),
@@ -203,13 +201,13 @@ TEST(LiveClock, ALateRecordRaisesTheTargetAtOnceByItsLateness) {
   const std::uint64_t pts = 11 * kPeriodNs;
   const Clock::time_point release =
       vkp::present(playout.point, pts) - playout.lead;
-  EXPECT_EQ(vkp::release_wait(pts, clock.now_pts(playout, release),
-                              playout.lead),
-            nanoseconds(0));
-  EXPECT_EQ(vkp::release_wait(pts,
-                              clock.now_pts(playout, release - nanoseconds(1)),
-                              playout.lead),
-            nanoseconds(1));
+  EXPECT_EQ(
+      vkp::release_wait(pts, clock.now_pts(playout, release), playout.lead),
+      nanoseconds(0));
+  EXPECT_EQ(
+      vkp::release_wait(pts, clock.now_pts(playout, release - nanoseconds(1)),
+                        playout.lead),
+      nanoseconds(1));
 }
 
 TEST(LiveClock, AJoinsBurstAddsNothing) {
@@ -311,7 +309,8 @@ TEST(LiveClock, AOneSecondGopAtAJoinLandsAtTheSteadyPoint) {
   }
   const nanoseconds burst_end = now_of(clock).point;
   for (std::uint64_t k = 25; k < 100; ++k) {
-    clock.arrived(k * kPeriodNs, t0 + kPeriod * static_cast<std::int64_t>(k - 24),
+    clock.arrived(k * kPeriodNs,
+                  t0 + kPeriod * static_cast<std::int64_t>(k - 24),
                   nanoseconds(0));
   }
   const Playout playout = now_of(clock);

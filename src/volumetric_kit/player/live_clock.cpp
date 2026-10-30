@@ -140,8 +140,7 @@ void LiveClock::arrived(std::uint64_t pts_ns, Clock::time_point at,
   for (std::size_t i = 0; i < arrivals_size_; ++i) {
     least = std::min(least, arrivals_[at_of(arrivals_head_, i)].ahead);
   }
-  push(arrivals_, &arrivals_head_, &arrivals_size_,
-       Arrival{at, ahead, least});
+  push(arrivals_, &arrivals_head_, &arrivals_size_, Arrival{at, ahead, least});
   program_need_ = std::max(program_need, nanoseconds(0));
   update(at);
 }
@@ -200,10 +199,10 @@ void LiveClock::update(Clock::time_point at) {
   next.clamped = need > kMaxLiveDelay;
   next.target = std::min(need, kMaxLiveDelay);
   const nanoseconds target_point = next.offset + next.target;
-  next.point = !state_ ? target_point
-                       : step_point(state_->point, target_point,
-                                    at - stepped_at_,
-                                    at - first_at_ < kLiveWindow);
+  next.point = !state_
+                   ? target_point
+                   : step_point(state_->point, target_point, at - stepped_at_,
+                                at - first_at_ < kLiveWindow);
   stepped_at_ = at;
   state_ = next;
   point_ns_.store(next.point.count(), std::memory_order_release);
