@@ -15,6 +15,8 @@
 #include <string_view>
 #include <vector>
 
+#include <glm/vec2.hpp>
+
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/ui/metrics_panel.hpp"
@@ -41,51 +43,78 @@ inline constexpr const char* kSourceWindow = "##player_source";
 /// stays inside 375 pt.
 inline constexpr float kButtonEms = 4.5f;
 
+/// @brief A rectangle of ImGui's display, in points: where the controls, the
+///        stats and Source are laid out.
+struct UiArea {
+  glm::vec2 pos{0.0f, 0.0f};   ///< Its top-left.
+  glm::vec2 size{0.0f, 0.0f};  ///< Its size.
+};
+
+/// @brief The main viewport's work area: the safe area on a phone
+///        (gfx::ui::ImGuiTouch), the window on a desktop.
+///
+/// @code
+/// draw_source(work_area());
+/// @endcode
+/// @return It, in points.
+/// @pre An ImGui frame is open.
+UiArea work_area();
+
 /// @brief Draw Play/Pause, Step, Loop, Normals, Deblock, Unlit and, when
-///        given, Texture in a row, the status line below, at the bottom
-///        centre of the main viewport's work area, so they stay clear of a
-///        notch and a home indicator; a live player's (StreamPlayer::live),
-///        Normals, Deblock, Unlit and, when given, Texture over its
-///        @ref live_status_line. Deblock, a box that shows and sets
-///        StreamPlayer::deblock, then Unlit and Texture, boxes, each go after
-///        the line's last control, or start a line below when it would not
-///        fit the work area with them, as Deblock does on a phone in
-///        portrait; a status line too wide for it breaks between its parts,
-///        as a stats line does. There is no text field, so touch needs no
-///        keyboard.
+///        given, Texture and a program's panel's box in a row, the status
+///        line below, at the bottom centre of @p area, so they stay clear of
+///        a notch, a home indicator and the panel; a live player's
+///        (StreamPlayer::live), Normals, Deblock, Unlit and, when given,
+///        Texture and the panel's box over its @ref live_status_line.
+///        Deblock, a box that shows and sets StreamPlayer::deblock, then
+///        Unlit, Texture and the panel's, boxes, each go after the line's
+///        last control, or start a line below when it would not fit @p area
+///        with them, as Deblock does on a phone in portrait; a status line
+///        too wide for it breaks between its parts, as a stats line does.
+///        There is no text field, so touch needs no keyboard.
 ///
 /// @code
 /// overlay.new_frame();
-/// draw_controls(player, shown, normals, unlit, &textured);
+/// draw_controls(player, shown, normals, unlit, &textured, work_area(),
+///               "Inspect", &panel_open);
 /// @endcode
-/// @param player   The controls act on it; they are safe from this thread.
-/// @param shown    The last stream frame drawn, for the status line.
-/// @param normals  The view's shading (PlayerView::normals): a press on
-///                 Normals flips it, and the button shows pressed while on.
-/// @param unlit    The view's Unlit (PlayerView::unlit), which its box shows
-///                 and a press flips.
-/// @param textured The view's Texture (PlayerView::textured), which its box
-///                 shows and a press flips; null draws no Texture box, as
-///                 for a view with no texture bound.
+/// @param player      The controls act on it; they are safe from this thread.
+/// @param shown       The last stream frame drawn, for the status line.
+/// @param normals     The view's shading (PlayerView::normals): a press on
+///                    Normals flips it, and the button shows pressed while
+///                    on.
+/// @param unlit       The view's Unlit (PlayerView::unlit), which its box
+///                    shows and a press flips.
+/// @param textured    The view's Texture (PlayerView::textured), which its
+///                    box shows and a press flips; null draws no Texture box,
+///                    as for a view with no texture bound.
+/// @param area        Where they go (@ref work_area, or scene_area).
+/// @param panel_label  The panel's box's label (PanelHooks::label); null
+///                     draws no box, as for a program with no panel.
+/// @param panel_open  Whether the panel is open, which its box shows and a
+///                    press flips; given with @p panel_label.
 /// @pre An ImGui frame is open on the view's context.
 void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
-                   bool& normals, bool& unlit, bool* textured);
+                   bool& normals, bool& unlit, bool* textured,
+                   const UiArea& area, const char* panel_label = nullptr,
+                   bool* panel_open = nullptr);
 
 /// @brief Draw the Source button, which asks for something else to play, at
-///        the top right of the main viewport's work area. Its window has no
-///        padding or border, so the button is all of it, a frame tall, as
-///        the stats' header is: the stats' body below the header clears it,
-///        as the controls at the bottom do, in either orientation.
+///        the top right of @p area. Its window has no padding or border, so
+///        the button is all of it, a frame tall, as the stats' header is: the
+///        stats' body below the header clears it, as the controls at the
+///        bottom do, in either orientation.
 ///
 /// @code
 /// overlay.new_frame();
-/// if (draw_source()) {
+/// if (draw_source(work_area())) {
 ///   source_requested = true;  // PlayerView::take_source_request
 /// }
 /// @endcode
+/// @param area  Where it goes (@ref work_area, or scene_area).
 /// @return Whether a tap or click pressed it in this frame.
 /// @pre An ImGui frame is open on the view's context.
-bool draw_source();
+bool draw_source(const UiArea& area);
 
 /// @brief A live player's status line.
 ///
@@ -187,8 +216,9 @@ std::vector<std::string> stats_lines(const PlaybackStats& stats,
 ///         frame or with none attached.
 std::string display_line(const gfx::FrameMetrics& render);
 
-/// @brief The "Stats" panel, at the top left of the main viewport's work
-///        area: a header (gfx::ui::begin_collapsible_panel) and below it, while
+/// @brief The "Stats" panel, at the top left of its area (the work area, or
+///        the scene's part of it: scene_area): a header
+///        (gfx::ui::begin_collapsible_panel) and below it, while
 ///        open, on a 60 % background, the @ref stats_lines, the worker's stage
 ///        table, per stream frame, and the renderer's, per display frame under
 ///        its @ref display_line (gfx::ui::draw_stage_table, each under a line
@@ -214,14 +244,15 @@ std::string display_line(const gfx::FrameMetrics& render);
 /// each table's window is stated
 /// on a shorter line ("per stream frame · 30/30 timed"), the one "GPU ·
 /// latency" line, the rate and a program's lines sit over the renderer's
-/// table, and, in a work area wider than tall, the renderer's table is beside
+/// table, and, in an area wider than tall, the renderer's table is beside
 /// the worker's, whose lines have the width it leaves them.
 ///
 /// @code
 /// StatsPanel panel(/*compact=*/is_phone);
 /// overlay.new_frame();
 /// panel.draw(stats, shown, triangles, profiler.metrics(),
-///            PlaybackStats::Clock::now(), player.live(), hooks.stats_line);
+///            PlaybackStats::Clock::now(), player.live(), work_area(),
+///            hooks.stats_line);
 /// @endcode
 class StatsPanel {
  public:
@@ -244,12 +275,14 @@ class StatsPanel {
   /// @param now        The time, for the rates and the rebuild.
   /// @param live       Whether they are a live player's, for
   ///                   @ref stats_lines.
+  /// @param area       Where it goes (@ref work_area, or scene_area): its
+  ///                   lines break against its width.
   /// @param program_line  A program's text (FrameHooks::stats_line), for
   ///                      @ref stats_lines; empty, none.
   /// @pre An ImGui frame is open on the view's context.
   void draw(const PlaybackStats& stats, const std::optional<FrameStamp>& shown,
             std::uint32_t triangles, const gfx::FrameMetrics& render,
-            Playback::Clock::time_point now, bool live,
+            Playback::Clock::time_point now, bool live, const UiArea& area,
             const std::function<std::string()>& program_line = {});
 
   /// @return Whether it is open.

@@ -6,7 +6,7 @@
 /// @file player_view.hpp
 /// @brief The window side of playback, on any window system: one device that
 ///        grid and gfx share, a swapchain, the newest mesh under an orbit
-///        camera, the controls and the stats.
+///        camera, the controls and the stats, beside a program's panel.
 
 #include <cstdint>
 #include <memory>
@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <glm/mat4x4.hpp>
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
 #include "volumetric_kit/core/base/result.hpp"
@@ -28,6 +29,7 @@
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
+#include "volumetric_kit/gfx/ui/docked_panel.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
@@ -94,6 +96,10 @@ struct PlayerViewConfig {
   bool unlit = false;
   /// The panel's Texture, at start (PlayerView::textured).
   bool textured = false;
+  /// A program's panel (FrameHooks::panel) at start: closed by default, its
+  /// shares and its handle's detents. A shell carries its state across a
+  /// rebuild of the view (PlayerView::panel_state).
+  gfx::ui::DockedPanelConfig panel;
 };
 
 /// @brief The requirements of the device the worker decodes and meshes on, as
@@ -152,7 +158,8 @@ glm::vec3 headlight(const glm::mat4& view);
 /// @brief The window side of playback. It holds one device that the worker
 ///        and the renderer share, a FIFO swapchain, and the newest mesh drawn
 ///        with an orbit camera, under the controls and the stats panel
-///        (StatsPanel) drawn by gfx. Each call from the window system is one
+///        (StatsPanel) drawn by gfx, beside a program's panel while it is
+///        open (FrameHooks::panel). Each call from the window system is one
 ///        tick.
 ///
 /// **Threads.** Every member but @ref player's controls, and the destructor,
@@ -213,15 +220,18 @@ class PlayerView {
   PlayerView(PlayerView&&) = delete;
   PlayerView& operator=(PlayerView&&) = delete;
 
-  /// @brief One tick: draw the controls and the stats, take the newest mesh
-  ///        (FrameTaker, with the commit hook), run before_draw, draw the
-  ///        mesh behind a GPU wait on its `ready` value (already reached, so
-  ///        it stalls nothing; it carries the worker's writes across queues)
-  ///        with the binding it returned, unless Texture is off and it names
-  ///        a texture set (@ref textured), and the view's own (Unlit), and
-  ///        present. A frame taken is stamped when taken and when presented
-  ///        (FrameStamp::taken, presented), and counted in the stats once
-  ///        presented; a skipped frame is neither.
+  /// @brief One tick: lay out the scene beside a program's panel while it
+  ///        is open, draw the controls and the stats in the scene's part and
+  ///        the panel's chrome, take the newest mesh (FrameTaker, with the
+  ///        commit hook), run before_draw and the panel's prepare, draw the
+  ///        mesh into the scene behind a GPU wait on its `ready` value
+  ///        (already reached, so it stalls nothing; it carries the worker's
+  ///        writes across queues) with the binding it returned, unless
+  ///        Texture is off and it names a texture set (@ref textured), and
+  ///        the view's own (Unlit), then the panel's record, and present
+  ///        (PanelHooks). A frame taken is stamped when taken and when
+  ///        presented (FrameStamp::taken, presented), and counted in the
+  ///        stats once presented; a skipped frame is neither.
   /// @pre The UI platform half bound to @ref ui_context ran its new_frame this
   ///      tick, unless @p extent is 0 x 0 (a touch shell skips the tick's
   ///      new_frame then).
@@ -229,7 +239,8 @@ class PlayerView {
   /// @return true once presented. false when nothing could render (0 x 0, or
   ///         the surface settling after a rebuild), so a desktop pump waits.
   ///         An error for device loss, a refused mesh, or the worker's own
-  ///         failure, its kernel build included (StreamPlayer::status).
+  ///         failure, its kernel build included (StreamPlayer::status). A
+  ///         panel's prepare failure stops the view as before_draw's does.
   ///         An allocation exception returns `OutOfMemory`; other exceptions
   ///         return `InvalidArgument`. After an exception, destroy and recreate
   ///         the view: subsequent ticks refuse without acquiring or submitting
@@ -269,6 +280,38 @@ class PlayerView {
   ///        the next frame (the desktop's T key).
   /// @param textured  Whether to draw it with the texture.
   void set_textured(bool textured) noexcept { textured_ = textured; }
+  /// @return Whether the program's panel (FrameHooks::panel) is open:
+  ///         PlayerViewConfig::panel's at first, and never with no panel.
+  ///         Its box in the controls and its close button flip it.
+  bool panel_open() const noexcept { return panel_.open(); }
+  /// @brief Open or close the program's panel from the next frame (the
+  ///        desktop's @ref panel_key); with no panel, nothing.
+  /// @param open  Whether to open it.
+  void set_panel_open(bool open) noexcept {
+    panel_.set_open(open && has_panel());
+  }
+  /// @return The panel's state, for a shell to carry into the next view
+  ///         (PlayerViewConfig::panel).
+  gfx::ui::DockedPanelState panel_state() const noexcept {
+    return panel_.state();
+  }
+  /// @return The desktop's key for the panel (PanelHooks::key); 0 with none.
+  char panel_key() const noexcept { return hooks_.panel.key; }
+  /// @return Whether @p point, in drawable pixels, is over the panel's
+  ///         content as of the last frame, with the panel open: where a
+  ///         shell's press or gesture goes to @ref panel_pointer.
+  bool over_panel(glm::vec2 point) const noexcept {
+    return panel_.over_content(point);
+  }
+  /// @brief Hand the program pointer input over its panel
+  ///        (PanelHooks::pointer); with no panel, or the panel closed,
+  ///        nothing.
+  /// @param pointer  A press or gesture that began over its content.
+  void panel_pointer(const PanelPointer& pointer) const;
+  /// @return The scene's rectangle as of the last frame, in drawable pixels:
+  ///         the whole drawable while the panel is closed; empty before the
+  ///         first frame. A shell measures the camera's drags in its height.
+  VkRect2D scene_rect() const noexcept { return panel_.laid_out().scene; }
   /// @return The flags the mesh draws with (gfx::pipelines::HybridMeshFlags)
   ///         before a DrawBinding clears any: kHybridMeshNormals while
   ///         @ref normals, else kHybridMeshLit.
@@ -282,15 +325,27 @@ class PlayerView {
   std::uint64_t frames_held() const noexcept { return taker_.frames_held(); }
   /// @brief Record the mesh as the last frame drew it: the live mesh under
   ///        the camera, lit by its @ref headlight, with its flags less the
-  ///        frame's DrawBinding clears and that binding's set. @ref frame
-  ///        records its draw through this; with @ref target_layout's target,
-  ///        a caller can read back what it drew, as the swapchain's images
+  ///        frame's DrawBinding clears and that binding's set, into
+  ///        @p viewport with its aspect. With @ref target_layout's target, a
+  ///        caller can read back what it drew, as the swapchain's images
   ///        cannot be (the tests).
-  /// @param cmd     A command buffer of the drawing device's, inside a pass
-  ///                of a target laid out as @ref target_layout; whatever
-  ///                submits it waits for the mesh's `ready` value.
-  /// @param extent  The pass's, in pixels.
-  void record_mesh(VkCommandBuffer cmd, VkExtent2D extent) const;
+  /// @param cmd       A command buffer of the drawing device's, inside a pass
+  ///                  of a target laid out as @ref target_layout; whatever
+  ///                  submits it waits for the mesh's `ready` value.
+  /// @param extent    The pass's, in pixels.
+  /// @param viewport  The rectangle drawn into, in pixels; empty, the whole
+  ///                  target.
+  void record_mesh(VkCommandBuffer cmd, VkExtent2D extent,
+                   VkRect2D viewport = {}) const;
+  /// @brief Record what the last frame drew in its pass under the UI: the
+  ///        mesh (@ref record_mesh) across the drawable, or into the
+  ///        scene's rectangle while the program's panel was open, then the
+  ///        panel's drawing (PanelHooks::record). @ref frame records its
+  ///        draws through this; for a caller's read-back, as
+  ///        @ref record_mesh.
+  /// @param cmd  As for @ref record_mesh, in a pass of the last frame's
+  ///             drawable size.
+  void record_frame(VkCommandBuffer cmd) const;
   /// @return The swapchain's target layout, which the mesh pipeline was built
   ///         for: a target of it takes @ref record_mesh.
   gfx::RenderTargetLayout target_layout() const;
@@ -346,6 +401,9 @@ class PlayerView {
   static constexpr float kNear = 0.05f;  // clip planes, metres
   static constexpr float kFar = 100.0f;
 
+  // Whether the program has a panel (PanelHooks::title).
+  bool has_panel() const noexcept { return !hooks_.panel.title.empty(); }
+
   PlayerView(std::unique_ptr<core::SharedDevice> shared,
              gfx::app::WindowedApp app, gfx::Profiler profiler,
              core::Device grid_device, core::Allocator grid_allocator,
@@ -370,6 +428,9 @@ class PlayerView {
   bool normals_ = false;         // the mesh's shading (mesh_flags)
   bool unlit_ = false;           // its vertex colours unshaded
   bool textured_ = false;        // drawn with before_draw's texture set
+  gfx::ui::DockedPanel panel_;   // the program's panel (FrameHooks::panel)
+  bool panel_drawn_ = false;     // the last frame laid it out open
+  PanelFrame panel_frame_;       // and that frame's rectangles
   bool texture_bound_ = false;   // a before_draw has bound one: Texture shows
   bool source_button_ = false;   // frame() draws Source
   bool source_request_ = false;  // pressed since take_source_request

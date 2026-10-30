@@ -83,23 +83,26 @@ vkc_require_sibling(
 # controls and stats panels (ImGui) and the profiler that times the draw. Its
 # tests, examples and -Werror stay off in a subproject. Its GLFW tier is built
 # for player_desktop alone, so not on iOS: the library links no window system
-# (the top-level CMakeLists.txt checks). The pin is gfx main at #160's merge
-# (17b3192). What the player uses is as at #153's merge (123d013):
-# ui::draw_stage_table's host, wait and GPU columns under a ui::StageWindow, and
-# the frame loop's own wait, submit and present rows; beside them, #150's FIFO
-# present by default, which the view takes, #148's
-# ImGuiOverlayConfig::min_frame_height and ui::begin_collapsible_panel, #146's
-# windowing::SurfaceSource and glfw::Library, #145's ImGuiTouch, #144's sRGB
-# ImGui fix and #143's orbit drag gestures. Since #158,
-# pipelines::HybridMeshTextureSet::create, which makes a set a program's
-# before_draw binds, takes an allocator (HookContext::commit_allocator). The
-# view's pipelines::HybridMeshDraw keeps #160's default, no second view, as the
-# player's meshes carry none, so on Apple GPUs it draws at its cost before #159.
+# (the top-level CMakeLists.txt checks). The pin is gfx main at #166's merge
+# (0b750b0), for ui::DockedPanel, which lays out a program's panel and draws its
+# handle and header, on main at #165's merge (928146c), for
+# HybridMeshFrame::viewport, which draws the mesh in the scene's part. What the
+# player uses besides is as at #153's merge (123d013): ui::draw_stage_table's
+# host, wait and GPU columns under a ui::StageWindow, and the frame loop's own
+# wait, submit and present rows; beside them, #150's FIFO present by default,
+# which the view takes, #148's ImGuiOverlayConfig::min_frame_height and
+# ui::begin_collapsible_panel, #146's windowing::SurfaceSource and
+# glfw::Library, #145's ImGuiTouch, #144's sRGB ImGui fix and #143's orbit drag
+# gestures. Since #158, pipelines::HybridMeshTextureSet::create, which makes a
+# set a program's before_draw binds, takes an allocator
+# (HookContext::commit_allocator). The view's pipelines::HybridMeshDraw keeps
+# #160's default, no second view, as the player's meshes carry none, so on Apple
+# GPUs it draws at its cost before #159.
 set(VG_WITH_GLFW ${VP_DESKTOP_APP})
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  GIT_TAG 17b3192d17021d5085d2201c76c840c453d2a174)
+  GIT_TAG 0b750b02e1be665d452a8ccba09e63ac45ee1aad)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
 if(VP_BUILD_TESTS)

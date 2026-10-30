@@ -26,6 +26,8 @@
 #include "volumetric_kit/gfx/glfw/imgui_glfw.hpp"
 #include "volumetric_kit/gfx/glfw/window.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
+#include "volumetric_kit/player/frame_hooks.hpp"
+#include "volumetric_kit/player/pointer.hpp"
 #include "volumetric_kit/player/scenario.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
@@ -50,8 +52,9 @@ Input& input_of(GLFWwindow* window) {
 }
 
 // The panel's controls as keys: Space plays or pauses, Right steps, L loops,
-// which a live player ignores, N flips Normals, D the deblock, U Unlit and T
-// Texture. Esc closes the window.
+// which a live player ignores, N flips Normals, D the deblock, U Unlit, T
+// Texture, and a program's key its panel (PlayerView::panel_key). Esc closes
+// the window.
 void on_key(GLFWwindow* window, int key, int /*scancode*/, int action,
             int /*mods*/) {
   if (action != GLFW_PRESS) {
@@ -79,6 +82,8 @@ void on_key(GLFWwindow* window, int key, int /*scancode*/, int action,
     view->set_unlit(!view->unlit());
   } else if (key == GLFW_KEY_T) {
     view->set_textured(!view->textured());
+  } else if (view->panel_key() != 0 && key == view->panel_key()) {
+    view->set_panel_open(!view->panel_open());
   }
 }
 
@@ -117,6 +122,9 @@ core::Status run(const cfg::Config& settings, const AppConfig& config) {
   input.view = view.get();
 
   glm::vec2 last = vg::glfw::cursor_in_framebuffer(w);
+  PointerTarget target;  // the scene or the panel, kept through a press
+  DoubleClick clicks;
+  bool was_left = false;
   // The presents of a stream frame to exit after, for CI's smoke run; 0 plays
   // until the window closes.
   const std::uint64_t frames =
@@ -128,20 +136,51 @@ core::Status run(const cfg::Config& settings, const AppConfig& config) {
     ui->new_frame();
     const VkExtent2D size = vg::glfw::framebuffer_size(w);
     const glm::vec2 cursor = vg::glfw::cursor_in_framebuffer(w);
-    // The camera, in viewport heights, unless the panel holds the pointer.
-    if (size.height > 0 && !view->ui_wants_pointer()) {
+    const bool left =
+        glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    const bool right =
+        glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    // The program's panel or the scene, as a press began, unless the panels
+    // hold the pointer: on the panel, its pointer input; on the scene, the
+    // camera, its drags in the scene's heights.
+    const bool to_panel =
+        target.on_panel(left || right, view->over_panel(cursor));
+    double points_x = 0.0;
+    double points_y = 0.0;
+    glfwGetCursorPos(w, &points_x, &points_y);  // window points, as ImGui's
+    const bool double_click = left && !was_left &&
+                              clicks.press({static_cast<float>(points_x),
+                                            static_cast<float>(points_y)},
+                                           glfwGetTime());
+    const float height = static_cast<float>(
+        view->scene_rect().extent.height > 0 ? view->scene_rect().extent.height
+                                             : size.height);
+    if (!view->ui_wants_pointer() && to_panel) {
+      PanelPointer pointer;
+      pointer.at = cursor;
+      if (left || right) {
+        pointer.drag = cursor - last;
+      }
+      pointer.zoom = std::pow(kWheelZoom, static_cast<float>(input.wheel));
+      pointer.double_tap = double_click;
+      if (pointer.drag != glm::vec2(0.0f) || input.wheel != 0.0 ||
+          double_click) {
+        view->panel_pointer(pointer);
+      }
+    } else if (height > 0.0f && !view->ui_wants_pointer()) {
       vg::camera::OrbitCamera& camera = view->camera();
-      const glm::vec2 drag = (cursor - last) / static_cast<float>(size.height);
-      if (glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+      const glm::vec2 drag = (cursor - last) / height;
+      if (left) {
         camera.drag_orbit(drag);
       }
-      if (glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
+      if (right) {
         camera.drag_pan(drag, PlayerView::kFovY);
       }
       camera.zoom(std::pow(vg::camera::OrbitCamera::kZoomPerNotch,
                            static_cast<float>(input.wheel)));
     }
     last = cursor;
+    was_left = left;
     input.wheel = 0.0;
     VKC_ASSIGN(const bool drawn, view->frame(size));
     if (!drawn) {

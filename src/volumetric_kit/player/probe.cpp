@@ -680,7 +680,8 @@ core::Status run_worker(const Args& args, const vkp::PlayerViewConfig& config,
                                    allocator,
                                    nullptr,
                                    device.queue_family(),
-                                   device.queue_family()};
+                                   device.queue_family(),
+                                   {}};  // no view, no target layout
     VKC_ASSIGN(hooks, make_hooks(context));
   }
   player->set_device_timing(args.timing);

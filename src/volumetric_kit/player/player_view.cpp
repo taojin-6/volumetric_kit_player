@@ -19,6 +19,7 @@
 #include "volumetric_kit/grid/base/device_requirements.hpp"
 #include "volumetric_kit/player/controls.hpp"
 #include "volumetric_kit/player/mesh_wiring.hpp"
+#include "volumetric_kit/player/program_panel.hpp"
 
 namespace volumetric_kit::player {
 
@@ -131,6 +132,7 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   view->source_button_ = config.source_button;
   view->unlit_ = config.unlit;
   view->textured_ = config.textured;
+  view->panel_ = gfx::ui::DockedPanel(config.panel);
   view->stats_panel_ = StatsPanel(config.compact_stats);
   // The panel opens at launch, so its frames are timed from the first.
   view->device_timing_ = config.device_timing;
@@ -141,9 +143,10 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
     const HookContext context{view->grid_device_,    view->grid_allocator_,
                               view->app_.device(),   view->app_.allocator(),
                               &view->mesh_pipeline_, compute_family,
-                              graphics_family};
+                              graphics_family,       view->target_layout()};
     VKC_ASSIGN(view->hooks_, config.make_hooks(context));
   }
+  view->set_panel_open(config.panel.state.open);  // none without a panel
   VKC_TRY(view->player_->start(view->grid_device_, view->grid_allocator_,
                                wiring.mc, view->exchange_, &view->hooks_));
   return view;
@@ -198,20 +201,47 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
     return false;
   }
   gfx::windowing::Frame& frame = *begun;  // not const: the mesh's wait goes in
-  // 2. The controls, Source if asked for, and the stats, as of the last frame
-  // drawn.
+  // 2. The scene beside the program's panel, if open; in the scene's part,
+  // the controls, Source if asked for, and the stats, as of the last frame
+  // drawn; and the panel's handle and header, with the program's items. The
+  // panel's box, close button or handle changes it from the next frame.
   overlay_.new_frame();
-  // Texture's box once a before_draw has bound a set.
+  const VkExtent2D pixels = app_.swapchain().extent();
+  const PanelHooks& panel = hooks_.panel;
+  if (panel_.open() && panel.content_size) {
+    panel_.set_content_size(panel.content_size());
+  }
+  const gfx::ui::PanelLayout& docked = panel_.layout(pixels);
+  panel_drawn_ = panel_.open();
+  panel_frame_ = {pixels, docked.content, docked.side};
+  const PanelFrame& laid = panel_frame_;
+  const UiArea area = scene_area(docked, panel_drawn_);
+  bool panel_box = panel_drawn_;
+  // Texture's box once a before_draw has bound a set; the panel's, given.
   draw_controls(*player_, shown_, normals_, unlit_,
-                texture_bound_ ? &textured_ : nullptr);
-  if (source_button_ && draw_source()) {
+                texture_bound_ ? &textured_ : nullptr, area,
+                has_panel()
+                    ? (panel.label.empty() ? panel.title : panel.label).c_str()
+                    : nullptr,
+                &panel_box);
+  if (source_button_ && draw_source(area)) {
     source_request_ = true;
   }
   // Detached, the profiler's last figures are old: the renderer's table is
   // empty.
   stats_panel_.draw(stats_, shown_, shown_triangles_, render_metrics(),
-                    PlaybackStats::Clock::now(), player_->live(),
+                    PlaybackStats::Clock::now(), player_->live(), area,
                     hooks_.stats_line);
+  if (panel_drawn_) {
+    panel_.draw_chrome(panel.title.c_str(), [&panel, &laid]() {
+      if (panel.draw_ui) {
+        panel.draw_ui(laid);
+      }
+    });
+  }
+  if (panel_box != panel_drawn_) {
+    panel_.set_open(panel_box);
+  }
   // The worker times its frames' device work while the panel shows it,
   // unless a measurement fixed the timing.
   if (!device_timing_) {
@@ -241,6 +271,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   }
   if (draws && failed.ok() && hooks_.before_draw && shown_) {
     core::Result<DrawBinding> bound = hooks_.before_draw(frame.cmd, *shown_);
+    panel_frame_.before_draw_ran = true;
     if (bound.ok()) {
       const bool texture = bound->descriptor_set != VK_NULL_HANDLE;
       texture_bound_ = texture_bound_ || texture;
@@ -271,9 +302,14 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
     // pass, as Apple GPUs time only at a pass's bounds: inside, it reads
     // about 0. Inert while the profiler is detached.
     const gfx::Profiler::Scope timed = profiler_.gpu_scope(frame.cmd, kDrawRow);
+    // The panel's work outside the pass, then the mesh in the scene, the
+    // panel's drawing, and the UI over them.
+    if (failed.ok() && panel_drawn_ && panel.prepare) {
+      failed = panel.prepare(frame.cmd, laid);
+    }
     frame.target->begin(frame.cmd, clear);
     if (failed.ok()) {
-      record_mesh(frame.cmd, app_.swapchain().extent());
+      record_frame(frame.cmd);
     }
     overlay_.render(frame.cmd);
     frame.target->end(frame.cmd);
@@ -317,18 +353,40 @@ std::uint32_t PlayerView::mesh_flags() const noexcept {
   return normals_ ? pipelines::kHybridMeshNormals : pipelines::kHybridMeshLit;
 }
 
-void PlayerView::record_mesh(VkCommandBuffer cmd, VkExtent2D extent) const {
+void PlayerView::panel_pointer(const PanelPointer& pointer) const {
+  if (panel_.open() && hooks_.panel.pointer) {
+    hooks_.panel.pointer(pointer);
+  }
+}
+
+void PlayerView::record_frame(VkCommandBuffer cmd) const {
+  if (!panel_drawn_) {
+    record_mesh(cmd, panel_frame_.drawable);  // as with no panel
+    return;
+  }
+  record_mesh(cmd, panel_frame_.drawable, panel_.laid_out().scene);
+  if (hooks_.panel.record) {
+    hooks_.panel.record(cmd, panel_frame_);
+  }
+}
+
+void PlayerView::record_mesh(VkCommandBuffer cmd, VkExtent2D extent,
+                             VkRect2D viewport) const {
   const grid::mesh::DeviceMesh& live = exchange_.live();
   if (!live.valid() || live.empty()) {
     return;
   }
+  // The rectangle's aspect, or the target's.
+  const VkExtent2D shape =
+      viewport.extent.width > 0 && viewport.extent.height > 0 ? viewport.extent
+                                                              : extent;
   const pipelines::HybridMeshDraw draw{live_mesh(live)};
   const gfx::camera::Camera camera = camera_.to_camera(
-      kFovY,
-      static_cast<float>(extent.width) / static_cast<float>(extent.height),
+      kFovY, static_cast<float>(shape.width) / static_cast<float>(shape.height),
       kNear, kFar);
   pipelines::HybridMeshFrame draws;
   draws.extent = extent;
+  draws.viewport = viewport;
   draws.view_proj = camera.view_proj();
   // The light follows the viewer, not gfx's default, which is fixed in the
   // world (DECISIONS.md).

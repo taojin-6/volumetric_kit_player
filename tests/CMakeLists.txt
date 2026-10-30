@@ -54,9 +54,12 @@ set_tests_properties(
              300)
 # The live connection and its retry, against a sender on 127.0.0.1: host only.
 vp_add_test(live_connection volumetric_kit::player)
-# The mesh wiring, and the controls on a CPU ImGui context: host only.
+# The mesh wiring, the controls and a program's panel on a CPU ImGui context,
+# and the shells' input rules: host only.
 vp_add_test(mesh_wiring volumetric_kit::player)
 vp_add_test(controls volumetric_kit::player)
+vp_add_test(program_panel volumetric_kit::player)
+vp_add_test(pointer volumetric_kit::player)
 # The view, on its own device over gfx's headless surface. It skips where the
 # loader has none (NVIDIA's ICD).
 vp_add_test(player_view STREAMS volumetric_kit::player

@@ -35,23 +35,31 @@
 // from the panel's box or set_unlit, shows the vertex colour unshaded, and off
 // it is shaded; the headlight lights what faces the viewer from every side, on
 // the device, and from cameras in worlds of any axes, on the host (headlight);
-// a commit hook holds and skips frames; the hooks' stats line is
-// the stats' last; and a before_draw failure stops the view. A live view
-// presents, on the two images its swapchain asks for (checked on the host).
-// A program's device requirements (PlayerViewConfig::device_requirements),
-// merged with grid's on the host (worker_requirements): none leave grid's
-// alone, a program's add to grid's, which stay, and a host allocation failure
-// in the merge is OutOfMemory. On the device, none leave the device as grid's
-// alone makes it; an optional extension is enabled on the hooks' devices where
-// the GPU offers it and skipped where not; grid's stay enabled under
-// requirements that leave them out, and frames play; and a required extension
-// no GPU offers refuses the view, its hooks never made.
-// The view makes its own shared device, validated as the test policy asks, so
-// the layer's errors fail the test. The tests skip where the loader offers no
-// headless surface (NVIDIA's ICD), but fail on Apple, where MoltenVK has one.
-// MoltenVK plans two queue families, so the mesh's buffers are CONCURRENT and
-// read across. One family, EXCLUSIVE and read in place, is tested on the host
-// only (mesh_wiring_test.cpp) until a leg runs the view on one.
+// a commit hook holds and skips frames; the hooks' stats line is the stats'
+// last; and a before_draw failure stops the view. A program's panel
+// (FrameHooks::panel), open, docks right on a landscape drawable and at the
+// bottom on a portrait one, or where its content shows larger: its drawing
+// fills its content, the mesh is centred in the scene and drawn nowhere else,
+// its hooks run each frame, its key and box open and close it, as do its
+// close button and a handle release below 25 %, and pointer input reaches it
+// while open; closed, none of its hooks runs, the scene is the whole
+// drawable, and the frame's pixels and the controls' place are a view's with
+// no panel; and its prepare's failure stops the view. A live view presents, on
+// the two images its swapchain asks for (checked on the host). A program's
+// device requirements (PlayerViewConfig::device_requirements), merged with
+// grid's on the host (worker_requirements): none leave grid's alone, a
+// program's add to grid's, which stay, and a host allocation failure in the
+// merge is OutOfMemory. On the device, none leave the device as grid's alone
+// makes it; an optional extension is enabled on the hooks' devices where the
+// GPU offers it and skipped where not; grid's stay enabled under requirements
+// that leave them out, and frames play; and a required extension no GPU offers
+// refuses the view, its hooks never made. The view makes its own shared device,
+// validated as the test policy asks, so the layer's errors fail the test. The
+// tests skip where the loader offers no headless surface (NVIDIA's ICD), but
+// fail on Apple, where MoltenVK has one. MoltenVK plans two queue families, so
+// the mesh's buffers are CONCURRENT and read across. One family, EXCLUSIVE and
+// read in place, is tested on the host only (mesh_wiring_test.cpp) until a leg
+// runs the view on one.
 
 #include "volumetric_kit/player/player_view.hpp"
 
@@ -104,6 +112,7 @@
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_texture_set.hpp"
+#include "volumetric_kit/gfx/ui/docked_panel.hpp"
 #include "volumetric_kit/gfx/ui/imgui_touch.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/surface_source.hpp"
@@ -134,6 +143,8 @@ using volumetric_kit::player::kSourceWindow;
 using volumetric_kit::player::kStatsWindow;
 using volumetric_kit::player::LiveState;
 using volumetric_kit::player::MakeHooks;
+using volumetric_kit::player::PanelFrame;
+using volumetric_kit::player::PanelPointer;
 using volumetric_kit::player::PlayerView;
 using volumetric_kit::player::PlayerViewConfig;
 using volumetric_kit::player::StatsPanel;
@@ -142,6 +153,7 @@ using volumetric_kit::player::StreamPlayer;
 using volumetric_kit::player::view_swapchain;
 using volumetric_kit::player::worker_requirements;
 using SteadyClock = std::chrono::steady_clock;
+using DockSide = volumetric_kit::gfx::ui::DockSide;
 
 constexpr VkExtent2D kExtent{320, 240};
 // The narrowest phone in portrait: 375 x 667 points, at 3 pixels a point.
@@ -348,6 +360,7 @@ class PlayerViewTest : public core::test::VulkanTest {
     config.share_vertices = share_vertices_;
     config.unlit = unlit_;
     config.textured = textured_;
+    config.panel = panel_;
     config.device_requirements = device_requirements_;
     if (make_hooks_) {
       // The context's devices and pipeline noted, for the test's own work on
@@ -364,18 +377,45 @@ class PlayerViewTest : public core::test::VulkanTest {
   }
 
   // The view's mesh, drawn again as its last frame drew it
-  // (PlayerView::record_mesh) into a `side` x `side` target laid out as its
-  // swapchain, on its drawing device, behind the mesh's ready value: the
+  // (PlayerView::record_mesh) into a `side` x `side` target (offscreen): the
   // pixel `probe_` from the middle, as R, G, B, A; empty with a failure
-  // recorded. Needs make_hooks_, for the devices.
+  // recorded.
   std::vector<int> mesh_pixel(std::uint32_t side = 64) {
+    const std::vector<std::array<int, 4>> pixels = offscreen(
+        {side, side},
+        [&](VkCommandBuffer cmd) { view_->record_mesh(cmd, {side, side}); });
+    if (pixels.empty()) {
+      return {};
+    }
+    const glm::ivec2 at = glm::ivec2(static_cast<int>(side / 2)) + probe_;
+    const std::array<int, 4>& probed =
+        pixels[static_cast<std::size_t>(at.y) * side +
+               static_cast<std::size_t>(at.x)];
+    return {probed.begin(), probed.end()};
+  }
+
+  // What the view's last frame drew in its pass under the UI
+  // (PlayerView::record_frame), drawn again into a target of its drawable's
+  // size (offscreen): each pixel row by row.
+  std::vector<std::array<int, 4>> frame_pixels() {
+    return offscreen(extent_,
+                     [&](VkCommandBuffer cmd) { view_->record_frame(cmd); });
+  }
+
+  // `record`'s draws into an `extent` target laid out as the view's
+  // swapchain and cleared black, on its drawing device, behind the mesh's
+  // ready value: each pixel's R, G, B, A, row by row; empty with a failure
+  // recorded. Needs make_hooks_, for the devices.
+  template <typename Record>
+  std::vector<std::array<int, 4>> offscreen(VkExtent2D extent,
+                                            Record&& record) {
     if (!context_) {
       ADD_FAILURE() << "no hooks' context: set make_hooks_";
       return {};
     }
     const gfx::RenderTargetLayout layout = view_->target_layout();
     gfx::OffscreenTargetDesc desc;
-    desc.extent = {side, side};
+    desc.extent = extent;
     desc.color_format = layout.color_formats[0];
     desc.depth_format = layout.depth_format;
     core::Result<gfx::OffscreenTarget> made =
@@ -397,7 +437,7 @@ class PlayerViewTest : public core::test::VulkanTest {
               begin.clear_color.float32[3] = 1.0f;
               const gfx::RenderTarget pass = target.target();
               pass.begin(cmd, begin);
-              view_->record_mesh(cmd, {side, side});
+              record(cmd);
               pass.end(cmd);
               target.record_readback(cmd);
             },
@@ -411,15 +451,17 @@ class PlayerViewTest : public core::test::VulkanTest {
       ADD_FAILURE() << waited.message();
       return {};
     }
-    const auto* pixels = static_cast<const std::uint8_t*>(target.pixels());
-    const glm::ivec2 at = glm::ivec2(static_cast<int>(side / 2)) + probe_;
-    const std::uint8_t* probed =
-        pixels + 4 * (static_cast<std::size_t>(at.y) * side +
-                      static_cast<std::size_t>(at.x));
+    const auto* bytes = static_cast<const std::uint8_t*>(target.pixels());
     const bool bgra = desc.color_format == VK_FORMAT_B8G8R8A8_SRGB ||
                       desc.color_format == VK_FORMAT_B8G8R8A8_UNORM;
-    return bgra ? std::vector<int>{probed[2], probed[1], probed[0], probed[3]}
-                : std::vector<int>{probed[0], probed[1], probed[2], probed[3]};
+    std::vector<std::array<int, 4>> pixels(
+        static_cast<std::size_t>(extent.width) * extent.height);
+    for (std::size_t i = 0; i < pixels.size(); ++i) {
+      const std::uint8_t* p = bytes + 4 * i;
+      pixels[i] = bgra ? std::array<int, 4>{p[2], p[1], p[0], p[3]}
+                       : std::array<int, 4>{p[0], p[1], p[2], p[3]};
+    }
+    return pixels;
   }
 
   // Expects the mesh's pixel (mesh_pixel) to be `expected` within 1 code in
@@ -733,6 +775,7 @@ class PlayerViewTest : public core::test::VulkanTest {
   bool share_vertices_ = PlayerViewConfig{}.share_vertices;
   bool unlit_ = PlayerViewConfig{}.unlit;
   bool textured_ = PlayerViewConfig{}.textured;
+  gfx::ui::DockedPanelConfig panel_ = PlayerViewConfig{}.panel;
   MakeHooks make_hooks_;  // the view's hooks, with the context noted
   // mesh_pixel's pixel, from the middle, in pixels, +y down: the middle
   // unless a test moves it.
@@ -2233,6 +2276,362 @@ TEST_F(PlayerViewTest, AllocationFailureStopsFurtherFrameAcquisition) {
   // The caller can recover by opening a new view, on an independent device.
   ASSERT_TRUE(make_view(false));
   EXPECT_TRUE(tick().ok());
+}
+
+// --- A program's panel ------------------------------------------------------
+
+// The colour a program's panel's record clears its content to: 0 or 1 a
+// channel, so an sRGB target stores it as a UNORM one does.
+constexpr std::array<int, 4> kPanelInk{0, 255, 255, 255};
+
+// What a program's panel's hooks saw (panel_hooks), on the draw thread.
+struct PanelCalls {
+  int draw_ui = 0;
+  int prepare = 0;
+  int record = 0;
+  int pointer = 0;
+  int content_size = 0;
+  int before_draw = 0;                // before_draw's calls
+  int prepare_after_before_draw = 0;  // prepares told before_draw ran
+  PanelFrame frame;                   // as draw_ui last had it
+  PanelPointer last;                  // the last pointer input
+  bool fail = false;                  // prepare refuses
+  // The content's size it gives (PanelHooks::content_size); none, no hook.
+  std::optional<gfx::ui::DockedContentSize> content;
+  gfx::RenderTargetLayout layout;  // the hooks' context's
+};
+
+// Hooks with a program's panel, its box labelled vp_test::kPanelLabel and
+// its key P, and a before_draw that binds nothing, whose calls `calls`
+// counts: its record clears its content to kPanelInk, and its prepare refuses
+// while `calls->fail`.
+MakeHooks panel_hooks(std::shared_ptr<PanelCalls> calls) {
+  return [calls](const HookContext& context) -> core::Result<FrameHooks> {
+    calls->layout = context.target_layout;
+    FrameHooks hooks;
+    hooks.panel.title = "Program panel";
+    hooks.panel.label = vp_test::kPanelLabel;
+    hooks.panel.key = 'P';
+    hooks.panel.draw_ui = [calls](const PanelFrame& frame) {
+      ++calls->draw_ui;
+      calls->frame = frame;
+    };
+    hooks.before_draw = [calls](
+                            VkCommandBuffer,
+                            const FrameStamp&) -> core::Result<DrawBinding> {
+      ++calls->before_draw;
+      return DrawBinding{};
+    };
+    hooks.panel.prepare = [calls](VkCommandBuffer,
+                                  const PanelFrame& frame) -> core::Status {
+      ++calls->prepare;
+      calls->prepare_after_before_draw += frame.before_draw_ran ? 1 : 0;
+      if (calls->fail) {
+        return core::Status::unsupported("the test's prepare refuses");
+      }
+      return {};
+    };
+    hooks.panel.record = [calls](VkCommandBuffer cmd, const PanelFrame& frame) {
+      ++calls->record;
+      VkClearAttachment clear{};
+      clear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      clear.clearValue.color = {{0.0f, 1.0f, 1.0f, 1.0f}};
+      VkClearRect rect{};
+      rect.rect = frame.content;
+      rect.layerCount = 1;
+      vkCmdClearAttachments(cmd, 1, &clear, 1, &rect);
+    };
+    hooks.panel.pointer = [calls](const PanelPointer& pointer) {
+      ++calls->pointer;
+      calls->last = pointer;
+    };
+    if (calls->content) {
+      hooks.panel.content_size = [calls]() {
+        ++calls->content_size;
+        return *calls->content;
+      };
+    }
+    return hooks;
+  };
+}
+
+bool contains(const VkRect2D& r, std::uint32_t x, std::uint32_t y) {
+  const auto x0 = static_cast<std::uint32_t>(r.offset.x);
+  const auto y0 = static_cast<std::uint32_t>(r.offset.y);
+  return x >= x0 && y >= y0 && x < x0 + r.extent.width &&
+         y < y0 + r.extent.height;
+}
+
+// A pixel the mesh drew on the black clear.
+bool lit(const std::array<int, 4>& p) {
+  return p[0] > 8 || p[1] > 8 || p[2] > 8;
+}
+
+// Open from the start, on a landscape drawable and on a portrait one: the
+// panel docks right, then at the bottom, and right on the portrait one when
+// its content is tall (PanelHooks::content_size); its draw_ui, prepare and
+// record run each frame, prepare told whether before_draw ran, which it does
+// not before a mesh; its content is all its own colour, and the mesh lies
+// in the scene alone, centred in it. Pointer input over the content reaches
+// it; the desktop's key (set_panel_open) closes it and none of its hooks
+// runs, and a tap on its box opens it again.
+TEST_F(PlayerViewTest, AProgramsPanelDocksBesideTheSceneAndDrawsItsContent) {
+  struct Case {
+    VkExtent2D extent;
+    std::optional<gfx::ui::DockedContentSize> content;
+    DockSide side;
+  };
+  const glm::vec2 tall{64.0f, 256.0f};
+  panel_.state.open = true;
+  for (const Case& c : {Case{kExtent, std::nullopt, DockSide::Right},
+                        Case{{240, 320}, std::nullopt, DockSide::Bottom},
+                        Case{{240, 320},
+                             gfx::ui::DockedContentSize{tall, tall},
+                             DockSide::Right}}) {
+    SCOPED_TRACE(::testing::Message()
+                 << c.extent.width << (c.content ? ", tall content" : ""));
+    touch_.reset();
+    view_.reset();
+    context_.reset();
+    extent_ = c.extent;
+    const auto calls = std::make_shared<PanelCalls>();
+    calls->content = c.content;
+    make_hooks_ = panel_hooks(calls);
+    ASSERT_TRUE(make_view(/*playing=*/false));
+    EXPECT_TRUE(view_->panel_open());
+    EXPECT_EQ(view_->panel_key(), 'P');
+    // The hooks know the pass record draws in, for a pipeline of their own.
+    const gfx::RenderTargetLayout target = view_->target_layout();
+    EXPECT_EQ(calls->layout.color_count, 1U);
+    EXPECT_TRUE(calls->layout.compatible_with(target));
+    EXPECT_EQ(calls->layout.color_formats[0], target.color_formats[0]);
+    ASSERT_TRUE(present());  // no mesh yet
+    EXPECT_EQ(calls->before_draw, 0);
+    EXPECT_GE(calls->prepare, 1);
+    view_->player().step();
+    ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+    aim_at(view_->shown()->index);
+    ASSERT_TRUE(present());
+    ASSERT_GE(calls->record, 1);
+    EXPECT_EQ(calls->draw_ui, calls->prepare);
+    EXPECT_EQ(calls->prepare, calls->record);
+    EXPECT_GE(calls->before_draw, 1);
+    EXPECT_EQ(calls->prepare_after_before_draw, calls->before_draw);
+    if (c.content) {
+      EXPECT_GE(calls->content_size, calls->draw_ui);
+    }
+
+    const PanelFrame& frame = calls->frame;
+    const VkRect2D scene = view_->scene_rect();
+    ASSERT_EQ(frame.side, c.side);
+    EXPECT_EQ(frame.drawable.width, c.extent.width);
+    EXPECT_EQ(frame.drawable.height, c.extent.height);
+    if (c.side == DockSide::Right) {
+      EXPECT_EQ(scene.extent.height, c.extent.height);
+      EXPECT_LT(scene.extent.width, frame.content.offset.x);
+    } else {
+      EXPECT_EQ(scene.extent.width, c.extent.width);
+      EXPECT_LT(scene.extent.height, frame.content.offset.y);
+    }
+    const std::vector<std::array<int, 4>> pixels = frame_pixels();
+    ASSERT_EQ(pixels.size(),
+              static_cast<std::size_t>(c.extent.width) * c.extent.height);
+    int off_ink = 0;  // content pixels not the panel's colour
+    int stray = 0;    // mesh pixels outside the scene
+    float lo[2] = {1e9f, 1e9f};
+    float hi[2] = {-1.0f, -1.0f};
+    for (std::uint32_t y = 0; y < c.extent.height; ++y) {
+      for (std::uint32_t x = 0; x < c.extent.width; ++x) {
+        const std::array<int, 4>& p = pixels[y * c.extent.width + x];
+        if (contains(frame.content, x, y)) {
+          off_ink += std::abs(p[0] - kPanelInk[0]) > 1 ||
+                     std::abs(p[1] - kPanelInk[1]) > 1 ||
+                     std::abs(p[2] - kPanelInk[2]) > 1;
+        } else if (lit(p)) {
+          stray += !contains(scene, x, y);
+          lo[0] = std::min(lo[0], static_cast<float>(x));
+          lo[1] = std::min(lo[1], static_cast<float>(y));
+          hi[0] = std::max(hi[0], static_cast<float>(x));
+          hi[1] = std::max(hi[1], static_cast<float>(y));
+        }
+      }
+    }
+    EXPECT_EQ(off_ink, 0);
+    EXPECT_EQ(stray, 0);
+    ASSERT_GE(hi[0], 0.0f) << "no mesh drawn";
+    EXPECT_NEAR(0.5f * (lo[0] + hi[0] + 1.0f),
+                0.5f * static_cast<float>(scene.extent.width), 2.0f);
+    EXPECT_NEAR(0.5f * (lo[1] + hi[1] + 1.0f),
+                0.5f * static_cast<float>(scene.extent.height), 2.0f);
+
+    // Pointer input over the content reaches the program while it is open.
+    const glm::vec2 inside(static_cast<float>(frame.content.offset.x) + 2.0f,
+                           static_cast<float>(frame.content.offset.y) + 2.0f);
+    EXPECT_TRUE(view_->over_panel(inside));
+    EXPECT_FALSE(view_->over_panel({1.0f, 1.0f})) << "the scene";
+    PanelPointer pointer;
+    pointer.at = inside;
+    pointer.drag = {3.0f, 4.0f};
+    pointer.zoom = 1.25f;
+    view_->panel_pointer(pointer);
+    EXPECT_EQ(calls->pointer, 1);
+    EXPECT_EQ(calls->last.drag, pointer.drag);
+    EXPECT_EQ(calls->last.zoom, pointer.zoom);
+
+    // Closed by the desktop's key: nothing of it runs, the scene is whole.
+    view_->set_panel_open(false);
+    const int recorded = calls->record;
+    const int drawn = calls->draw_ui;
+    const int sized = calls->content_size;
+    for (int i = 0; i < 3; ++i) {
+      ASSERT_TRUE(present());
+    }
+    EXPECT_EQ(calls->record, recorded);
+    EXPECT_EQ(calls->draw_ui, drawn);
+    EXPECT_EQ(calls->content_size, sized);
+    EXPECT_EQ(view_->scene_rect().extent.width, c.extent.width);
+    EXPECT_EQ(view_->scene_rect().extent.height, c.extent.height);
+    EXPECT_FALSE(view_->over_panel(inside));
+    view_->panel_pointer(pointer);
+    EXPECT_EQ(calls->pointer, 1) << "closed, no pointer input";
+
+    // Its box, with no Texture box before it, where Texture's would be.
+    ImGui::SetCurrentContext(view_->ui_context());
+    ImGuiWindow* const controls = ImGui::FindWindowByName(kControlsWindow);
+    ASSERT_NE(controls, nullptr);
+    tap(vp_test::control_middle(*controls, vp_test::kTexture));
+    EXPECT_TRUE(view_->panel_open());
+    ASSERT_TRUE(present());
+    EXPECT_GT(calls->record, recorded);
+    EXPECT_FALSE(view_->player().playing()) << "the tap pressed the box alone";
+    EXPECT_TRUE(view_->player().status().ok())
+        << view_->player().status().message();
+  }
+}
+
+// Closed, as by default: none of its hooks runs, pointer input does not
+// reach it, the scene is the whole drawable, and the frame draws what it
+// would with no panel, the mesh across the whole target; its box is drawn.
+TEST_F(PlayerViewTest, AClosedPanelRunsNothingAndDrawsAsWithNone) {
+  const auto calls = std::make_shared<PanelCalls>();
+  make_hooks_ = panel_hooks(calls);
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  EXPECT_FALSE(view_->panel_open());
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  aim_at(view_->shown()->index);
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(present());
+  }
+  EXPECT_EQ(calls->draw_ui, 0);
+  EXPECT_EQ(calls->prepare, 0);
+  EXPECT_EQ(calls->record, 0);
+  view_->panel_pointer({});
+  EXPECT_EQ(calls->pointer, 0);
+  EXPECT_EQ(view_->scene_rect().extent.width, kExtent.width);
+  EXPECT_EQ(view_->scene_rect().extent.height, kExtent.height);
+  const std::vector<std::array<int, 4>> frame = frame_pixels();
+  const std::vector<std::array<int, 4>> none = offscreen(
+      kExtent, [&](VkCommandBuffer cmd) { view_->record_mesh(cmd, kExtent); });
+  ASSERT_FALSE(none.empty());
+  EXPECT_TRUE(std::any_of(none.begin(), none.end(), lit)) << "no mesh drawn";
+  EXPECT_TRUE(frame == none) << "the frame is not as with no panel";
+  ImGui::SetCurrentContext(view_->ui_context());
+  ImGuiWindow* const controls = ImGui::FindWindowByName(kControlsWindow);
+  ASSERT_NE(controls, nullptr);
+  EXPECT_EQ(item_under(vp_test::control_middle(*controls, vp_test::kTexture)),
+            controls->GetID(vp_test::kPanelLabel));
+}
+
+// Open, its header's close button closes it, and so does a drag on its
+// handle released below 25 %: it stays closed, and none of its hooks runs.
+TEST_F(PlayerViewTest, ItsCloseButtonAndItsHandleCloseIt) {
+  const auto calls = std::make_shared<PanelCalls>();
+  make_hooks_ = panel_hooks(calls);
+  panel_.state.open = true;
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  ASSERT_TRUE(present());
+  ASSERT_TRUE(present());
+  // The chrome's windows, as gfx::ui::DockedPanel names them.
+  const auto chrome = [this](const char* part) {
+    ImGui::SetCurrentContext(view_->ui_context());
+    const ImGuiWindow* const window = ImGui::FindWindowByName(
+        (std::string("Program panel##") + part).c_str());
+    EXPECT_NE(window, nullptr) << part;
+    return window != nullptr ? window->Rect() : ImRect();
+  };
+  const auto stays_closed = [&] {
+    EXPECT_FALSE(view_->panel_open());
+    const int recorded = calls->record;
+    for (int i = 0; i < 3; ++i) {
+      ASSERT_TRUE(present());
+    }
+    EXPECT_FALSE(view_->panel_open());
+    EXPECT_EQ(calls->record, recorded);
+  };
+
+  // The close button, a frame height square at the header's right end.
+  const ImRect header = chrome("header");
+  tap({header.Max.x - ImGui::GetStyle().WindowPadding.x -
+           0.5f * ImGui::GetFrameHeight(),
+       header.GetCenter().y});
+  stays_closed();
+
+  view_->set_panel_open(true);
+  ASSERT_TRUE(present());
+  ASSERT_TRUE(present());
+  const ImVec2 grab = chrome("handle").GetCenter();
+  const float end = static_cast<float>(kExtent.width) - 4.0f;
+  touch_->touch_began(1, {grab.x, grab.y});
+  ASSERT_TRUE(present());
+  touch_->touch_moved(1, {0.5f * (grab.x + end), grab.y});
+  ASSERT_TRUE(present());
+  touch_->touch_moved(1, {end, grab.y});
+  ASSERT_TRUE(present());
+  touch_->touch_ended(1);
+  for (int i = 0; i < 4; ++i) {
+    ASSERT_TRUE(present());
+  }
+  stays_closed();
+}
+
+// With no panel there is nothing to open: no key, and the scene stays the
+// whole drawable.
+TEST_F(PlayerViewTest, WithNoPanelThereIsNothingToOpen) {
+  panel_.state.open = true;
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  EXPECT_FALSE(view_->panel_open());
+  view_->set_panel_open(true);
+  EXPECT_FALSE(view_->panel_open());
+  EXPECT_EQ(view_->panel_key(), 0);
+  ASSERT_TRUE(present());
+  EXPECT_EQ(view_->scene_rect().extent.width, kExtent.width);
+  EXPECT_EQ(view_->scene_rect().extent.height, kExtent.height);
+}
+
+// An open panel's prepare failure stops the view as a before_draw failure
+// does: the tick returns it, every tick after refuses with it, and its record
+// never runs.
+TEST_F(PlayerViewTest, APanelsPrepareFailureStopsTheView) {
+  const auto calls = std::make_shared<PanelCalls>();
+  calls->fail = true;
+  make_hooks_ = panel_hooks(calls);
+  panel_.state.open = true;
+  ASSERT_TRUE(make_view());
+  core::Status failed;
+  const SteadyClock::time_point deadline = SteadyClock::now() + kArrival;
+  while (failed.ok() && SteadyClock::now() < deadline) {
+    failed = tick().status();
+    std::this_thread::sleep_for(1ms);
+  }
+  ASSERT_FALSE(failed.ok()) << "frame() kept presenting";
+  EXPECT_NE(failed.message().find("prepare refuses"), std::string::npos)
+      << failed.message();
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_EQ(tick().status().message(), failed.message());
+  }
+  EXPECT_EQ(calls->prepare, 1);
+  EXPECT_EQ(calls->record, 0);
 }
 
 }  // namespace

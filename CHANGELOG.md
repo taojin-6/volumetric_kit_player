@@ -171,6 +171,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and its log's `run` names a program's hooks. CI's window step also plays
   the stream through `run_desktop` with a program's hooks
   (`tests/vp_desktop_hooks.cpp`).
+- A program's panel (`FrameHooks::panel`), docked beside the scene while
+  open: its title, box and desktop key; `draw_ui` for its header's items and
+  captions, `content_size` for its side, `prepare` before the pass and
+  `record` into its content after the mesh; and the pointer and gestures
+  over it (`PanelPointer`). gfx's `ui::DockedPanel` lays it out; the view
+  draws the mesh, the controls, the stats and Source in the scene's part
+  (`scene_area`), and the shells route input by where a press began
+  (`PointerTarget`, `DoubleClick`). `PlayerViewConfig::panel` starts it,
+  which the iOS shell carries across a rebuild and sets for an iPhone;
+  `PlayerView::panel_open`, `set_panel_open`, `panel_state`, `panel_key`,
+  `over_panel`, `panel_pointer`, `scene_rect` and `record_frame` work it.
+  `HookContext::target_layout` is the view's target layout, so a panel can
+  draw with a pipeline of its own; `PanelFrame::before_draw_ran` says
+  whether what before_draw bound is the frame's.
 - `PlayerViewConfig::device_requirements`: what a program's hooks need of
   the worker's device beyond grid's. The view's device, and vp_probe's by
   the worker alone, are made with them merged with grid's
@@ -187,7 +201,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of recon main at #299's merge (d8b8bda) under grid's names. The player pins
   core main at #65's merge (a4a6fff, 0.29.0), grid main (cbf7a6e, 0.1.0) and
   gfx main at #160's merge (17b3192), and requires core 0.29.0, its pin's
-  version and grid's floor, and grid 0.1.0 with each tier it links. The
+  version and grid's floor, and grid 0.1.0 with each tier it links; gfx
+  since moved to #166's merge (0b750b0), on #165's merge, for
+  `HybridMeshFrame::viewport` and `ui::DockedPanel`. The
   worker's device asks for grid's requirements, without the external-memory
   and Metal-object extensions recon asked for, where offered, for its camera
   decoders. A mesh vertex on a corner whose distance is the iso-value is
@@ -319,7 +335,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `MeasureLog::add` takes the frame's mesh, for its triangles and vertices,
   in place of its triangle count: `add(stamp, view->mesh(), render)`.
 - `draw_controls` takes the view's `unlit` after its `normals`, then its
-  `textured`, or null for no Texture box.
+  `textured`, or null for no Texture box, then the area it goes in
+  (`work_area()`), and a panel's box's label and state, or none;
+  `draw_source` and `StatsPanel::draw` take the area too.
 - A program whose `before_draw` binds a texture set sets
   `PlayerViewConfig::textured` to show it at start: Texture is off by
   default.
