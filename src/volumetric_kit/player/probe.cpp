@@ -311,22 +311,6 @@ std::string status_text(vkp::StreamPlayer& player,
                                 player.loop());
 }
 
-// Live, the shown frame's D's target, which the stats leave out, after its
-// D as they show it when `with_delay`: " | delay 80 ms · audio | target
-// 200 ms"; empty for a file and before the first frame.
-std::string delay_text(const std::optional<vkp::FrameStamp>& shown,
-                       bool with_delay) {
-  if (!shown || !shown->playout) {
-    return {};
-  }
-  char target[48];
-  std::snprintf(
-      target, sizeof target, " | target %.0f ms",
-      std::chrono::duration<double, std::milli>(shown->playout->target)
-          .count());
-  return (with_delay ? " | " + vkp::delay_line(shown) : std::string()) + target;
-}
-
 // The frames a run takes, until its limits, each logged with --csv.
 class Run {
  public:
@@ -693,7 +677,7 @@ core::Status run_view(const Args& args, const vkp::PlayerViewConfig& config,
           line += " | " + stat;
         }
         // The stats' lines hold the delay's.
-        line += delay_text(view->shown(), /*with_delay=*/false);
+        line += vkp::probe_delay_text(view->shown(), /*with_delay=*/false);
         line += " | per stream frame:";
         for (const core::StageRow& row : view->stats_panel().rows()) {
           line += row_text(row);
@@ -790,7 +774,7 @@ core::Status run_worker(const Args& args, const vkp::PlayerViewConfig& config,
       },
       [&] {
         std::string line = status_text(*player, shown) +
-                           delay_text(shown, /*with_delay=*/true) +
+                           vkp::probe_delay_text(shown, /*with_delay=*/true) +
                            " | per stream frame:";
         for (const core::StageRow& row : stats.stage_means()) {
           line += row_text(row);
@@ -901,4 +885,17 @@ volumetric_kit::player::probe_view_config(const AppConfig& config, int argc,
     return std::nullopt;
   }
   return view_config(*args, config);
+}
+
+std::string volumetric_kit::player::probe_delay_text(
+    const std::optional<FrameStamp>& shown, bool with_delay) {
+  if (!shown || !shown->playout) {
+    return {};
+  }
+  char target[48];
+  std::snprintf(
+      target, sizeof target, " | target %.0f ms",
+      std::chrono::duration<double, std::milli>(shown->playout->target)
+          .count());
+  return (with_delay ? " | " + delay_line(shown) : std::string()) + target;
 }

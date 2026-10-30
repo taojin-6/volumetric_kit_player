@@ -9,9 +9,11 @@
 ///        `tests/vp_probe.cpp` is one call of @ref run_probe. Not for iOS.
 
 #include <optional>
+#include <string>
 
 #include "volumetric_kit/player/app_config.hpp"
 #include "volumetric_kit/player/player_view.hpp"
+#include "volumetric_kit/player/stream_player.hpp"
 
 namespace volumetric_kit::player {
 
@@ -98,5 +100,19 @@ int run_probe(int argc, char** argv, const AppConfig& config = {});
 ///         empty make_hooks as run_probe starts, under the floor too.
 std::optional<PlayerViewConfig> probe_view_config(const AppConfig& config,
                                                   int argc, char** argv);
+
+/// @brief A live frame's part of @ref run_probe's report line: D's target,
+///        which the stats leave out, after D as the stats show it
+///        (delay_line) where no stats lines do, by the worker alone.
+///
+/// @code
+/// // " | delay 80 ms · audio | target 200 ms"
+/// line += probe_delay_text(shown, /*with_delay=*/true);
+/// @endcode
+/// @param shown       The newest frame shown; empty before the first.
+/// @param with_delay  Whether D leads it.
+/// @return The text; empty for a file's frame and before the first.
+std::string probe_delay_text(const std::optional<FrameStamp>& shown,
+                             bool with_delay);
 
 }  // namespace volumetric_kit::player
