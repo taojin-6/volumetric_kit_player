@@ -418,11 +418,9 @@ class PlayerViewTest : public core::test::VulkanTest {
       ADD_FAILURE() << "no hooks' context: set make_hooks_";
       return {};
     }
-    const gfx::RenderTargetLayout layout = view_->target_layout();
-    gfx::OffscreenTargetDesc desc;
-    desc.extent = extent;
-    desc.color_format = layout.color_formats[0];
-    desc.depth_format = layout.depth_format;
+    // Its samples too: the view's pipelines draw at the window's 4x.
+    const gfx::OffscreenTargetDesc desc =
+        gfx::offscreen_desc(view_->target_layout(), extent);
     core::Result<gfx::OffscreenTarget> made =
         gfx::OffscreenTarget::create(*context_->commit_allocator, desc);
     if (!made.ok()) {
