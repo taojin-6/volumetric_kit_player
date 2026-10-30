@@ -12,8 +12,9 @@
 // last second; and the bitrate and records a second their records brought,
 // over the frames published in the last second, so a pause in taking does
 // not crowd them into a moment; and a frame's figures (its device time, its
-// breakdowns aside, its queue idle and latency, its latency legs), each
-// averaged over the window's frames that have it. A paused toggle's rebuild
+// breakdowns aside, its queue idle and latency, its latency legs, live the
+// wait as bytes first and the publish leg from the release), each averaged
+// over the window's frames that have it. A paused toggle's rebuild
 // of the frame before changes none of them.
 
 #include "volumetric_kit/player/playback_stats.hpp"
@@ -403,6 +404,39 @@ TEST(FrameFigures, AreTheStampsEachAsTheFrameHasIt) {
   unmeasured.timed = true;
   unmeasured.stages.add_device("decode", core::DeviceTime::Unavailable);
   EXPECT_FALSE(frame_figures(unmeasured).gpu_ms.has_value());
+}
+
+// Live (taken with a playout), the wait as bytes is the buffer leg, due to
+// released, and the publish leg runs from the release; the latency, due to
+// presented, is their sum with the take and the present. A file's has no
+// buffer leg, its release its due.
+TEST(FrameFigures, LiveTheBufferLegLeadsAndThePublishRunsFromTheRelease) {
+  using volumetric_kit::player::frame_figures;
+  FrameStamp stamp = frame(0.5);
+  stamp.due = t0;
+  stamp.released = t0 + milliseconds(120);
+  stamp.published = t0 + milliseconds(129);
+  stamp.taken = t0 + milliseconds(137);
+  stamp.presented = t0 + milliseconds(138);
+  stamp.playout = volumetric_kit::player::Playout{};
+  const volumetric_kit::player::FrameFigures live = frame_figures(stamp);
+  EXPECT_DOUBLE_EQ(live.buffer_ms.value_or(0.0), 120.0);
+  EXPECT_DOUBLE_EQ(live.publish_ms.value_or(0.0), 9.0);
+  EXPECT_DOUBLE_EQ(live.take_ms.value_or(0.0), 8.0);
+  EXPECT_DOUBLE_EQ(live.latency_ms.value_or(0.0), 138.0);
+  stamp.playout.reset();
+  stamp.released = stamp.due;  // a file's
+  const volumetric_kit::player::FrameFigures file = frame_figures(stamp);
+  EXPECT_FALSE(file.buffer_ms.has_value());
+  EXPECT_DOUBLE_EQ(file.publish_ms.value_or(0.0), 129.0);
+  // The window's mean is over the frames that have it.
+  PlaybackStats stats({}, {});
+  stamp.playout = volumetric_kit::player::Playout{};
+  stamp.released = t0 + milliseconds(100);
+  stats.add_frame(stamp, *stamp.taken);
+  stamp.released = t0 + milliseconds(110);
+  stats.add_frame(stamp, *stamp.taken);
+  EXPECT_DOUBLE_EQ(stats.frame_means().buffer_ms.value_or(0.0), 105.0);
 }
 
 // The window's per-frame figures, each a mean over the frames that have it,

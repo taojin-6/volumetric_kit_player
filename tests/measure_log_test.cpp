@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// The measure log on the host, format 4: its header names the build, the
+// The measure log on the host, format 5: its header names the build, the
 // device, the rings, the stream, how it ran, the timing, the tile depth, the
 // labels, the vertex sharing and the time, and on a phone its thermal state
 // and Low Power Mode, then the columns; each frame is its worker rows, host
@@ -9,8 +9,10 @@
 // breakdown's name kept and a name with a comma quoted, then the render rows
 // of the display frame that took it, then its frame row: its device counts,
 // dispatches and barriers too, what the deblock did, its rounds, its queue
-// idle and latency, its latency legs, its mesh's vertices and its set, each
-// empty where unknown, the set of a record that names none too; a rebuild
+// idle and latency, its latency legs, its mesh's vertices and its set, and
+// live its wait as bytes and its playout as taken (its delay, the target, the
+// need and how late it was taken), each empty where unknown, the set of a
+// record that names none too, and a file's five live fields; a rebuild
 // writes nothing and is no frame; nothing is at the path until finish
 // renames the part file, and after it nothing more is written; a folder that
 // is not there is refused. The time reads as UTC, and a log's file name, or a
@@ -157,7 +159,7 @@ TEST(MeasureLog, TheHeaderNamesWhatWasMeasuredThenTheColumns) {
   ASSERT_TRUE((*log)->finish().ok());
   const vkp::BuildInfo& build = vkp::build_info();
   EXPECT_EQ(read_lines(path),
-            (Lines{"# format: volumetric_kit_player measure 4",
+            (Lines{"# format: volumetric_kit_player measure 5",
                    std::string("# player: ") + build.player,
                    std::string("# core: ") + build.core,
                    std::string("# grid: ") + build.grid,
@@ -172,7 +174,7 @@ TEST(MeasureLog, TheHeaderNamesWhatWasMeasuredThenTheColumns) {
                    "wait_ms,gpu_ms,device,submits,host_waits,blocked_ns,"
                    "staging_buffers,dispatches,barriers,deblock,exact_blocks,"
                    "rounds,idle_ms,queue_ms,publish_ms,take_ms,present_ms,"
-                   "vertices,set"}));
+                   "vertices,set,buffer_ms,delay_ms,target_ms,need,late_ms"}));
   EXPECT_EQ((*log)->frames(), 0u);
 }
 
@@ -223,7 +225,8 @@ TEST(MeasureLog, AFrameIsItsWorkerRowsItsRenderRowsThenItsFigures) {
   ASSERT_TRUE((*log)->finish().ok());
   const Lines lines = read_lines(path);
   ASSERT_EQ(lines.size(), kHeaderLines + 7u + 2u);
-  constexpr const char* kNone = ",,,,,,,,,,,,,,,,";  // the frame row's columns
+  // The frame row's columns.
+  constexpr const char* kNone = ",,,,,,,,,,,,,,,,,,,,,";
   EXPECT_EQ(
       Lines(lines.begin() + kHeaderLines, lines.end()),
       (Lines{
@@ -242,9 +245,54 @@ TEST(MeasureLog, AFrameIsItsWorkerRowsItsRenderRowsThenItsFigures) {
           std::string("2,7,P,600,510,render,present,0.2500,1.0000,,none") +
               kNone,
           "2,7,P,600,510,,,,,,,1,0,0,0,39,48,LG,1904,2,26.9100,0.4100,0.2000,"
-          "8.5000,1.1000,1530,77",
+          "8.5000,1.1000,1530,77,,,,,",
           std::string("1,0,I,0,0,worker,\"a, b\",1.0000,0.0000,,none") + kNone,
-          "1,0,I,0,0,,,,,,,0,0,0,0,0,0,off,0,0,,,,,,0,"}));
+          "1,0,I,0,0,,,,,,,0,0,0,0,0,0,off,0,0,,,,,,0,,,,,,"}));
+}
+
+// A live frame: its wait as bytes, due to released, its publish leg from its
+// release, and its playout as it was taken: the applied D, its target, the
+// need that set it and how late it was taken after its present time, here
+// 0.3 ms; and past the clamp, a frame taken early, which reads negative.
+TEST(MeasureLog, ALiveFrameAddsItsBufferAndItsPlayout) {
+  vp_test::Scratch scratch;
+  const std::string path = scratch.file("run.csv");
+  core::Result<std::unique_ptr<MeasureLog>> log =
+      MeasureLog::open(path, context());
+  ASSERT_TRUE(log.ok()) << log.status().message();
+  FrameStamp live = stamp();
+  live.pts_ns = 2'000'000'000;
+  live.released = live.due + std::chrono::milliseconds(120);
+  live.published = live.released + std::chrono::microseconds(9'100);
+  // Its present time is its publish: D 123 ms.
+  vkp::Playout playout;
+  playout.point = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                      live.published.time_since_epoch()) -
+                  std::chrono::nanoseconds(live.pts_ns);
+  playout.offset = playout.point - std::chrono::milliseconds(123);
+  playout.target = std::chrono::milliseconds(130);
+  playout.need = vkp::DelayNeed::kProgram;
+  live.playout = playout;
+  live.taken =
+      vkp::present(playout.point, live.pts_ns) + std::chrono::microseconds(300);
+  live.presented = *live.taken + std::chrono::microseconds(1'100);
+  ASSERT_TRUE((*log)->add(live, mesh_of(510, 1'530)).ok());
+  playout.clamped = true;
+  playout.need = vkp::DelayNeed::kArrival;
+  live.playout = playout;
+  live.taken =
+      vkp::present(playout.point, live.pts_ns) - std::chrono::microseconds(250);
+  ASSERT_TRUE((*log)->add(live, mesh_of(510, 1'530)).ok());
+  ASSERT_TRUE((*log)->finish().ok());
+  const Lines lines = read_lines(path);
+  ASSERT_EQ(lines.size(), kHeaderLines + 2u * 5u);
+  EXPECT_EQ(lines[kHeaderLines + 4],
+            "2,7,P,600,510,,,,,,,1,0,0,0,39,48,LG,1904,2,26.9100,0.4100,"
+            "9.1000,0.3000,1.1000,1530,77,120.0000,123.0000,130.0000,program,"
+            "0.3000");
+  const std::string clamped = lines[kHeaderLines + 9];
+  EXPECT_EQ(clamped.substr(clamped.rfind(",120.0000,")),
+            ",120.0000,123.0000,130.0000,arrival,-0.2500");
 }
 
 // A paused deblock toggle's rebuild is the frame before again.

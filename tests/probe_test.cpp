@@ -26,7 +26,10 @@
 // device requirements included, with the command line's validation, timing,
 // tile depth, labels, vertex sharing and open panel, its defaults included,
 // and none for its usage (an open panel or a size with --worker among it).
-// The device tests skip with no device,
+// --live-delay MS is a floor under a live program's need: the larger of MS
+// and the program's own, or MS with none, its other hooks kept; 0 and 1000
+// are taken, and past 1000, below 0, not a number, given twice or with
+// --file it is the usage. The device tests skip with no device,
 // and fail without one under VKC_REQUIRE_VULKAN_DEVICE. run_probe validates
 // as the core's test policy asks, its exit code failing on any error the
 // layer reports.
@@ -51,6 +54,7 @@
 #include "program_requirements.hpp"
 #include "test_stream.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/vulkan_fixture.hpp"
 #include "volumetric_kit/core/testing/vulkan_policy.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
@@ -608,6 +612,95 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
         << args[args.size() - 2] << " " << args.back();
   }
   EXPECT_EQ(hooks.makes(), 0);
+}
+
+// --live-delay's floor, through probe_view_config's hooks, made on a device
+// as the view makes them.
+class ProbeLiveDelayTest : public core::test::VulkanDeviceTest {
+ protected:
+  core::DeviceRequirements requirements() const override {
+    return grid::device_requirements();
+  }
+
+  // The hooks probe_view_config gives for `args`, made over `config`'s.
+  core::Result<vkp::FrameHooks> hooks_of(std::vector<std::string> args,
+                                         const vkp::AppConfig& config) {
+    const std::optional<vkp::PlayerViewConfig> view =
+        view_of(std::move(args), config);
+    if (!view || !view->make_hooks) {
+      return core::Status::invalid_argument("no hooks");
+    }
+    const vkp::HookContext context{device(),    allocator(), device(),
+                                   allocator(), nullptr,     0,
+                                   0,           {},          nullptr};
+    return view->make_hooks(context);
+  }
+
+  // A program whose own need is `need`, or with no live_delay for none, and
+  // a stats line.
+  static vkp::AppConfig program(std::optional<std::chrono::nanoseconds> need) {
+    vkp::AppConfig config;
+    config.view.make_hooks = [need](const vkp::HookContext&) {
+      vkp::FrameHooks hooks;
+      if (need) {
+        hooks.live_delay = [need] { return *need; };
+      }
+      hooks.stats_line = [] { return std::string("the program's"); };
+      return core::Result<vkp::FrameHooks>(std::move(hooks));
+    };
+    return config;
+  }
+};
+
+TEST_F(ProbeLiveDelayTest, ItIsAFloorUnderAProgramsNeed) {
+  using std::chrono::milliseconds;
+  const auto need = [&](const std::string& floor, const vkp::AppConfig& with) {
+    core::Result<vkp::FrameHooks> hooks = hooks_of(
+        {"--worker", "--connect", "127.0.0.1:47811", "--live-delay", floor},
+        with);
+    EXPECT_TRUE(hooks.ok()) << hooks.status().message();
+    EXPECT_TRUE(hooks.ok() && hooks->live_delay) << "no live_delay";
+    return hooks.ok() && hooks->live_delay ? hooks->live_delay()
+                                           : std::chrono::nanoseconds(-1);
+  };
+  EXPECT_EQ(need("150", program(milliseconds(100))), milliseconds(150));
+  EXPECT_EQ(need("150", program(milliseconds(200))), milliseconds(200));
+  EXPECT_EQ(need("150", program(std::nullopt)), milliseconds(150));
+  EXPECT_EQ(need("150", {}), milliseconds(150)) << "no program's hooks";
+  EXPECT_EQ(need("0", program(std::nullopt)), milliseconds(0));
+  EXPECT_EQ(need("1000", {}), milliseconds(1000));
+  // The program's other hooks stay.
+  core::Result<vkp::FrameHooks> hooks =
+      hooks_of({"--connect", "127.0.0.1", "--live-delay", "150"},
+               program(milliseconds(100)));
+  ASSERT_TRUE(hooks.ok()) << hooks.status().message();
+  ASSERT_TRUE(static_cast<bool>(hooks->stats_line));
+  EXPECT_EQ(hooks->stats_line(), "the program's");
+  // Without it, the program's hooks are its own.
+  hooks = hooks_of({"--connect", "127.0.0.1"}, program(std::nullopt));
+  ASSERT_TRUE(hooks.ok()) << hooks.status().message();
+  EXPECT_FALSE(static_cast<bool>(hooks->live_delay));
+}
+
+// Past a second, below 0, not a number, twice, or for a file: the usage, as
+// run_probe exits 2 with it, before the stream opens.
+TEST(RunProbe, ALiveDelayOutOfRangeOrForAFileIsTheUsage) {
+  const Scratch scratch;
+  const std::string missing = scratch.file("missing.vrst");
+  for (const std::vector<std::string>& args :
+       std::vector<std::vector<std::string>>{
+           {"--connect", "127.0.0.1", "--live-delay", "1001"},
+           {"--connect", "127.0.0.1", "--live-delay", "-1"},
+           {"--connect", "127.0.0.1", "--live-delay", "150ms"},
+           {"--connect", "127.0.0.1", "--live-delay", ""},
+           {"--connect", "127.0.0.1", "--live-delay", "1", "--live-delay", "2"},
+           {"--file", missing, "--live-delay", "150"}}) {
+    EXPECT_FALSE(view_of(args, {}).has_value())
+        << args[args.size() - 2] << " " << args.back();
+    EXPECT_EQ(run(args, {}), 2) << args[args.size() - 2] << " " << args.back();
+  }
+  EXPECT_TRUE(view_of({"--connect", "127.0.0.1", "--live-delay", "1000"}, {})
+                  .has_value());
 }
 
 }  // namespace

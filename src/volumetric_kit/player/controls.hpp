@@ -168,6 +168,19 @@ std::string status_line(const std::optional<FrameStamp>& shown,
                         std::uint64_t frame_count, bool playing, bool loop,
                         const std::optional<AudioStatus>& audio = {});
 
+/// @brief A live view's playout delay, for the stats: the applied D of the
+///        shown frame's clock as it was taken (FrameStamp::playout), and the
+///        need that set its target (live_clock.hpp).
+///
+/// @code
+/// // "delay 123 ms · program"; past the clamp, "delay 1000 ms · program ·
+/// // over 1 s"; before the first frame, "delay - ms"
+/// const std::string line = delay_line(shown);
+/// @endcode
+/// @param shown  The newest frame drawn; empty before the first.
+/// @return The line, D to the millisecond.
+std::string delay_line(const std::optional<FrameStamp>& shown);
+
 /// @brief The stats panel's lines, in Mbit/s (10^6 bit/s), kB (1000 B), mm
 ///        and ms.
 ///
@@ -179,10 +192,11 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 /// //  "rate 29.8 / 30 fps"}
 /// const auto lines = stats_lines(stats, shown, triangles, now, false);
 /// // live: {"bitrate 9.7 Mbit/s · last 1 s", "frame P · ...",
-/// //        "deblock off · T 0.500 mm", "GPU ...", "latency ...",
-/// //        "rate 29.8 fps · 30 rec/s"}
+/// //        "deblock off · T 0.500 mm", "GPU ...",
+/// //        "latency 141.0 ms · buffer 121.3 · publish 9.1 · ...",
+/// //        "delay 123 ms · program", "rate 29.8 fps · 30 rec/s"}
 /// // compact: the GPU and latency lines as one, "GPU 6.30 ms · latency
-/// //          9.8 ms"
+/// //          9.8 ms"; live, the delay's before it
 /// // with a program's text, "saved 30 meshes/s\n61.2 MB/s", its lines last
 /// @endcode
 /// @param stats      The figures.
@@ -207,13 +221,15 @@ std::string status_line(const std::optional<FrameStamp>& shown,
 ///         window has it timed, the device time and the queue latency `n/a`
 ///         where timed frames have none (a queue that cannot time, a device
 ///         that cannot calibrate); the latency from a frame's due time to
-///         its present call, over the frames presented, and its legs, due to
-///         published, published to taken and taken to presented (each `-`
-///         while unknown); and the
+///         its present call, over the frames presented, and its legs, live
+///         due to released first, then released to published, published to
+///         taken and taken to presented (each `-` while unknown); live, the
+///         @ref delay_line; and the
 ///         rate frames are taken at, over the nominal when it is known, or
 ///         live beside the records a second; and each line of
 ///         @p program_line, split at '\n', but the empty ones. Compact, the
-///         device time and the latency share one line.
+///         device time and the latency share one line, and live the delay's
+///         comes before it.
 std::vector<std::string> stats_lines(const PlaybackStats& stats,
                                      const std::optional<FrameStamp>& shown,
                                      std::uint32_t triangles,
@@ -262,7 +278,8 @@ std::string display_line(const gfx::FrameMetrics& render);
 /// on a shorter line ("per stream frame · 30/30 timed"), the one "GPU ·
 /// latency" line, the rate and a program's lines sit over the renderer's
 /// table, and, in an area wider than tall, the renderer's table is beside
-/// the worker's, whose lines have the width it leaves them.
+/// the worker's, whose lines have the width it leaves them. Live, the delay's
+/// line is the worker's last.
 ///
 /// @code
 /// StatsPanel panel(/*compact=*/is_phone);

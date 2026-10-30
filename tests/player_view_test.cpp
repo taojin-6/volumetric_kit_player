@@ -371,10 +371,10 @@ class PlayerViewTest : public core::test::VulkanTest {
       // The context's devices and pipeline noted, for the test's own work on
       // them; they live as long as the view.
       config.make_hooks = [this](const HookContext& context) {
-        context_.emplace(
-            Context{&context.device, &context.allocator, &context.commit_device,
-                    &context.commit_allocator, context.pipeline,
-                    context.compute_family, context.graphics_family});
+        context_.emplace(Context{
+            &context.device, &context.allocator, &context.commit_device,
+            &context.commit_allocator, context.pipeline, context.compute_family,
+            context.graphics_family, context.live_clock});
         return make_hooks_(context);
       };
     }
@@ -797,6 +797,7 @@ class PlayerViewTest : public core::test::VulkanTest {
     const gfx::pipelines::HybridMeshPipeline* pipeline;
     std::uint32_t compute_family;
     std::uint32_t graphics_family;
+    const volumetric_kit::player::LiveClock* live_clock;
   };
   std::optional<Context> context_;
   gfx::ui::EdgeInsets safe_area_;
@@ -1279,6 +1280,46 @@ TEST_F(PlayerViewTest, ALiveViewsStatsFitAPhone) {
       view_.reset();
     }
   }
+}
+
+// A program's hooks are made with the live player's playout clock, and with
+// none for a file; a live view's frames carry the clock as they were taken,
+// and its stats say the delay.
+TEST_F(PlayerViewTest, AProgramsHooksHaveTheLiveClockAndNoneForAFile) {
+  make_hooks_ = line_hooks("a program's line");
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(context_.has_value());
+  EXPECT_EQ(context_->live_clock, nullptr);
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  EXPECT_FALSE(view_->shown()->playout.has_value());
+  touch_.reset();
+  view_.reset();
+  context_.reset();
+  core::Result<std::unique_ptr<grid::stream::StreamReader>> reader =
+      grid::stream::StreamReader::open(path_);
+  ASSERT_TRUE(reader.ok()) << reader.status().message();
+  grid::networking::ServerOptions options;
+  options.host = "127.0.0.1";
+  options.port = 0;
+  core::Result<std::unique_ptr<grid::networking::StreamServer>> server =
+      grid::networking::StreamServer::start((*reader)->session(), options);
+  ASSERT_TRUE(server.ok()) << server.status().message();
+  ASSERT_TRUE(make_live_view(**reader, **server));
+  ASSERT_TRUE(context_.has_value());
+  EXPECT_NE(context_->live_clock, nullptr);
+  EXPECT_EQ(context_->live_clock, view_->player().live_clock());
+  ASSERT_TRUE(view_->shown().has_value());
+  EXPECT_TRUE(view_->shown()->playout.has_value());
+  tick_for(2 * StatsPanel::kRefresh);
+  const std::vector<std::string>& lines = view_->stats_panel().lines();
+  EXPECT_EQ(std::count_if(lines.begin(), lines.end(),
+                          [](const std::string& line) {
+                            return line.rfind("delay ", 0) == 0;
+                          }),
+            1);
+  // The view goes before its sender.
+  touch_.reset();
+  view_.reset();
 }
 
 // Playing at a phone's size, where the queue can time: the draw row's device

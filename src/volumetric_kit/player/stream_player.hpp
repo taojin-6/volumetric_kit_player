@@ -11,6 +11,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -35,12 +36,14 @@
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/player/audio_feeder.hpp"
 #include "volumetric_kit/player/audio_out.hpp"
+#include "volumetric_kit/player/live_clock.hpp"
 #include "volumetric_kit/player/live_connection.hpp"
 #include "volumetric_kit/player/playback.hpp"
 
 namespace volumetric_kit::player {
 
 struct FrameHooks;  // frame_hooks.hpp
+class HeldRecords;  // held_records.hpp
 
 /// @brief Where a live player's connection stands.
 enum class LiveState {
@@ -82,6 +85,11 @@ inline constexpr std::uint64_t kSampleEvery = 10;
 /// @return @p timing as a measurement names it: "off", "sampled" or "all".
 const char* to_string(DeviceTiming timing) noexcept;
 
+/// The most bytes of records a live player holds before their release, in
+/// one ring it reuses; a record larger than this is held alone. While the
+/// ring is full, the worker reads nothing more.
+inline constexpr std::size_t kLiveHoldBytes = std::size_t{16} << 20;
+
 /// @brief What the worker publishes with each frame's mesh.
 struct FrameStamp {
   /// A file's frame: its place among the track's records read in this pass,
@@ -114,8 +122,9 @@ struct FrameStamp {
   /// recovery's "  ..grow", "  ..retry" or "  ..refit". A rebuild's are
   /// "decode" (the rebuild) and "mesh".
   core::StageMetrics stages;
-  /// The records received since the frame before was published, this one's
-  /// included: 1 for a file; live, more when only the newest was meshed.
+  /// The records released since the frame before was published, this one's
+  /// included: 1 for a file; live, more when only the newest was meshed, or
+  /// when frames between were refused (FrameHooks::data_ready).
   std::uint64_t records = 1;
   std::uint64_t record_bytes = 0;  ///< Their payload bytes.
   /// When the worker published it, so when its records had all come.
@@ -150,9 +159,16 @@ struct FrameStamp {
   bool rebuild = false;
   /// When it was due: a file's, the time the clock set for it, not when the
   /// worker woke to it, or when a pause or step let it go; live, when its
-  /// record arrived whole, before finishing the preceding decode. Its latency
-  /// counts from here, including any wait for that decode.
+  /// record arrived whole. Its latency counts from here, its wait as bytes
+  /// included (FrameFigures::buffer_ms).
   Playback::Clock::time_point due{};
+  /// When the worker began its decode. A file's is its due. Live, it is when
+  /// the clock released the record (release_wait): its present time less
+  /// the lead, or later.
+  Playback::Clock::time_point released{};
+  /// Live: the playout clock as the frame was taken (FrameTaker). None for
+  /// a file, and before the take.
+  std::optional<Playout> playout;
   /// When the consumer took it; the consumer sets it.
   std::optional<Playback::Clock::time_point> taken;
   /// When the present call of the display frame that took it returned; set by
@@ -236,7 +252,8 @@ inline constexpr std::uint32_t kMaxFrameBlocks = 1u << 17;
 /// so no host wait is added; and before recording a frame that outgrows the
 /// grid, whose grow waits for the queue anyway. A park waits it out too, and
 /// runs on_park, and the unpark on_resume. With no hooks, a file's frame
-/// stays one batch.
+/// stays one batch. Live, live_delay states a program's need at each record,
+/// and data_ready says whether a frame meshed is published (@ref connect).
 ///
 /// **Threads.** The controls (@ref play, @ref pause, @ref step,
 /// @ref set_loop, @ref set_deblock, @ref set_muted), their reads,
@@ -296,13 +313,23 @@ class StreamPlayer {
   ///        (grid::networking::StreamServer). It does no I/O, so it is safe
   ///        on the main thread.
   ///
-  /// Once started, the worker builds, then connects. It reads every record
-  /// of the session's first geometry track straight into one of the
-  /// decoder's input slots and decodes it in a batch of its own, finished
-  /// before the next is recorded, and meshes the newest decoded in a batch of
-  /// its own once the consumer has taken the last mesh. It drains available
-  /// input before waiting for a take, which wakes it immediately. A
-  /// connection that ends or cannot be made is never an error:
+  /// Once started, the worker builds, then connects. It holds each record of
+  /// the session's first geometry track as host bytes (kLiveHoldBytes). It
+  /// copies the front one into one of the decoder's input slots once three
+  /// things hold: the playout clock releases it (live_clock.hpp: its present
+  /// time less the lead), the decode before it has finished, and no frame
+  /// waits for its program. It decodes it in a batch of its own, finished
+  /// before the next is recorded, and meshes the newest decode by the mesh
+  /// rule (mesh_now), asks FrameHooks::data_ready, then runs after_mesh and
+  /// publishes. While the ring is full, or a released record waits for the
+  /// decoder, it reads nothing more, so a worker that falls behind still
+  /// backs up the socket. Records of other tracks are passed over unread. A
+  /// park, a stop or a connection's end drops the held records and a frame
+  /// waiting for its program. It drains available input before waiting for a
+  /// take, which wakes it immediately, and again after each release, so a
+  /// record that comes while a backlog drains is stamped late by one release
+  /// at most. A connection that ends or cannot be
+  /// made is never an error:
   /// the worker shows why (@ref live_status), and @ref kLiveRetry later
   /// connects again (@ref LiveConnection), with a new grid, until stopped.
   /// Play, pause, step and loop do nothing.
@@ -335,6 +362,11 @@ class StreamPlayer {
   /// @return A live player's connection, under the mutex, so safe from any
   ///         thread; a file's is never anything but the default.
   LiveStatus live_status() const;
+  /// @return A live player's playout clock (live_clock.hpp), which lives as
+  ///         long as the player; null for a file.
+  const LiveClock* live_clock() const noexcept {
+    return live_clock_ ? &*live_clock_ : nullptr;
+  }
   /// @return Whether a file's Audio track plays beside its geometry; false
   ///         live.
   bool has_audio() const noexcept { return audio_track_.has_value(); }
@@ -348,8 +380,9 @@ class StreamPlayer {
   ///                   before it is taken, and one more for a consumer that
   ///                   may skip a frame (FrameTaker).
   /// @param exchange   Where the meshes go; it must outlive the worker.
-  /// @param hooks      Whose after_mesh, on_park and on_resume run, or null
-  ///                   for none; it must outlive the worker.
+  /// @param hooks      Whose after_mesh, on_park and on_resume run, and
+  ///                   live its live_delay and data_ready, or null for none;
+  ///                   it must outlive the worker.
   /// @return OK; `Status::Code::InvalidArgument` once started or stopped, or
   ///         for an audio output maker that made none; the audio output's
   ///         or the feeder's failure, with audio; or the thread's failure.
@@ -505,6 +538,11 @@ class StreamPlayer {
   // A frame recorded and submitted, until finished: its stamp, its pending
   // decode and extract (live, none), its step and its batch.
   struct InFlight;
+  // Live: a frame meshed whose extract waits, unfinished, for its program
+  // (FrameHooks::data_ready).
+  struct Waiting;
+  // Live: one connection's state, while play_connection plays it.
+  struct Connection;
   // When a frame was let go: when the clock had it due (FrameStamp::due),
   // and when the worker saw that, later by its wake-up, from which the
   // clock's late rule counts (Playback::shown).
@@ -544,10 +582,49 @@ class StreamPlayer {
   core::Status play_connection(grid::networking::StreamClient& client,
                                core::Status* ended);
   // Live: wait for `decoding`'s batch and finish it, into `*newest`, with
-  // its blocks: true once it succeeded; false, leaving them, for a skippable
-  // refusal.
+  // its blocks and the worker's time on it: true once it succeeded; false,
+  // leaving them, for a skippable refusal.
   core::Result<bool> finish_decode(InFlight decoding, FrameStamp* newest,
-                                   std::uint32_t* blocks);
+                                   std::uint32_t* blocks,
+                                   std::chrono::nanoseconds* took);
+  // Live: what one try at releasing the front held record did.
+  enum class Release { kNone, kReleased, kStopped };
+  // Live: read into the ring the record left unread, then every whole
+  // record that has come, each stamped as it is read; the first read waits
+  // up to `wait`. `*progressed` is set once a byte or a record came. False
+  // on quit or a park; a failed read, or a session with no geometry track,
+  // is returned.
+  core::Result<bool> read_records(grid::networking::StreamClient& client,
+                                  Connection& connection,
+                                  std::chrono::milliseconds wait,
+                                  bool* progressed);
+  // Live: a whole record of the played track arrived at `arrived`: the
+  // status line and the clock take it, with the program's need asked in a
+  // step of its own. False on quit or a park, the need not asked.
+  bool note_arrival(const grid::stream::Record& record,
+                    Playback::Clock::time_point arrived);
+  // Live: the record left unread, read from `client` into the ring if it has
+  // room; left unread while it is full. A failed read is returned.
+  core::Status hold_unread(grid::networking::StreamClient& client,
+                           Connection& connection);
+  // Live: how long the worker may wait with nothing to do: until the front
+  // held record's release, at most a slice, or kAskEvery while a frame
+  // waits for its program.
+  std::chrono::milliseconds idle_wait(const Connection& connection) const;
+  // Live: a record of a track other than the one played, at its arrival.
+  // It is passed over unread, and touches no clock: a consumer of another
+  // track, such as audio, would be fed from here.
+  void pass_other(const grid::stream::Record& record,
+                  Playback::Clock::time_point arrived);
+  // Live: release the front held record when the clock lets it go, the
+  // decode before it finished first, into a decode of its own.
+  core::Result<Release> release_front(Connection& connection);
+  // Live: mesh the newest decode once the mesh rule says so, and ask its
+  // program; false on quit or a park.
+  core::Result<bool> mesh_newest(Connection& connection);
+  // Live: ask the program about the frame waiting for it, and finish and
+  // publish it, abandon it, or keep it; false on quit or a park.
+  core::Result<bool> ask_program(Connection& connection);
   // Record into `batch` the decode of the record of `size` bytes at the
   // start of `slot`, with the deblock as set_deblock last set it: `stamp`'s
   // "decode" row, and when it is timed grid's breakdowns under it. The
@@ -576,9 +653,14 @@ class StreamPlayer {
   // its rows that `stamp` has, and for its first timed batch its idle and
   // queue latency.
   void note_batch(const Batch& batch, FrameStamp& stamp);
-  // grid_ meshed in a batch of its own, `blocks` expected, submitted and
-  // waited on; timed, and into a `row` of `stamp`'s, when `row` is set. None
-  // when its slot came back unpublished.
+  // grid_'s extract recorded in a batch of its own, `blocks` expected,
+  // submitted and waited on, unfinished; timed, and into a `row` of
+  // `stamp`'s, when `row` is set.
+  core::Result<grid::mesh::PendingExtract> extract_alone(FrameStamp& stamp,
+                                                         std::uint32_t blocks,
+                                                         const char* row);
+  // grid_ meshed as extract_alone does, then finished. None when its slot
+  // came back unpublished.
   core::Result<std::optional<grid::mesh::DeviceMesh>> mesh_alone(
       FrameStamp& stamp, std::uint32_t blocks, const char* row);
   // `stamp`'s deblock fields and rounds, from the decoder's last finish or
@@ -647,7 +729,11 @@ class StreamPlayer {
 
   std::unique_ptr<grid::stream::StreamReader> reader_;  // null live
   std::uint16_t track_ = 0;
-  LiveAddress address_;  // live
+  LiveAddress address_;                  // live
+  std::optional<LiveClock> live_clock_;  // live alone; the worker writes it
+  // Live: the played track's records held as host bytes until released,
+  // the worker's, made at need and reused across connections.
+  std::unique_ptr<HeldRecords> held_;
   // A file's Audio track to play, and what makes its output. start makes
   // the output, under mutex_, and the feeder, its producer, destroyed first.
   std::optional<AudioTrackChoice> audio_track_;

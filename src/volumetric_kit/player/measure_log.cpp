@@ -4,6 +4,7 @@
 #include "volumetric_kit/player/measure_log.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <ctime>
 
@@ -32,14 +33,15 @@ namespace volumetric_kit::player {
 namespace {
 
 // The format's version, which a reader checks (tools/measure/summarize.py).
-constexpr int kFormat = 4;
+constexpr int kFormat = 5;
 constexpr const char* kColumns =
     "pass,frame,type,bytes,triangles,table,stage,host_ms,wait_ms,gpu_ms,"
     "device,submits,host_waits,blocked_ns,staging_buffers,dispatches,"
     "barriers,deblock,exact_blocks,rounds,idle_ms,queue_ms,publish_ms,"
-    "take_ms,present_ms,vertices,set";
-// After a stage row's device: the frame row's 16 columns, empty.
-constexpr const char* kNoFigures = ",,,,,,,,,,,,,,,,";
+    "take_ms,present_ms,vertices,set,buffer_ms,delay_ms,target_ms,need,"
+    "late_ms";
+// After a stage row's device: the frame row's 21 columns, empty.
+constexpr const char* kNoFigures = ",,,,,,,,,,,,,,,,,,,,,";
 
 std::string hex(std::uint32_t value) {
   char text[16];
@@ -104,6 +106,24 @@ std::string ms(double value) {
 // A figure the frame may lack: empty when it does.
 std::string ms(const std::optional<double>& value) {
   return value ? ms(*value) : std::string();
+}
+
+// A duration, signed, in ms.
+std::string ms(std::chrono::nanoseconds value) {
+  return ms(std::chrono::duration<double, std::milli>(value).count());
+}
+
+// A live frame's playout as it was taken: its applied D, D's target, the
+// need that set it, and how late it was taken after its present time; four
+// empty fields for a file's.
+std::string playout_fields(const FrameStamp& stamp) {
+  if (!stamp.playout || !stamp.taken) {
+    return ",,,";
+  }
+  const Playout& playout = *stamp.playout;
+  return ms(playout.delay()) + ',' + ms(playout.target) + ',' +
+         to_string(playout.need) + ',' +
+         ms(*stamp.taken - present(playout.point, stamp.pts_ns));
 }
 
 const char* name_of(core::DeviceTime device) {
@@ -256,7 +276,7 @@ core::Status MeasureLog::add(const FrameStamp& stamp,
        << ms(figures.present_ms) << ',' << mesh.vertex_count << ','
        << (stamp.set == grid::stream::kNoSet ? std::string()
                                              : std::to_string(stamp.set))
-       << '\n';
+       << ',' << ms(figures.buffer_ms) << ',' << playout_fields(stamp) << '\n';
   if (!out_) {
     return core::Status::io_error("MeasureLog: cannot write " + path_ +
                                   ".part");

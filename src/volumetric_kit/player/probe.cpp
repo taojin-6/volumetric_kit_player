@@ -62,7 +62,7 @@ constexpr const char* kUsage =
     "                [--tile-depth 0|1] [--labels on|off]\n"
     "                [--share-vertices on|off] [--panel on|off]\n"
     "                [--size WxH] [--csv PATH] [--latency]\n"
-    "                [--save-meshes DIR] [--worker]\n"
+    "                [--save-meshes DIR] [--live-delay MS] [--worker]\n"
     "  --file PATH            play a .vrst file\n"
     "  --connect HOST[:PORT]  play a sender's live stream\n"
     "  --frames N             stop once N stream frames are taken\n"
@@ -76,6 +76,7 @@ constexpr const char* kUsage =
     "  --csv PATH             log each frame taken into PATH\n"
     "  --latency              time each mesh to its commit and its draws\n"
     "  --save-meshes DIR      write each mesh as DIR/<frame>.ply\n"
+    "  --live-delay MS        live: a program need of at least MS, 0-1000\n"
     "  --worker               the worker alone, with no view\n";
 constexpr VkExtent2D kExtent{640, 480};             // the view's, unless --size
 constexpr std::chrono::microseconds kTick{16'667};  // a 60 Hz display's
@@ -97,6 +98,7 @@ struct Args {
   std::string csv;
   bool latency = false;
   std::string save_meshes;
+  std::optional<std::chrono::milliseconds> live_delay;  // a floor, live
   bool worker = false;
   bool program_hooks = false;  // the program set make_hooks (AppConfig)
 };
@@ -179,22 +181,54 @@ std::optional<Args> parse(int argc, char** argv) {
     } else if (arg == "--save-meshes" && args.save_meshes.empty() &&
                !value.empty()) {
       args.save_meshes = value;
+    } else if (arg == "--live-delay" && !args.live_delay) {
+      const std::optional<std::uint64_t> ms =
+          value == "0" ? std::optional<std::uint64_t>(0)
+                       : vkp::parse_count(value);
+      if (!ms || std::chrono::milliseconds(*ms) > vkp::kMaxLiveDelay) {
+        return std::nullopt;
+      }
+      args.live_delay = std::chrono::milliseconds(*ms);
     } else {
       return std::nullopt;
     }
   }
-  // One source; passes are a file's; an open panel and a size are the view's.
+  // One source; passes are a file's, a live delay a sender's; an open panel
+  // and a size are the view's.
   if (args.file.empty() == !args.address || (args.address && args.passes) ||
+      (!args.address && args.live_delay) ||
       (args.worker && (args.panel || args.size))) {
     return std::nullopt;
   }
   return args;
 }
 
+// `make_hooks`' hooks, with --live-delay's floor under their live_delay: the
+// larger of the floor and the program's own need, or the floor alone.
+vkp::MakeHooks with_live_floor(vkp::MakeHooks make_hooks,
+                               std::chrono::milliseconds floor) {
+  return [make_hooks = std::move(make_hooks), floor](
+             const vkp::HookContext& context) -> core::Result<vkp::FrameHooks> {
+    vkp::FrameHooks hooks;
+    if (make_hooks) {
+      VKC_ASSIGN(hooks, make_hooks(context));
+    }
+    hooks.live_delay = [own = std::move(hooks.live_delay), floor] {
+      const std::chrono::nanoseconds need =
+          own ? own() : std::chrono::nanoseconds(0);
+      return std::max<std::chrono::nanoseconds>(floor, need);
+    };
+    return hooks;
+  };
+}
+
 // The view's settings (probe_view_config): the program's, then the command
 // line's.
 vkp::PlayerViewConfig view_config(const Args& args, const vkp::AppConfig& app) {
   vkp::PlayerViewConfig config = app.view;
+  if (args.live_delay) {
+    config.make_hooks = with_live_floor(app.view.make_hooks, *args.live_delay);
+  }
   config.validation = validation() != test::Validation::Off;
   config.device_timing = args.timing;
   config.tile_depth = args.tile_depth;
@@ -225,6 +259,9 @@ std::string run_text(const Args& args) {
   }
   if (!args.save_meshes.empty()) {
     text += " --save-meshes";
+  }
+  if (args.live_delay) {
+    text += " --live-delay " + std::to_string(args.live_delay->count());
   }
   if (args.passes) {
     text += " --passes " + std::to_string(*args.passes);
@@ -705,7 +742,8 @@ core::Status run_worker(const Args& args, const vkp::PlayerViewConfig& config,
                                    nullptr,
                                    device.queue_family(),
                                    device.queue_family(),
-                                   {}};  // no view, no target layout
+                                   {},  // no view, no target layout
+                                   player->live_clock()};
     VKC_ASSIGN(hooks, make_hooks(context));
   }
   player->set_device_timing(args.timing);
@@ -768,6 +806,10 @@ core::Status run(const Args& args, const vkp::AppConfig& app, Probes& probes) {
   vkp::PlayerViewConfig config = view_config(args, app);
   if (probes.any()) {
     config.make_hooks = make_probe_hooks(probes);
+    if (args.live_delay) {
+      config.make_hooks =
+          with_live_floor(std::move(config.make_hooks), *args.live_delay);
+    }
   }
   // The view, or the worker, is gone on return: its last mesh is saved.
   VKC_TRY(args.worker ? run_worker(args, config, std::move(player), probes)

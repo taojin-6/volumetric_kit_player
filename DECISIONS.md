@@ -89,6 +89,107 @@ below).
   and the clock's runs printed. Why: the rate averages steps and jitter out,
   so it alone can read 0 ppm over a wrong mapping.
 
+## 2026-10-30 — A program's live delay
+
+A live player presents each frame at its pts plus one playout point, on a
+clock of its own (`live_clock.hpp`); a program states how long its own data
+for a frame needs (`FrameHooks::live_delay`) and whether that data is ready
+(`FrameHooks::data_ready`). It replaces "No jitter buffer in v1" in "Live
+mode" below. Why: a program whose own data for a frame is ready only some
+time after the frame arrives draws every frame with its own data only if the
+frame waits for it; the latency grows instead.
+
+- **One clock: present(pts) = pts + offset + D.** The offset is the least
+  `arrival − pts` over 10 s of the played track's records, never another
+  track's. D is the largest need stated: the arrival need (the records'
+  lateness over that window, plus the worker's lead) or a program's. There
+  is no fixed floor, and D is clamped at 1 s; a frame that needed more is
+  late by the excess: the stats flag it ("over 1 s"), and the log's
+  `target_ms` reads 1000. Why from pts and not
+  from each record's arrival: a wait counted from arrival carries the
+  arrival's jitter onto the screen.
+- **The offset follows the least down at once, and up at most 25 ms a
+  second, never more than 1 s below it.** Why: a program's need counts from
+  the offset (`earliest`), so an offset that rose at once as a fast record
+  left the window would raise the program's target point at once, and frames
+  already due would repeat; more than 1 s below, D could not cover the gap.
+- **A record's lateness counts against the larger of the offset as it
+  arrived and the offset now.** Why: against the offset now alone, a join's
+  burst, each record of it a new least, would raise D by the GOP for 10 s;
+  against the offset as it arrived alone, a fast record leaving the window
+  would leave the records after it late by its lead.
+- **The applied point rises at once and falls 25 ms a second; during a
+  connection's first 10 s the offset's fall carries it at once.** Why: a
+  rise that waited would make frames late; a fall at once would make the
+  records held due together, and the mesh rule meshes only the newest of
+  them. 25 ms a second is 1 ms a record at 25 Hz. While the least is still
+  being found, a slow fall of the offset would leave a joined GOP a second
+  late for 40 s; a program's need that falls then is still stepped, so its
+  records come due one by one.
+- **The wait is as host bytes, before the decode,** in one 16 MiB ring the
+  player reuses, its records' headers in a fixed ring: nothing is allocated
+  per record. A record is released at present − lead, the lead the largest
+  release-to-publish time over the window, the waits for the take and the
+  program left out, and a connection's first frame, which builds the grid.
+  Why: the worker decodes into one grid and meshes only the newest decode,
+  so the only place a record can wait is before its decode; the GPU and grid
+  stay as they were. While the ring is full nothing more is read, so a
+  reader that falls behind still backs up the socket for the sender's
+  newest-key rule. Each pass drains every whole record that has come before
+  it releases one, and again after each release, so a record is stamped
+  late by one release at most, even while a backlog drains. Whether the
+  bytes have wrapped is kept, not read from their offsets, so a record of no
+  bytes is placed like any other.
+- **data_ready is asked on the worker, after the extract has run and before
+  it is finished:** draw (published), not yet (asked again about every
+  millisecond, the shown frame staying, nothing released), or never
+  (abandoned through grid's `MarchingCubes::abandon`, any number in a row).
+  Why: no frame its program cannot draw ever reaches the take; a check before
+  the mesh misses data lost while the frame before is held, and asking after
+  the extract adds no mesh time to a frame whose data comes just in time.
+- **live_delay and data_ready each run in a step of the worker's,** as
+  after_mesh does: a park waits for one under way, none runs while parked,
+  and so on_park overlaps none.
+- **The take holds a live frame until its present time** (`FrameTaker`),
+  read afresh at each take, so a D raised after a release delays the frame
+  too; without the commit hook and outside `frames_held`. A wait past 1 s
+  plus the lead is an earlier connection's frame, on another pts base, and is
+  not held.
+- **The mesh rule:** the newest decode is meshed once the consumer took the
+  last mesh and it is the connection's first frame, no held record is due, or
+  100 ms passed since the last publish ("nothing more has come" before).
+  Records due are released together but for that rule's turn, so a backlog
+  shows as it drains.
+- **`FrameStamp::records` counts records released**, frames a program
+  refused included; the status line and the bitrate still count arrivals.
+- **Stats:** live, the latency's legs begin with "buffer" (due to
+  released), "publish" runs from the release, and one line says the shown
+  frame's D and the need that set it. Compact, it is the worker's column's
+  last line: in the renderer's, beside a program's line, it took the stats
+  14 pt past the controls on the shortest notched phone in landscape.
+- **Measure format 5** adds `buffer_ms`, `delay_ms`, `target_ms`, `need` and
+  `late_ms`, empty for a file. `vp_probe --live-delay MS` sets a floor under
+  a program's need, so a delay is measured with no program.
+- **Ready for an audio master, which is not built:** `point()` is one
+  lock-free atomic for a realtime thread, `now_pts` the one place another
+  master would take over, `step_point` the one rule a slew would replace,
+  and other tracks' records pass `pass_other`, which touches no clock.
+- **A file is unchanged:** paced by its pts, released when due, asked no
+  live hook, with no playout; its log rows end with five empty fields.
+- **Measured** on the M5 Max: Rafa2 (30 fps) served on loopback by grid's
+  `serve_stream`, played by `vp_probe --connect` through the view, 1,500
+  frames at `--live-delay 0` and `150` (the same hooks and mesh ring). At 0,
+  D is 24 ms at p50 (p95 29), set by arrival, and due to presented 27 ms
+  (p95 34); at 150, due to presented 155 ms (p95 164). Past the join's first
+  frame every record was a frame of its own, in order, and the meshes at 0
+  and 150 held the same triangles for all 150 records of the loop. The
+  worker's host time a frame is about 1 ms (decode, submit and mesh), as
+  before; a steady hold touches the ring's 16 MiB (RSS 58 MB against 42).
+  How late a frame is taken after its present time is the phase of the
+  stream's pts against the 60 Hz tick: at a fixed D it sits near one value,
+  and where that is near a tick's edge, jitter moves some frames a tick on
+  (5 % here, 20 % in an earlier run).
+
 ## 2026-10-30 — A file's audio: AudioOut, the null output, video the master
 
 A file's Audio track (grid 0.4.0's `TrackKind::Audio`, raw PCM s16) plays
@@ -870,7 +971,9 @@ chunks, joined at the newest key.
   and meshes once the consumer has taken the last mesh: when
   nothing more has come, at once for a connection's first frame, or every
   100 ms while records keep coming, so a join shows a picture at once and
-  its GOP as it drains. Not paced by pts: the sender paces. Why: the
+  its GOP as it drains. Not paced by pts: the sender paces. *Since
+  2026-10-30 records wait for their present time as bytes, and "nothing more
+  has come" is "no held record is due" ("A program's live delay").* Why: the
   file loop's wait for the consumer would let latency grow without bound and
   stop draining the socket, which hides lag from the sender's drop rule
   (newest key wins). The consumer check stays: a superseded mesh keeps its
@@ -895,7 +998,8 @@ chunks, joined at the newest key.
   decodes into a new grid, as a sender may change its voxel size; the
   decoder is kept, as a key resyncs it.
 - **No jitter buffer in v1.** Network jitter shows as judder. Add a bounded
-  delay only if the owner sees judder.
+  delay only if the owner sees judder. *Replaced 2026-10-30 by a playout
+  clock ("A program's live delay").*
 - **Two swapchain images live** (`view_swapchain`), FIFO still. Why: with
   gfx's default, the surface's least + 1, a mesh taken waits behind one more
   queued image, a vsync longer. A file keeps the default, as its pts paces
