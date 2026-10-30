@@ -65,6 +65,10 @@ struct PanelFrame {
   VkRect2D content{};
   /// Where the panel docks.
   gfx::ui::DockSide side = gfx::ui::DockSide::Right;
+  /// Whether before_draw ran this display frame (FrameHooks::before_draw),
+  /// so what it bound is this frame's: set for prepare and record; false in
+  /// draw_ui, which runs before it.
+  bool before_draw_ran = false;
 };
 
 /// @brief Pointer input over a program's panel (@ref PanelHooks::pointer),
@@ -130,7 +134,8 @@ struct PanelHooks {
   std::function<gfx::ui::DockedContentSize()> content_size;
   /// Work outside the pass whose results @ref record reads, into the
   /// frame's command buffer; it runs whether or not before_draw ran this
-  /// frame. A failure stops the view with its status.
+  /// frame (PanelFrame::before_draw_ran). A failure stops the view with its
+  /// status.
   std::function<core::Status(VkCommandBuffer cmd, const PanelFrame& frame)>
       prepare;
   /// The panel's drawing, into @ref PanelFrame::content of a pass laid out

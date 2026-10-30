@@ -183,7 +183,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `PlayerView::panel_open`, `set_panel_open`, `panel_state`, `panel_key`,
   `over_panel`, `panel_pointer`, `scene_rect` and `record_frame` work it.
   `HookContext::target_layout` is the view's target layout, so a panel can
-  draw with a pipeline of its own.
+  draw with a pipeline of its own; `PanelFrame::before_draw_ran` says
+  whether what before_draw bound is the frame's.
 - `PlayerViewConfig::device_requirements`: what a program's hooks need of
   the worker's device beyond grid's. The view's device, and vp_probe's by
   the worker alone, are made with them merged with grid's

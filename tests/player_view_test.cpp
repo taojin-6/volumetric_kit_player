@@ -2291,17 +2291,20 @@ struct PanelCalls {
   int record = 0;
   int pointer = 0;
   int content_size = 0;
-  PanelFrame frame;   // as draw_ui last had it
-  PanelPointer last;  // the last pointer input
-  bool fail = false;  // prepare refuses
+  int before_draw = 0;                // before_draw's calls
+  int prepare_after_before_draw = 0;  // prepares told before_draw ran
+  PanelFrame frame;                   // as draw_ui last had it
+  PanelPointer last;                  // the last pointer input
+  bool fail = false;                  // prepare refuses
   // The content's size it gives (PanelHooks::content_size); none, no hook.
   std::optional<gfx::ui::DockedContentSize> content;
   gfx::RenderTargetLayout layout;  // the hooks' context's
 };
 
 // Hooks with a program's panel, its box labelled vp_test::kPanelLabel and
-// its key P, whose calls `calls` counts: its record clears its content to
-// kPanelInk, and its prepare refuses while `calls->fail`.
+// its key P, and a before_draw that binds nothing, whose calls `calls`
+// counts: its record clears its content to kPanelInk, and its prepare refuses
+// while `calls->fail`.
 MakeHooks panel_hooks(std::shared_ptr<PanelCalls> calls) {
   return [calls](const HookContext& context) -> core::Result<FrameHooks> {
     calls->layout = context.target_layout;
@@ -2313,9 +2316,16 @@ MakeHooks panel_hooks(std::shared_ptr<PanelCalls> calls) {
       ++calls->draw_ui;
       calls->frame = frame;
     };
+    hooks.before_draw = [calls](
+                            VkCommandBuffer,
+                            const FrameStamp&) -> core::Result<DrawBinding> {
+      ++calls->before_draw;
+      return DrawBinding{};
+    };
     hooks.panel.prepare = [calls](VkCommandBuffer,
-                                  const PanelFrame&) -> core::Status {
+                                  const PanelFrame& frame) -> core::Status {
       ++calls->prepare;
+      calls->prepare_after_before_draw += frame.before_draw_ran ? 1 : 0;
       if (calls->fail) {
         return core::Status::unsupported("the test's prepare refuses");
       }
@@ -2360,7 +2370,8 @@ bool lit(const std::array<int, 4>& p) {
 // Open from the start, on a landscape drawable and on a portrait one: the
 // panel docks right, then at the bottom, and right on the portrait one when
 // its content is tall (PanelHooks::content_size); its draw_ui, prepare and
-// record run each frame; its content is all its own colour, and the mesh lies
+// record run each frame, prepare told whether before_draw ran, which it does
+// not before a mesh; its content is all its own colour, and the mesh lies
 // in the scene alone, centred in it. Pointer input over the content reaches
 // it; the desktop's key (set_panel_open) closes it and none of its hooks
 // runs, and a tap on its box opens it again.
@@ -2394,6 +2405,9 @@ TEST_F(PlayerViewTest, AProgramsPanelDocksBesideTheSceneAndDrawsItsContent) {
     EXPECT_EQ(calls->layout.color_count, 1U);
     EXPECT_TRUE(calls->layout.compatible_with(target));
     EXPECT_EQ(calls->layout.color_formats[0], target.color_formats[0]);
+    ASSERT_TRUE(present());  // no mesh yet
+    EXPECT_EQ(calls->before_draw, 0);
+    EXPECT_GE(calls->prepare, 1);
     view_->player().step();
     ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
     aim_at(view_->shown()->index);
@@ -2401,6 +2415,8 @@ TEST_F(PlayerViewTest, AProgramsPanelDocksBesideTheSceneAndDrawsItsContent) {
     ASSERT_GE(calls->record, 1);
     EXPECT_EQ(calls->draw_ui, calls->prepare);
     EXPECT_EQ(calls->prepare, calls->record);
+    EXPECT_GE(calls->before_draw, 1);
+    EXPECT_EQ(calls->prepare_after_before_draw, calls->before_draw);
     if (c.content) {
       EXPECT_GE(calls->content_size, calls->draw_ui);
     }

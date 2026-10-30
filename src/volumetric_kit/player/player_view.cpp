@@ -271,6 +271,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   }
   if (draws && failed.ok() && hooks_.before_draw && shown_) {
     core::Result<DrawBinding> bound = hooks_.before_draw(frame.cmd, *shown_);
+    panel_frame_.before_draw_ran = true;
     if (bound.ok()) {
       const bool texture = bound->descriptor_set != VK_NULL_HANDLE;
       texture_bound_ = texture_bound_ || texture;
