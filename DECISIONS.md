@@ -8,17 +8,21 @@ is implemented.
 
 With `VP_TEST_PER_BINARY`, which only the ThreadSanitizer leg turns on,
 `vp_add_test` registers each binary as one ctest test, its cases in one
-process, in place of a test per case (`gtest_discover_tests`). The owner
-chose it on 2026-10-31.
+process, in place of a test per case (`gtest_discover_tests`). A binary
+given `SUITES`, `vp_stream_player_test`, gets one per suite named and
+`.others` for every suite not named, so a suite added later still runs.
+The owner chose both on 2026-10-31.
 
 - **Why:** under ThreadSanitizer a process costs about 2.2 s before its
   case runs, and the leg ran about 470 cases, one process each. Measured on
-  this change's CI, the Test step took 118-119 s, against 136 s (the median
-  of main's last 10 runs), and its tests' times summed 228 s, against
-  660-780 s. `vp_stream_player_test`, 131 cases in 109 s, bounds the step.
+  CI, one process per binary took the Test step to 118-119 s, against
+  136 s (the median of main's last 10 runs), and its tests' times summed
+  228 s, against 660-780 s. `vp_stream_player_test`, 131 cases in 109 s,
+  bounded the step, so it runs as `StreamPlayerTest` (73 cases),
+  `LivePlayerTest` (43) and `.others` (15).
 - **The cost:** the leg gives up isolation per case. A crash or hang ends
-  the binary's remaining cases, a case can meet state an earlier one left,
-  a report fails the binary's one test, and a binary passes when a case
+  the process's remaining cases, a case can meet state an earlier one left,
+  a report fails the process's one test, and that test passes when a case
   skips, so the Test step names each skip in a notice. ThreadSanitizer
   still runs every case, and the other legs keep a process per case.
 - The tests registered by hand (the soak, the probes, the view's rerun on

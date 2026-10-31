@@ -17,11 +17,12 @@ set(VP_TEST_ENVIRONMENT VP_NO_AUDIO_DEVICE=1)
 
 # vp_<name>_test from <name>_test.cpp, linking the given targets: a ctest test
 # per case, or with VP_TEST_PER_BINARY one per binary, its cases in one process
-# (DECISIONS.md, 2026-10-31). A case that hangs fails after 5 minutes, and a
-# binary after 10, rather than holding a CI job to its limit. With STREAMS, its
-# cases read the tests' streams in VP_TEST_STREAMS.
+# (DECISIONS.md, 2026-10-31). There, SUITES makes it a test per suite named and
+# one, vp_<name>_test.others, for every suite not named. A case that hangs fails
+# after 5 minutes, and a binary after 10, rather than holding a CI job to its
+# limit. With STREAMS, its cases read the tests' streams in VP_TEST_STREAMS.
 function(vp_add_test name)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "STREAMS" "" "")
+  cmake_parse_arguments(PARSE_ARGV 1 arg "STREAMS" "" "SUITES")
   add_executable(vp_${name}_test ${name}_test.cpp)
   target_link_libraries(vp_${name}_test PRIVATE ${arg_UNPARSED_ARGUMENTS}
                                                 GTest::gtest_main)
@@ -33,8 +34,23 @@ function(vp_add_test name)
     list(APPEND properties FIXTURES_REQUIRED vp_streams)
   endif()
   if(VP_TEST_PER_BINARY)
-    add_test(NAME vp_${name}_test COMMAND vp_${name}_test)
-    set_tests_properties(vp_${name}_test PROPERTIES ${properties} TIMEOUT 600)
+    set(test vp_${name}_test)
+    set(tests "")
+    set(named "")
+    foreach(suite IN LISTS arg_SUITES)
+      add_test(NAME ${test}.${suite} COMMAND ${test} --gtest_filter=${suite}.*)
+      list(APPEND tests ${test}.${suite})
+      list(APPEND named ${suite}.*)
+    endforeach()
+    if(named)
+      list(JOIN named ":" named)
+      add_test(NAME ${test}.others COMMAND ${test} --gtest_filter=-${named})
+      list(APPEND tests ${test}.others)
+    else()
+      add_test(NAME ${test} COMMAND ${test})
+      list(APPEND tests ${test})
+    endif()
+    set_tests_properties(${tests} PROPERTIES ${properties} TIMEOUT 600)
   else()
     list(APPEND properties TIMEOUT 300)
     gtest_discover_tests(vp_${name}_test PROPERTIES ${properties})
@@ -59,9 +75,16 @@ vp_add_test(audio_feeder volumetric_kit::player)
 # A live stream's audio on the live clock, simulated on a manual clock.
 vp_add_test(live_audio volumetric_kit::player)
 # The decode and mesh worker, on a device (the core's fixtures), over the tests'
-# streams.
-vp_add_test(stream_player STREAMS volumetric_kit::player
-            volumetric_kit::core_test_support)
+# streams; with VP_TEST_PER_BINARY its two longest suites in processes of their
+# own, as in one it bounds ThreadSanitizer's leg.
+vp_add_test(
+  stream_player
+  STREAMS
+  volumetric_kit::player
+  volumetric_kit::core_test_support
+  SUITES
+  StreamPlayerTest
+  LivePlayerTest)
 # Its live park test 50 times rather than 8: a soak in the `stress` label, which
 # CI leaves out (DECISIONS.md).
 add_test(

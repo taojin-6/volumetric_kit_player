@@ -402,7 +402,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   toolchain (on Linux the image and its packages' versions), the workspace
   path, the pins and the workflow.
 - ci: the ThreadSanitizer leg runs each test binary's cases in one process
-  (`VP_TEST_PER_BINARY`); the other legs keep one process per case.
+  (`VP_TEST_PER_BINARY`), and `vp_stream_player_test`'s in one per suite;
+  the other legs keep one process per case.
 
 ### Fixed
 
