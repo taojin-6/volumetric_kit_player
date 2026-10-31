@@ -397,6 +397,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ubuntu` images are pinned by digest.
 - ci: the plain Mac Debug leg is dropped; the ThreadSanitizer leg is the
   Mac's one Debug build, and the Mac builds Release besides.
+- ci: each build leg restores the siblings' and googletest's sources and
+  builds from a cache, keyed by the leg, its Homebrew versions or Linux
+  image, the workspace path and the pins.
 
 ### Fixed
 

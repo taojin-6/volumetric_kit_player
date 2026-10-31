@@ -4,6 +4,27 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-31 — CI: a dependency cache
+
+Each build leg restores `build/_deps`, the siblings' and googletest's
+sources and builds, before it configures, as sensor's CI does. The owner
+chose it on 2026-10-31.
+
+- **Why:** without it every leg cloned the siblings and built about 143 of
+  their objects each run: Configure took 16 s and Build 42-49 s (medians).
+- **The key carries all a tree is built with,** in its restore prefix too,
+  so no leg restores a tree built on other libraries or flags: the OS, the
+  build type and ThreadSanitizer; the Homebrew key, from the core's
+  `homebrew-key` action at the core pin over the formulae the Mac check
+  names (`none` off macOS); a hash of the Linux container, whose image is
+  pinned by digest; and a hash of the workspace path, as FetchContent bakes
+  absolute paths into the tree (sensor's `_build.yml`). The pins
+  (`third_party/CMakeLists.txt`, `CMakeLists.txt`) end it, so a bump starts
+  from the last tree and saves its own.
+- **A brew upgrade needs no clearing:** the Homebrew key moves with it, so
+  the next run builds on the new versions (the core's DECISIONS.md, "A brew
+  upgrade needs no cache clearing").
+
 ## 2026-10-30 — Live audio on the live clock
 
 A live session's first Audio track on the geometry's clock plays on the
@@ -1377,9 +1398,9 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   Why: each cycle is a timing check on a shared host, and 8 spread over the
   same 0-20 ms reach the same states.
 - **Left out until a need shows:** Debug on Linux, as the GPU hosts are
-  shared with gfx and recon; AddressSanitizer and UBSan; a dependency cache,
-  which would save about 30 s a job on the Mac and could go stale after a
-  brew upgrade; and the siblings' split into reusable workflows.
+  shared with gfx and recon; AddressSanitizer and UBSan; and the siblings'
+  split into reusable workflows. *A dependency cache, left out here too,
+  came on 2026-10-31.*
 - **The window runs in CI only on the Linux legs, under Xvfb, in a workflow
   step:** the app plays the tests' stream for 60 presents under the
   validation layer, and a missing "presented" line, a layer the loader did
