@@ -13,9 +13,13 @@ include(FetchContent)
 # The device, Status/Result and the GPU test fixtures, declared first, and the
 # config tier: its Source, which the library's open_source takes on every
 # platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
-# is core main at PR #70's merge (2120e62, 0.30.0), grid's own pin and the floor
-# grid's library asks for. #68 to #70 add CI's trigger check, which the lint job
-# takes at this pin, and FuseOrbbec's output.max_viewers; #65 to #67 add
+# is core main at PR #76's merge (c52a86a, 0.35.0), newer than grid's own pin
+# (#70's, 0.30.0, the floor grid's library asks for). #76 places an image with
+# TRANSIENT_ATTACHMENT usage in lazily allocated memory (Metal's memoryless
+# storage on Apple GPUs), as gfx's 4x MSAA window targets are, and adds
+# HeapStats::lazy_bytes; #71 to #74 add FuseRealsense and source.audio and drop
+# fusion.depth_within_color. #68 to #70 add CI's trigger check, which the lint
+# job takes at this pin, and FuseOrbbec's output.max_viewers; #65 to #67 add
 # vulkan/fwd.hpp, test support for tests that are main()s of their own,
 # vkc_export_glsl and vkc_require_sibling, which checks grid below; the player's
 # code uses none of the rest. What it uses is as at #52's merge (0.21.0):
@@ -38,9 +42,9 @@ endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 2120e6294e3c7ead8bb168d757f940b21d21267c)
+  GIT_TAG c52a86ab8fcfd11fb6afbfeaf0ae9ef2209b18b2)
 FetchContent_MakeAvailable(volumetric_kit_core)
-vkc_require_core(0.30.0 VULKAN CONFIG)
+vkc_require_core(0.35.0 VULKAN CONFIG)
 
 # --- volumetric_kit_grid -----------------------------------------------------
 # The stream reader, the codec's decode grid and its deblock, Marching Cubes,
