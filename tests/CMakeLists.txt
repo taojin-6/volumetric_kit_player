@@ -17,10 +17,11 @@ set(VP_TEST_ENVIRONMENT VP_NO_AUDIO_DEVICE=1)
 
 # vp_<name>_test from <name>_test.cpp, linking the given targets: a ctest test
 # per case, or with VP_TEST_PER_BINARY one per binary, its cases in one process
-# (DECISIONS.md, 2026-10-31). There, SUITES makes it a test per suite named and
-# one, vp_<name>_test.others, for every suite not named. A case that hangs fails
-# after 5 minutes, and a binary after 10, rather than holding a CI job to its
-# limit. With STREAMS, its cases read the tests' streams in VP_TEST_STREAMS.
+# (DECISIONS.md, 2026-10-31). There, SUITES makes it a test per suite named,
+# which fails if it matches no case, and one, vp_<name>_test.others, for every
+# suite not named. A case that hangs fails after 5 minutes, and a binary after
+# 10, rather than holding a CI job to its limit. With STREAMS, its cases read
+# the tests' streams in VP_TEST_STREAMS.
 function(vp_add_test name)
   cmake_parse_arguments(PARSE_ARGV 1 arg "STREAMS" "" "SUITES")
   add_executable(vp_${name}_test ${name}_test.cpp)
@@ -39,6 +40,9 @@ function(vp_add_test name)
     set(named "")
     foreach(suite IN LISTS arg_SUITES)
       add_test(NAME ${test}.${suite} COMMAND ${test} --gtest_filter=${suite}.*)
+      set_tests_properties(
+        ${test}.${suite} PROPERTIES FAIL_REGULAR_EXPRESSION
+                                    "\\[==========\\] Running 0 tests from")
       list(APPEND tests ${test}.${suite})
       list(APPEND named ${suite}.*)
     endforeach()
