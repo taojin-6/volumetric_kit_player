@@ -19,18 +19,37 @@ jobs:
   build:
     name: ${{ matrix.os }} (${{ matrix.build_type }}${{ matrix.tsan && ', TSan' || '' }})
     runs-on: [self-hosted, '${{ matrix.runner }}']
-    # The Linux legs run in OS-matched containers with the GPU passed
-    # through, as gfx's and recon's do: NVIDIA_DRIVER_CAPABILITIES=all makes
-    # the toolkit mount the Vulkan ICD. A runner's .env does not reach a job
-    # container, so the container sets the build and test levels: 4 is a
-    # 24-core host over a repository's 6 runners. It also puts the NVIDIA
-    # driver's shader cache in the runner's tool cache, which outlives a job:
-    # the driver's default, $HOME/.cache, is missing from a bare image, and
-    # with no cache every process compiles every pipeline. Each image is
-    # pinned by digest, the tag it was read from in a comment, so a new image
-    # comes only with a commit that moves the pin. The Mac legs run on the
-    # host.
-    container: ${{ matrix.container && fromJSON(matrix.container) || null }}
+    # The Linux legs pull their image from the core's GHCR package.
+    permissions:
+      contents: read
+      packages: read
+    # The Linux legs run in a job container of the family's CI image for
+    # their release (the core's tools/ci/images), which holds everything they
+    # build and test with, with the GPU passed through: the image's only
+    # Vulkan driver is the ICD the toolkit mounts for
+    # NVIDIA_DRIVER_CAPABILITIES=all. Each image is pinned by digest, the tag
+    # it was read from in a comment, so a new image comes only with a commit
+    # that moves the pin. The token can be named only under `credentials`, so
+    # the container is a mapping; an empty image, the Mac legs', runs the job
+    # on the host.
+    container:
+      image: ${{ matrix.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --gpus all
+      # A runner's .env does not reach a job container, so the container sets
+      # the build and test levels: 4 is a 24-core host over a repository's 6
+      # runners. It also puts the NVIDIA driver's shader cache in the
+      # runner's tool cache, which outlives a job: the driver's default,
+      # $HOME/.cache, is missing from the container, and with no cache every
+      # process compiles every pipeline.
+      env:
+        NVIDIA_DRIVER_CAPABILITIES: all
+        CMAKE_BUILD_PARALLEL_LEVEL: '4'
+        CTEST_PARALLEL_LEVEL: '4'
+        __GL_SHADER_DISK_CACHE_PATH: /__w/_tool/nvidia-glcache
+        __GL_SHADER_DISK_CACHE_SKIP_CLEANUP: '1'
     timeout-minutes: 30
     defaults:
       run:
@@ -43,40 +62,31 @@ jobs:
           - os: macos-26
             runner: mac
             build_type: Release
+            image: ''
           # ThreadSanitizer, for StreamPlayer's worker (DECISIONS.md, CI), in
           # Debug: the Mac's one Debug leg (DECISIONS.md, 2026-10-30).
           - os: macos-26
             runner: mac
             build_type: Debug
             tsan: true
+            image: ''
           - os: ubuntu-24.04
             runner: vk-linux-gpu
             build_type: Release
-            # ubuntu:24.04
-            container: '{"image":"ubuntu@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4","__GL_SHADER_DISK_CACHE_PATH":"/__w/_tool/nvidia-glcache","__GL_SHADER_DISK_CACHE_SKIP_CLEANUP":"1"}}'
+            # ghcr.io/taojin-6/volumetric_kit_ci:ubuntu-24.04
+            image: ghcr.io/taojin-6/volumetric_kit_ci@sha256:14e18e23ec99fc77cb671722ec9d0f5774e124951c047f67731740441234fd6b
           - os: ubuntu-26.04
             runner: vk-linux-gpu
             build_type: Release
-            # ubuntu:26.04
-            container: '{"image":"ubuntu@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4","__GL_SHADER_DISK_CACHE_PATH":"/__w/_tool/nvidia-glcache","__GL_SHADER_DISK_CACHE_SKIP_CLEANUP":"1"}}'
+            # ghcr.io/taojin-6/volumetric_kit_ci:ubuntu-26.04
+            image: ghcr.io/taojin-6/volumetric_kit_ci@sha256:b39be8613b4e8140a45c98cfc23bb1f40f98300d213fdab901c3108f02df626e
     steps:
-      # The bare image runs us as root and lacks git (checkout needs it) and a
-      # toolchain. The NVIDIA ICD needs libXext.so.6 and libEGL.so.1 before it
-      # hands the loader an instance; without them every GPU test would skip
-      # (gfx's _build.yml). libglfw3-dev is GLFW for the app's window, through
-      # gfx's GLFW tier, which links the distro's GLFW and so needs no X11
-      # headers; xvfb is the X server the smoke run draws to. The driver
-      # caches shaders only in a directory that exists. python3 runs the
-      # measure tools' tests.
-      - name: Install dependencies (Linux)
+      # The shader cache directory the container env names is made here: the
+      # driver creates nothing above its own GLCache, and the image cannot
+      # hold it, as /__w is mounted at run time.
+      - name: Shader cache directory (Linux)
         if: runner.os == 'Linux'
-        run: |
-          mkdir -p "$__GL_SHADER_DISK_CACHE_PATH"
-          apt-get update
-          apt-get install -y --no-install-recommends ca-certificates git \
-            cmake build-essential libglm-dev libvulkan-dev \
-            vulkan-validationlayers spirv-tools glslang-tools vulkan-tools \
-            libglfw3-dev libxext6 libegl1 xvfb python3
+        run: mkdir -p "$__GL_SHADER_DISK_CACHE_PATH"
 
       # A self-hosted workspace is readable by other repositories' jobs on the
       # host, so the token is not left in .git/config.
@@ -135,12 +145,12 @@ jobs:
 
       # Hashes of the workspace path and of the toolchain, for the dependency
       # cache's key: the machine and compiler, and on the Mac the macOS, Xcode
-      # and SDK versions, on Linux the container and the versions of the
-      # packages the dependencies build with.
+      # and SDK versions, on Linux the image's digest, which fixes every
+      # package the dependencies build with.
       - name: Dependency cache key
         id: deps
         env:
-          CONTAINER: ${{ matrix.container }}
+          IMAGE: ${{ matrix.image }}
         run: |
           fingerprint() {
             { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-12
@@ -153,9 +163,7 @@ jobs:
               xcode-select -p
               xcrun --show-sdk-version
             else
-              printf '%s\n' "$CONTAINER"
-              dpkg-query -W -f='${Package} ${Version}\n' cmake libc6-dev \
-                libglm-dev libvulkan-dev libglfw3-dev glslang-tools spirv-tools
+              printf '%s\n' "$IMAGE"
             fi
           )
           ws=$(printf '%s' "$GITHUB_WORKSPACE" | fingerprint)

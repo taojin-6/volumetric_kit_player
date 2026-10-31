@@ -46,14 +46,13 @@ chose it on 2026-10-31.
   the core's `homebrew-key` action at the core pin over the formulae the Mac
   check names (`none` off macOS); a hash of the toolchain: the machine and
   the compiler, and on the Mac the macOS, Xcode and SDK versions, on Linux
-  the container, whose image is pinned by digest, and the versions of the
-  packages the dependencies build with, which apt installs each run; and a
-  hash of the workspace path, as FetchContent bakes absolute paths into the
-  tree (sensor's `_build.yml`), so a Mac leg keeps a tree for each of its
-  runners, while in a container every Linux host sees one path. The pins
-  (`third_party/CMakeLists.txt`, `CMakeLists.txt`) and `ci.yml` end the key,
-  so a change to them, whose effect make does see, starts from the last tree
-  and saves its own.
+  the CI image's digest, which fixes every package the dependencies build
+  with; and a hash of the workspace path, as FetchContent bakes absolute
+  paths into the tree (sensor's `_build.yml`), so a Mac leg keeps a tree for
+  each of its runners, while in a container every Linux host sees one path.
+  The pins (`third_party/CMakeLists.txt`, `CMakeLists.txt`) and `ci.yml` end
+  the key, so a change to them, whose effect make does see, starts from the
+  last tree and saves its own.
 - A tree restored from an older key may hold a dependency no pin names any
   more, so the iOS build and the `consumer` tests take the dependencies the
   configure fetched, from its cache, rather than every directory in
@@ -1410,13 +1409,15 @@ How `StreamPlayer` plays a stream; its header says what each call does.
 - **Build and test on self-hosted runners with a GPU,** as gfx and recon do:
   the family's Mac (label `mac`; Release, and Debug until 2026-10-30, when
   ThreadSanitizer's Debug leg took its place; on MoltenVK) and its Linux
-  GPU hosts (label `vk-linux-gpu`; Release, in `ubuntu:24.04` and
-  `ubuntu:26.04` containers with `--gpus all`, on the NVIDIA driver). Why:
-  every tier past the clock needs a Vulkan device, and these are the family's
-  GPUs; a hosted runner has only a software one. The core's
+  GPU hosts (label `vk-linux-gpu`; Release, in job containers of the
+  family's CI image for Ubuntu 24.04 and 26.04, the core's
+  [`tools/ci/images`](https://github.com/taojin-6/volumetric_kit_core/tree/main/tools/ci/images),
+  with `--gpus all`, on the NVIDIA driver). Why: every tier past the clock
+  needs a Vulkan device, and these are the family's GPUs; a hosted runner has
+  only a software one. The core's
   [runner tooling](https://github.com/taojin-6/volumetric_kit_core/blob/main/tools/runners/README.md)
-  registers the runners. A job on the Mac installs nothing and fails naming
-  any formula missing.
+  registers the runners. No job installs anything: the image holds what a
+  Linux leg uses, and a job on the Mac fails naming any formula missing.
 - **Lint and the `required` gate run hosted:** they are free for a public
   repository, and once the legs finish or are cancelled a hosted gate always
   runs and reports, where a self-hosted one could queue as well. A leg queued
