@@ -4,6 +4,59 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-31 — CI: ThreadSanitizer's leg runs a test binary in one process
+
+With `VP_TEST_PER_BINARY`, which only the ThreadSanitizer leg turns on,
+`vp_add_test` registers each binary as one ctest test, its cases in one
+process, in place of a test per case (`gtest_discover_tests`). The owner
+chose it on 2026-10-31.
+
+- **Why:** under ThreadSanitizer a process costs about 2.2 s before its
+  case runs, and the leg ran about 470 cases, one process each. Measured on
+  this change's CI, the Test step took 118-119 s, against 136 s (the median
+  of main's last 10 runs), and its tests' times summed 228 s, against
+  660-780 s. `vp_stream_player_test`, 131 cases in 109 s, bounds the step.
+- **The cost:** the leg gives up isolation per case. A crash or hang ends
+  the binary's remaining cases, a case can meet state an earlier one left,
+  a report fails the binary's one test, and a binary passes when a case
+  skips, so the Test step names each skip in a notice. ThreadSanitizer
+  still runs every case, and the other legs keep a process per case.
+- The tests registered by hand (the soak, the probes, the view's rerun on
+  the specialized families) are one process each already, and stay so.
+
+## 2026-10-31 — CI: a dependency cache
+
+Each build leg restores `build/_deps`, the siblings' and googletest's
+sources and builds, before it configures, as sensor's CI does. The owner
+chose it on 2026-10-31.
+
+- **Why:** without it every leg cloned the siblings and built about 143 of
+  their objects each run. Measured on this change's CI, a run with every
+  tree restored against the run that saved them: Configure 2-7 s against
+  9-17 s and Build 20-23 s against 38-54 s, after 1-10 s to restore a tree
+  of 66-116 MB, and the run 175 s against 275 s.
+- **The restore prefix carries what make cannot see change,** so no leg
+  restores a tree built on other libraries, another toolchain or another
+  path: the OS, the build type and ThreadSanitizer; the Homebrew key, from
+  the core's `homebrew-key` action at the core pin over the formulae the Mac
+  check names (`none` off macOS); a hash of the toolchain: the machine and
+  the compiler, and on the Mac the macOS, Xcode and SDK versions, on Linux
+  the container, whose image is pinned by digest, and the versions of the
+  packages the dependencies build with, which apt installs each run; and a
+  hash of the workspace path, as FetchContent bakes absolute paths into the
+  tree (sensor's `_build.yml`), so a Mac leg keeps a tree for each of its
+  runners, while in a container every Linux host sees one path. The pins
+  (`third_party/CMakeLists.txt`, `CMakeLists.txt`) and `ci.yml` end the key,
+  so a change to them, whose effect make does see, starts from the last tree
+  and saves its own.
+- A tree restored from an older key may hold a dependency no pin names any
+  more, so the iOS build and the `consumer` tests take the dependencies the
+  configure fetched, from its cache, rather than every directory in
+  `_deps`.
+- **A brew or toolchain upgrade needs no clearing:** the prefix moves with
+  it, so the next run builds on the new versions (the core's DECISIONS.md,
+  "A brew upgrade needs no cache clearing").
+
 ## 2026-10-30 — Live audio on the live clock
 
 A live session's first Audio track on the geometry's clock plays on the
@@ -1377,9 +1430,9 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   Why: each cycle is a timing check on a shared host, and 8 spread over the
   same 0-20 ms reach the same states.
 - **Left out until a need shows:** Debug on Linux, as the GPU hosts are
-  shared with gfx and recon; AddressSanitizer and UBSan; a dependency cache,
-  which would save about 30 s a job on the Mac and could go stale after a
-  brew upgrade; and the siblings' split into reusable workflows.
+  shared with gfx and recon; AddressSanitizer and UBSan; and the siblings'
+  split into reusable workflows. *A dependency cache, left out here too,
+  came on 2026-10-31.*
 - **The window runs in CI only on the Linux legs, under Xvfb, in a workflow
   step:** the app plays the tests' stream for 60 presents under the
   validation layer, and a missing "presented" line, a layer the loader did

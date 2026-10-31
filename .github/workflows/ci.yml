@@ -85,19 +85,23 @@ jobs:
           persist-credentials: false
 
       # The Mac's Homebrew is shared, so a job installs nothing and fails
-      # naming any formula missing (the core's tools/runners/README.md).
+      # naming any formula missing (the core's tools/runners/README.md). The
+      # formulae are named once, here, for the key below.
       # TODO: take this check from a core action, as gfx, recon and calib copy
       # it too, once the core has one.
       - name: Check dependencies (macOS)
+        id: formulae
         if: runner.os == 'macOS'
         run: |
+          pkgs="cmake glm molten-vk vulkan-headers vulkan-loader"
+          pkgs="$pkgs vulkan-validationlayers shaderc glslang spirv-tools glfw"
+          echo "formulae=$pkgs" >> "$GITHUB_OUTPUT"
           command -v brew >/dev/null || {
             echo "::error::brew is not on this runner's PATH"
             exit 1
           }
           missing=""
-          for pkg in cmake glm molten-vk vulkan-headers vulkan-loader \
-              vulkan-validationlayers shaderc glslang spirv-tools glfw; do
+          for pkg in $pkgs; do
             brew list --formula "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
           done
           if [ -n "$missing" ]; then
@@ -109,6 +113,16 @@ jobs:
           echo "VP_LAYER_LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
           echo "VK_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
 
+      # The installed versions of those formulae and of all they depend on,
+      # for the dependency cache's key. The action is at the core pin
+      # (third_party/CMakeLists.txt): move it with that pin.
+      - name: Homebrew key
+        id: brew
+        if: runner.os == 'macOS'
+        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@c52a86ab8fcfd11fb6afbfeaf0ae9ef2209b18b2
+        with:
+          formulae: ${{ steps.formulae.outputs.formulae }}
+
       # The Linux legs exist for the GPU behind --gpus all, so they fail rather
       # than passing with no device.
       - name: GPU diagnostic (Linux)
@@ -119,10 +133,55 @@ jobs:
             exit 1
           }
 
+      # Hashes of the workspace path and of the toolchain, for the dependency
+      # cache's key: the machine and compiler, and on the Mac the macOS, Xcode
+      # and SDK versions, on Linux the container and the versions of the
+      # packages the dependencies build with.
+      - name: Dependency cache key
+        id: deps
+        env:
+          CONTAINER: ${{ matrix.container }}
+        run: |
+          fingerprint() {
+            { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-12
+          }
+          toolchain=$(
+            uname -m
+            c++ --version
+            if [ "$RUNNER_OS" = macOS ]; then
+              sw_vers -productVersion
+              xcode-select -p
+              xcrun --show-sdk-version
+            else
+              printf '%s\n' "$CONTAINER"
+              dpkg-query -W -f='${Package} ${Version}\n' cmake libc6-dev \
+                libglm-dev libvulkan-dev libglfw3-dev glslang-tools spirv-tools
+            fi
+          )
+          ws=$(printf '%s' "$GITHUB_WORKSPACE" | fingerprint)
+          tc=$(printf '%s' "$toolchain" | fingerprint)
+          echo "ws=$ws" >> "$GITHUB_OUTPUT"
+          echo "toolchain=$tc" >> "$GITHUB_OUTPUT"
+          echo "workspace $GITHUB_WORKSPACE -> $ws, toolchain -> $tc:"
+          echo "$toolchain"
+
+      # The fetched siblings and googletest, sources and builds. The restore
+      # prefix carries what make cannot see change, so no tree built on other
+      # libraries, another toolchain or another path is restored; the pins and
+      # this workflow end the key (DECISIONS.md, 2026-10-31).
+      - name: Cache third-party deps
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/_deps
+          key: deps-${{ matrix.os }}-${{ matrix.build_type }}${{ matrix.tsan && '-tsan' || '' }}-brew${{ steps.brew.outputs.key || 'none' }}-tc${{ steps.deps.outputs.toolchain }}-ws${{ steps.deps.outputs.ws }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            deps-${{ matrix.os }}-${{ matrix.build_type }}${{ matrix.tsan && '-tsan' || '' }}-brew${{ steps.brew.outputs.key || 'none' }}-tc${{ steps.deps.outputs.toolchain }}-ws${{ steps.deps.outputs.ws }}-
+
       - name: Configure
         # Retry to ride out transient FetchContent clone failures. The TSan leg
-        # instruments every target, the siblings' and googletest's too
-        # (DECISIONS.md, CI).
+        # instruments every target, the siblings' and googletest's too, and
+        # runs each test binary's cases in one process (DECISIONS.md, CI and
+        # 2026-10-31).
         run: |
           sanitize=""
           if [ "${{ matrix.tsan }}" = true ]; then
@@ -130,6 +189,7 @@ jobs:
                 EXE_LINKER_FLAGS SHARED_LINKER_FLAGS MODULE_LINKER_FLAGS; do
               sanitize="${sanitize} -DCMAKE_${flags}=-fsanitize=thread"
             done
+            sanitize="${sanitize} -DVP_TEST_PER_BINARY=ON"
           fi
           ok=0
           for attempt in 1 2 3; do
@@ -180,6 +240,12 @@ jobs:
           DYLD_FALLBACK_LIBRARY_PATH="${VP_LAYER_LIBRARY_PATH:-}" \
             ctest --test-dir build --output-on-failure -LE "${labels}" ${skip} \
               --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
+          # A binary's one test passes when a case skips, so name each skip.
+          if [ "${{ matrix.tsan }}" = true ]; then
+            { grep -ohE '^\[  SKIPPED \] [^ ]+\.[^ ]+' \
+                build/Testing/Temporary/LastTest.log || true; } |
+              cut -c14- | sort -u | awk '{print "::notice::skipped " $0}'
+          fi
 
       # The worker's and the view's suites again under the layer's
       # synchronization validation, on the Release legs: NVIDIA's, the rings
@@ -209,10 +275,13 @@ jobs:
             echo "::error::MoltenVK_ROOT is not set: run the core's setup-runners.sh with it (its tools/runners/README.md)"
             exit 1
           }
+          # The dependencies the configure above fetched, by its cache: a
+          # restored tree may hold others, which a pin no longer names.
           flags=()
-          for src in build/_deps/*-src; do
-            dep=$(basename "$src" -src | tr '[:lower:]' '[:upper:]')
-            flags+=("-DFETCHCONTENT_SOURCE_DIR_${dep}=$PWD/$src")
+          for dep in $(sed -n 's/^FETCHCONTENT_UPDATES_DISCONNECTED_\([^:]*\):.*/\1/p' \
+              build/CMakeCache.txt); do
+            src="$PWD/build/_deps/$(printf '%s' "$dep" | tr '[:upper:]' '[:lower:]')-src"
+            flags+=("-DFETCHCONTENT_SOURCE_DIR_${dep}=${src}")
           done
           rm -rf build-ios
           cmake --preset ios "${flags[@]}"

@@ -50,7 +50,9 @@ ctest --test-dir "$root/build" --output-on-failure
 default ON when the player is the top-level project, and OFF when another
 project adds it with `add_subdirectory` to link `volumetric_kit::player`.
 `VP_DESKTOP_APP` defaults to `VP_BUILD_APPS`; `-DVP_DESKTOP_APP=OFF` builds
-everything but the desktop app, with no GLFW.
+everything but the desktop app, with no GLFW. `-DVP_TEST_PER_BINARY=ON`
+registers each test binary as one ctest test, its cases in one process, as
+CI's ThreadSanitizer leg does; by default each case is a test of its own.
 
 Two targets make the desktop programs library calls, so a program of its own
 runs one with the view's settings it chooses (`AppConfig`, `app_config.hpp`,

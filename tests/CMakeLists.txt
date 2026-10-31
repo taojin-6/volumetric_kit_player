@@ -15,22 +15,30 @@ set_tests_properties(vp_test_streams PROPERTIES FIXTURES_SETUP vp_streams
 # device even where a test reaches it (AGENTS.md).
 set(VP_TEST_ENVIRONMENT VP_NO_AUDIO_DEVICE=1)
 
-# vp_<name>_test from <name>_test.cpp, linking the given targets. A case that
-# hangs fails after 5 minutes rather than holding a CI job to its limit. With
-# STREAMS, its cases read the tests' streams in VP_TEST_STREAMS.
+# vp_<name>_test from <name>_test.cpp, linking the given targets: a ctest test
+# per case, or with VP_TEST_PER_BINARY one per binary, its cases in one process
+# (DECISIONS.md, 2026-10-31). A case that hangs fails after 5 minutes, and a
+# binary after 10, rather than holding a CI job to its limit. With STREAMS, its
+# cases read the tests' streams in VP_TEST_STREAMS.
 function(vp_add_test name)
   cmake_parse_arguments(PARSE_ARGV 1 arg "STREAMS" "" "")
   add_executable(vp_${name}_test ${name}_test.cpp)
   target_link_libraries(vp_${name}_test PRIVATE ${arg_UNPARSED_ARGUMENTS}
                                                 GTest::gtest_main)
   vp_target_warnings(vp_${name}_test)
-  set(properties TIMEOUT 300 ENVIRONMENT ${VP_TEST_ENVIRONMENT})
+  set(properties ENVIRONMENT ${VP_TEST_ENVIRONMENT})
   if(arg_STREAMS)
     target_compile_definitions(vp_${name}_test
                                PRIVATE VP_TEST_STREAMS="${VP_TEST_STREAMS}")
     list(APPEND properties FIXTURES_REQUIRED vp_streams)
   endif()
-  gtest_discover_tests(vp_${name}_test PROPERTIES ${properties})
+  if(VP_TEST_PER_BINARY)
+    add_test(NAME vp_${name}_test COMMAND vp_${name}_test)
+    set_tests_properties(vp_${name}_test PROPERTIES ${properties} TIMEOUT 600)
+  else()
+    list(APPEND properties TIMEOUT 300)
+    gtest_discover_tests(vp_${name}_test PROPERTIES ${properties})
+  endif()
 endfunction()
 
 # The pacing clock, the live playout clock, the live records held as bytes and
@@ -257,21 +265,19 @@ endif()
 # (consumer/check.cmake), each dependency this build fetched, or took from a
 # local source, passed on as a local source, as grid's subproject tests do. They
 # check CMake, not a device, and the first builds the library again, so CI runs
-# them on one leg (label consumer).
-file(
-  GLOB fetched
-  LIST_DIRECTORIES true
-  "${FETCHCONTENT_BASE_DIR}/*-src")
+# them on one leg (label consumer). The fetched ones are those FetchContent gave
+# a FETCHCONTENT_UPDATES_DISCONNECTED_<NAME>, not every directory in
+# FETCHCONTENT_BASE_DIR: CI's restored tree may hold one no pin names
+# (DECISIONS.md, 2026-10-31).
 set(sources "")
-foreach(source IN LISTS fetched)
-  get_filename_component(name "${source}" NAME)
-  string(REGEX REPLACE "-src$" "" name "${name}")
-  string(TOUPPER "${name}" name)
-  list(APPEND sources "-DFETCHCONTENT_SOURCE_DIR_${name}=${source}")
-endforeach()
 get_cmake_property(cache CACHE_VARIABLES)
 foreach(var IN LISTS cache)
-  if(var MATCHES "^FETCHCONTENT_SOURCE_DIR_" AND NOT "${${var}}" STREQUAL "")
+  if(var MATCHES "^FETCHCONTENT_UPDATES_DISCONNECTED_(.+)$")
+    set(name "${CMAKE_MATCH_1}")
+    FetchContent_GetProperties(${name} SOURCE_DIR source)
+    list(APPEND sources "-DFETCHCONTENT_SOURCE_DIR_${name}=${source}")
+  elseif(var MATCHES "^FETCHCONTENT_SOURCE_DIR_" AND NOT "${${var}}" STREQUAL
+                                                     "")
     list(APPEND sources "-D${var}=${${var}}")
   endif()
 endforeach()
