@@ -12,7 +12,10 @@ process, in place of a test per case (`gtest_discover_tests`). The owner
 chose it on 2026-10-31.
 
 - **Why:** under ThreadSanitizer a process costs about 2.2 s before its
-  case runs, and the leg ran about 470 cases, one process each.
+  case runs, and the leg ran about 470 cases, one process each. Measured on
+  this change's CI, the Test step took 118-119 s, against 136 s (the median
+  of main's last 10 runs), and its tests' times summed 228 s, against
+  660-780 s. `vp_stream_player_test`, 131 cases in 109 s, bounds the step.
 - **The cost:** the leg gives up isolation per case. A crash or hang ends
   the binary's remaining cases, a case can meet state an earlier one left,
   and a report fails the binary's one test. ThreadSanitizer still runs
@@ -27,14 +30,19 @@ sources and builds, before it configures, as sensor's CI does. The owner
 chose it on 2026-10-31.
 
 - **Why:** without it every leg cloned the siblings and built about 143 of
-  their objects each run: Configure took 16 s and Build 42-49 s (medians).
+  their objects each run. Measured on this change's CI, a run with every
+  tree restored against the run that saved them: Configure 2-7 s against
+  9-17 s and Build 20-23 s against 38-54 s, after 1-10 s to restore a tree
+  of 66-116 MB, and the run 175 s against 275 s.
 - **The key carries all a tree is built with,** in its restore prefix too,
   so no leg restores a tree built on other libraries or flags: the OS, the
   build type and ThreadSanitizer; the Homebrew key, from the core's
   `homebrew-key` action at the core pin over the formulae the Mac check
   names (`none` off macOS); a hash of the Linux container, whose image is
   pinned by digest; and a hash of the workspace path, as FetchContent bakes
-  absolute paths into the tree (sensor's `_build.yml`). The pins
+  absolute paths into the tree (sensor's `_build.yml`), so a Mac leg keeps a
+  tree for each of its runners, while in a container every Linux host sees
+  one path. The pins
   (`third_party/CMakeLists.txt`, `CMakeLists.txt`) end it, so a bump starts
   from the last tree and saves its own.
 - **A brew upgrade needs no clearing:** the Homebrew key moves with it, so
