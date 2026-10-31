@@ -19,7 +19,8 @@ The owner chose both on 2026-10-31.
   136 s (the median of main's last 10 runs), and its tests' times summed
   228 s, against 660-780 s. `vp_stream_player_test`, 131 cases in 109 s,
   bounded the step, so it runs as `StreamPlayerTest` (73 cases),
-  `LivePlayerTest` (43) and `.others` (15).
+  `LivePlayerTest` (43) and `.others` (15). The step then took 66 s,
+  bounded by `LivePlayerTest`: 57 s, from 8 s in.
 - **The cost:** the leg gives up isolation per case. A crash or hang ends
   the process's remaining cases, a case can meet state an earlier one left,
   a report fails the process's one test, and that test passes when a case
