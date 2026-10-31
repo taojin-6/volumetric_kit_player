@@ -262,6 +262,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: core at #76's merge (c52a86a, 0.35.0), which the player requires:
+  an image with `TRANSIENT_ATTACHMENT` usage, as gfx's 4x MSAA window
+  targets are, takes lazily allocated memory (Metal's memoryless storage on
+  Apple GPUs). CI's lint job takes the core's trigger check at the new pin.
 - build: grid at #11's merge (cf7c99a, 0.6.0), whose `StreamServer` serves
   every track of a session, track 0's keys starting each GOP; since 0.4.0,
   `CodecStream` also writes and serves Audio tracks muxed by pts (0.5.0).
