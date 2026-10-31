@@ -398,8 +398,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - ci: the plain Mac Debug leg is dropped; the ThreadSanitizer leg is the
   Mac's one Debug build, and the Mac builds Release besides.
 - ci: each build leg restores the siblings' and googletest's sources and
-  builds from a cache, keyed by the leg, its Homebrew versions or Linux
-  image, the workspace path and the pins.
+  builds from a cache, keyed by the leg, its Homebrew versions, its
+  toolchain (on Linux the image and its packages' versions), the workspace
+  path, the pins and the workflow.
 - ci: the ThreadSanitizer leg runs each test binary's cases in one process
   (`VP_TEST_PER_BINARY`); the other legs keep one process per case.
 

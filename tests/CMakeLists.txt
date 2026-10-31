@@ -265,21 +265,19 @@ endif()
 # (consumer/check.cmake), each dependency this build fetched, or took from a
 # local source, passed on as a local source, as grid's subproject tests do. They
 # check CMake, not a device, and the first builds the library again, so CI runs
-# them on one leg (label consumer).
-file(
-  GLOB fetched
-  LIST_DIRECTORIES true
-  "${FETCHCONTENT_BASE_DIR}/*-src")
+# them on one leg (label consumer). The fetched ones are those FetchContent gave
+# a FETCHCONTENT_UPDATES_DISCONNECTED_<NAME>, not every directory in
+# FETCHCONTENT_BASE_DIR: CI's restored tree may hold one no pin names
+# (DECISIONS.md, 2026-10-31).
 set(sources "")
-foreach(source IN LISTS fetched)
-  get_filename_component(name "${source}" NAME)
-  string(REGEX REPLACE "-src$" "" name "${name}")
-  string(TOUPPER "${name}" name)
-  list(APPEND sources "-DFETCHCONTENT_SOURCE_DIR_${name}=${source}")
-endforeach()
 get_cmake_property(cache CACHE_VARIABLES)
 foreach(var IN LISTS cache)
-  if(var MATCHES "^FETCHCONTENT_SOURCE_DIR_" AND NOT "${${var}}" STREQUAL "")
+  if(var MATCHES "^FETCHCONTENT_UPDATES_DISCONNECTED_(.+)$")
+    set(name "${CMAKE_MATCH_1}")
+    FetchContent_GetProperties(${name} SOURCE_DIR source)
+    list(APPEND sources "-DFETCHCONTENT_SOURCE_DIR_${name}=${source}")
+  elseif(var MATCHES "^FETCHCONTENT_SOURCE_DIR_" AND NOT "${${var}}" STREQUAL
+                                                     "")
     list(APPEND sources "-D${var}=${${var}}")
   endif()
 endforeach()

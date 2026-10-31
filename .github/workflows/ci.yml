@@ -133,35 +133,49 @@ jobs:
             exit 1
           }
 
-      # Hashes of the workspace path and, on Linux, of the container, for the
-      # dependency cache's key.
-      - name: Workspace fingerprint
-        id: ws
+      # Hashes of the workspace path and of the toolchain, for the dependency
+      # cache's key: the machine and compiler, and on the Mac the macOS, Xcode
+      # and SDK versions, on Linux the container and the versions of the
+      # packages the dependencies build with.
+      - name: Dependency cache key
+        id: deps
         env:
           CONTAINER: ${{ matrix.container }}
         run: |
           fingerprint() {
-            printf '%s' "$1" |
-              { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-12
+            { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-12
           }
-          h=$(fingerprint "$GITHUB_WORKSPACE")
-          image=none
-          [ -z "$CONTAINER" ] || image=$(fingerprint "$CONTAINER")
-          echo "hash=$h" >> "$GITHUB_OUTPUT"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "workspace $GITHUB_WORKSPACE -> $h, container -> $image"
+          toolchain=$(
+            uname -m
+            c++ --version
+            if [ "$RUNNER_OS" = macOS ]; then
+              sw_vers -productVersion
+              xcode-select -p
+              xcrun --show-sdk-version
+            else
+              printf '%s\n' "$CONTAINER"
+              dpkg-query -W -f='${Package} ${Version}\n' cmake libc6-dev \
+                libglm-dev libvulkan-dev libglfw3-dev glslang-tools spirv-tools
+            fi
+          )
+          ws=$(printf '%s' "$GITHUB_WORKSPACE" | fingerprint)
+          tc=$(printf '%s' "$toolchain" | fingerprint)
+          echo "ws=$ws" >> "$GITHUB_OUTPUT"
+          echo "toolchain=$tc" >> "$GITHUB_OUTPUT"
+          echo "workspace $GITHUB_WORKSPACE -> $ws, toolchain -> $tc:"
+          echo "$toolchain"
 
       # The fetched siblings and googletest, sources and builds. The restore
-      # prefix carries all a tree is built with, so no tree built on other
-      # libraries or flags is restored, and the pins end the key
-      # (DECISIONS.md, 2026-10-31).
+      # prefix carries what make cannot see change, so no tree built on other
+      # libraries, another toolchain or another path is restored; the pins and
+      # this workflow end the key (DECISIONS.md, 2026-10-31).
       - name: Cache third-party deps
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/_deps
-          key: deps-${{ matrix.os }}-${{ matrix.build_type }}${{ matrix.tsan && '-tsan' || '' }}-brew${{ steps.brew.outputs.key || 'none' }}-img${{ steps.ws.outputs.image }}-ws${{ steps.ws.outputs.hash }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt') }}
+          key: deps-${{ matrix.os }}-${{ matrix.build_type }}${{ matrix.tsan && '-tsan' || '' }}-brew${{ steps.brew.outputs.key || 'none' }}-tc${{ steps.deps.outputs.toolchain }}-ws${{ steps.deps.outputs.ws }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt', '.github/workflows/ci.yml') }}
           restore-keys: |
-            deps-${{ matrix.os }}-${{ matrix.build_type }}${{ matrix.tsan && '-tsan' || '' }}-brew${{ steps.brew.outputs.key || 'none' }}-img${{ steps.ws.outputs.image }}-ws${{ steps.ws.outputs.hash }}-
+            deps-${{ matrix.os }}-${{ matrix.build_type }}${{ matrix.tsan && '-tsan' || '' }}-brew${{ steps.brew.outputs.key || 'none' }}-tc${{ steps.deps.outputs.toolchain }}-ws${{ steps.deps.outputs.ws }}-
 
       - name: Configure
         # Retry to ride out transient FetchContent clone failures. The TSan leg
@@ -226,6 +240,12 @@ jobs:
           DYLD_FALLBACK_LIBRARY_PATH="${VP_LAYER_LIBRARY_PATH:-}" \
             ctest --test-dir build --output-on-failure -LE "${labels}" ${skip} \
               --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
+          # A binary's one test passes when a case skips, so name each skip.
+          if [ "${{ matrix.tsan }}" = true ]; then
+            { grep -ohE '^\[  SKIPPED \] [^ ]+\.[^ ]+' \
+                build/Testing/Temporary/LastTest.log || true; } |
+              cut -c14- | sort -u | awk '{print "::notice::skipped " $0}'
+          fi
 
       # The worker's and the view's suites again under the layer's
       # synchronization validation, on the Release legs: NVIDIA's, the rings
@@ -255,10 +275,13 @@ jobs:
             echo "::error::MoltenVK_ROOT is not set: run the core's setup-runners.sh with it (its tools/runners/README.md)"
             exit 1
           }
+          # The dependencies the configure above fetched, by its cache: a
+          # restored tree may hold others, which a pin no longer names.
           flags=()
-          for src in build/_deps/*-src; do
-            dep=$(basename "$src" -src | tr '[:lower:]' '[:upper:]')
-            flags+=("-DFETCHCONTENT_SOURCE_DIR_${dep}=$PWD/$src")
+          for dep in $(sed -n 's/^FETCHCONTENT_UPDATES_DISCONNECTED_\([^:]*\):.*/\1/p' \
+              build/CMakeCache.txt); do
+            src="$PWD/build/_deps/$(printf '%s' "$dep" | tr '[:upper:]' '[:lower:]')-src"
+            flags+=("-DFETCHCONTENT_SOURCE_DIR_${dep}=${src}")
           done
           rm -rf build-ios
           cmake --preset ios "${flags[@]}"
