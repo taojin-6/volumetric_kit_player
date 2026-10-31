@@ -165,8 +165,9 @@ jobs:
 
       - name: Configure
         # Retry to ride out transient FetchContent clone failures. The TSan leg
-        # instruments every target, the siblings' and googletest's too
-        # (DECISIONS.md, CI).
+        # instruments every target, the siblings' and googletest's too, and
+        # runs each test binary's cases in one process (DECISIONS.md, CI and
+        # 2026-10-31).
         run: |
           sanitize=""
           if [ "${{ matrix.tsan }}" = true ]; then
@@ -174,6 +175,7 @@ jobs:
                 EXE_LINKER_FLAGS SHARED_LINKER_FLAGS MODULE_LINKER_FLAGS; do
               sanitize="${sanitize} -DCMAKE_${flags}=-fsanitize=thread"
             done
+            sanitize="${sanitize} -DVP_TEST_PER_BINARY=ON"
           fi
           ok=0
           for attempt in 1 2 3; do

@@ -47,6 +47,8 @@ else()
   set(vp_tests_default ${PROJECT_IS_TOP_LEVEL})
 endif()
 option(VP_BUILD_TESTS "Build tests" ${vp_tests_default})
+option(VP_TEST_PER_BINARY
+       "Register each test binary as one ctest test, not one per case" OFF)
 option(VP_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
        ${PROJECT_IS_TOP_LEVEL})
 

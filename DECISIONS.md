@@ -4,6 +4,22 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-10-31 — CI: ThreadSanitizer's leg runs a test binary in one process
+
+With `VP_TEST_PER_BINARY`, which only the ThreadSanitizer leg turns on,
+`vp_add_test` registers each binary as one ctest test, its cases in one
+process, in place of a test per case (`gtest_discover_tests`). The owner
+chose it on 2026-10-31.
+
+- **Why:** under ThreadSanitizer a process costs about 2.2 s before its
+  case runs, and the leg ran about 470 cases, one process each.
+- **The cost:** the leg gives up isolation per case. A crash or hang ends
+  the binary's remaining cases, a case can meet state an earlier one left,
+  and a report fails the binary's one test. ThreadSanitizer still runs
+  every case, and the other legs keep a process per case.
+- The tests registered by hand (the soak, the probes, the view's rerun on
+  the specialized families) are one process each already, and stay so.
+
 ## 2026-10-31 — CI: a dependency cache
 
 Each build leg restores `build/_deps`, the siblings' and googletest's
