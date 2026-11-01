@@ -31,6 +31,9 @@ inline constexpr std::chrono::nanoseconds kLiveWindow{std::chrono::seconds{10}};
 /// The samples a window holds: past 102.4 records a second it spans less
 /// than kLiveWindow.
 inline constexpr std::size_t kLiveSamples = 1024;
+/// The records a spike's drain is judged over (LiveClock's **Spikes**):
+/// about half a second at 25 records a second.
+inline constexpr std::size_t kDrainSpan = 12;
 /// How far the applied point falls a second elapsed (@ref step_point), and
 /// how far the offset rises (LiveClock): 1 ms a record at 25 Hz. Each moves
 /// the other way at once.
@@ -83,8 +86,8 @@ struct Playout {
   /// D's target: the largest need, clamped to [0, kMaxLiveDelay].
   std::chrono::nanoseconds target{0};
   DelayNeed need = DelayNeed::kNone;  ///< The need that set the target.
-  /// That need passed kMaxLiveDelay, or a spike lasts (LiveClock): frames
-  /// that needed more than D are late.
+  /// That need passed kMaxLiveDelay, or the newest record's own did (a
+  /// spike's, LiveClock): frames that needed more are late.
   bool clamped = false;
   /// The worker's lead: a record's decode begins at its present time less
   /// this, so its frame is published by then.
@@ -223,11 +226,12 @@ class AudioMaster {
 /// (LiveAudio). The target is the largest need, clamped to [0, kMaxLiveDelay].
 ///
 /// **Spikes.** A record whose lateness plus the lead passes kMaxLiveDelay is
-/// late at any D: it is a spike's, and so is each record after one until a
-/// record is no later than the largest lateness of the window's records
-/// outside spikes, or none of those is left. So D rises neither for a delay
-/// it cannot cover nor for the backlog that drains behind it, and a lasting
-/// slower link raises it once its records come within the clamp.
+/// late at any D: it is a spike's, and so is each record after one until the
+/// backlog has drained, a record's `arrival − pts` no lower than that of the
+/// spike's record kDrainSpan before it, or no record outside spikes is left.
+/// So D rises neither for a delay it cannot cover nor for the backlog that
+/// drains behind it, and a link that stays slower raises it once its records
+/// come at the stream's pace within the clamp.
 ///
 /// **Point.** At each write, the applied point steps toward the offset plus
 /// the target (@ref step_point), with the time since the last step; while

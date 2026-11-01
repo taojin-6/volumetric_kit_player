@@ -242,12 +242,19 @@ void LiveClock::update(Clock::time_point at, bool arrival) {
   }
   if (arrival) {
     // The newest is a spike's past the clamp, and after a spike's record
-    // while it is later than every steady one.
+    // while a steady one is left and the backlog still drains: the records
+    // since the spike's kDrainSpan before it came faster than the stream's
+    // pace (ahead fell).
     Arrival& newest = arrivals_[at_of(arrivals_head_, before)];
     const bool after_spike =
         before > 0 && arrivals_[at_of(arrivals_head_, before - 1)].spike;
+    const Arrival* const span =
+        before >= kDrainSpan
+            ? &arrivals_[at_of(arrivals_head_, before - kDrainSpan)]
+            : nullptr;
+    const bool drained = span && span->spike && newest.ahead >= span->ahead;
     newest.spike = lateness(newest) + next.lead > kMaxLiveDelay ||
-                   (after_spike && steady && lateness(newest) > late);
+                   (after_spike && steady && !drained);
     if (!newest.spike) {
       late = std::max(late, lateness(newest));
     }
@@ -264,9 +271,13 @@ void LiveClock::update(Clock::time_point at, bool arrival) {
     need = audio_need_;
     next.need = DelayNeed::kAudio;
   }
-  next.clamped = need > kMaxLiveDelay ||
-                 (arrivals_size_ > 0 &&
-                  arrivals_[at_of(arrivals_head_, arrivals_size_ - 1)].spike);
+  // Or the newest record's own need passed it: a spike's past the clamp.
+  next.clamped =
+      need > kMaxLiveDelay ||
+      (arrivals_size_ > 0 &&
+       lateness(arrivals_[at_of(arrivals_head_, arrivals_size_ - 1)]) +
+               next.lead >
+           kMaxLiveDelay);
   next.target = std::min(need, kMaxLiveDelay);
   if (!state_ || next.target > state_->target) {
     rose_at_ = at;
