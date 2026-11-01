@@ -541,7 +541,6 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
   config.view.ui_min_frame_height = 44.0f;
   config.view.source_button = true;
   config.view.compact_stats = true;
-  config.view.unlit = true;
   config.view.textured = true;
   config.view.device_timing = vkp::DeviceTiming::kOff;
   config.view.tile_depth = 1;
@@ -562,7 +561,6 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
     EXPECT_EQ(view.ui_min_frame_height, 44.0f);
     EXPECT_TRUE(view.source_button);
     EXPECT_TRUE(view.compact_stats);
-    EXPECT_TRUE(view.unlit);
     EXPECT_TRUE(view.textured);
     EXPECT_TRUE(static_cast<bool>(view.make_hooks)) << "make_hooks dropped";
     EXPECT_EQ(view.device_requirements.optional_extensions,

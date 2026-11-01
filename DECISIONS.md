@@ -4,6 +4,26 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-11-01 — Wire and Cull replace Unlit
+
+The panel's Unlit box and the U key are gone (`PlayerView::unlit`,
+`set_unlit`, `PlayerViewConfig::unlit`), and two boxes follow Deblock: Wire,
+gfx's `kHybridMeshWireframe` (the triangles' edges over the mesh), and Cull,
+its `kHybridMeshCullBackFaces`; W and C on the desktop.
+
+- **Why Unlit goes.** The owner had no use for it, and an iPhone in landscape
+  has room for one more box on the controls' rows, not two: a third line
+  pushes the controls under the compact stats (`TheStatsFitAPhone`). A program
+  still draws unshaded through its own binding's `kHybridMeshLit` clear.
+- **Why these labels.** Only "Wire" and "Cull" fit that row; "Wireframe" or
+  "Back faces" wrap it.
+- **Cull is off at first,** so both sides draw as before.
+- **The view requires line fill.** Its device asks for `fillModeNonSolid`,
+  for gfx's edge pass, and `PlayerView::create` refuses a GPU without it: every
+  Mac, iPhone, iPad and NVIDIA box has it, and the core has no optional
+  features, so Wire is always shown rather than hidden on a GPU none of the
+  player's targets is.
+
 ## 2026-10-31 — CI: ThreadSanitizer's leg runs a test binary in one process
 
 With `VP_TEST_PER_BINARY`, which only the ThreadSanitizer leg turns on,
@@ -674,8 +694,8 @@ amends 2026-10-25's library entry.
 `frame_hooks.hpp`: `FrameHooks`, made once by `PlayerViewConfig::make_hooks`
 from a `HookContext`. Why: a caller adds GPU work to a frame and chooses what
 each display frame draws, a readback or a measurement for one, with no copy
-of the worker or the view; the panel's Unlit, `vp_probe --latency` and
-`--save-meshes` are such callers.
+of the worker or the view; `vp_probe --latency` and `--save-meshes` are such
+callers.
 
 - **Where each runs:** `after_mesh` on the worker before every publish, a
   frame's, one meshed again after a redo, a paused toggle's rebuild and a
@@ -714,8 +734,8 @@ of the worker or the view; the panel's Unlit, `vp_probe --latency` and
   which waits for that slot's last frame. `FrameTaker` does this for the view
   and for `vp_probe --worker` alike, so the commit's handling is tested where
   no view runs, NVIDIA included.
-- **Unlit is the view's own `DrawBinding`,** clearing `kHybridMeshLit`;
-  Normals takes precedence. A box after Deblock, live too, and the U key.
+- **Unlit was the view's own `DrawBinding`,** clearing `kHybridMeshLit`; it
+  was removed on 2026-11-01 for Wire (see that entry).
 - **`PlayerView::record_mesh` records the mesh as the last frame drew it,**
   and `frame` draws through it: the swapchain's images cannot be read back,
   so a test draws it into an offscreen target of `target_layout` and reads

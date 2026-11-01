@@ -13,19 +13,20 @@
 // playing(), Step pauses, Loop toggles, Normals flips the view's shading and
 // shows pressed while on, hovered or not, Deblock, on at first, toggles the
 // player's deblock, on the row or, where the row would not fit, below it,
-// Unlit, off at first, flips the view's Unlit, after Deblock or below it,
-// Texture is drawn only when given, after Unlit, and flips the view's Texture,
+// Wire, off at first, flips the view's wireframe, after Deblock or below it,
+// Cull, off at first, after Wire, flips its back-face culling, Texture is
+// drawn only when given, after Cull, and flips the view's Texture,
 // a live player's too, Mute is drawn only for a file with audio and flips the
 // player's mute, its status line naming the audio's state,
 // "Pause" and "Normals" fit their buttons, a finger on the
 // controls is ImGui's, and they keep clear of the safe area; a status line too
 // wide for the work area breaks between its parts, the rows after the first
-// indented; a live player's, never started, are Normals, Deblock and Unlit over
-// its status line. The Source button is drawn only when asked for, at the work
-// area's top right clear of the safe area and of the stats' body, leaving the
-// controls where they were, and a tap on it is one press. The stats sit at the
-// work area's top left; a finger on their header is ImGui's and on their body
-// the scene's; a tap on the header closes them, with nothing rebuilt, and
+// indented; a live player's, never started, are Normals, Deblock, Wire and Cull
+// over its status line. The Source button is drawn only when asked for, at the
+// work area's top right clear of the safe area and of the stats' body, leaving
+// the controls where they were, and a tap on it is one press. The stats sit at
+// the work area's top left; a finger on their header is ImGui's and on their
+// body the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
 // refresh; a program's text is their last, a row for each of its lines, read
 // a program-line refresh apart at most, never while they are closed, and at
@@ -643,7 +644,7 @@ class ControlsTest : public ::testing::Test {
     scene_area_ = scene_area(laid, laid_open);
     const UiArea& area = scene_area_;
     bool open = laid_open;
-    draw_controls(*player_, controls_shown_, normals_, unlit_,
+    draw_controls(*player_, controls_shown_, normals_, wireframe_, cull_,
                   texture_shown_ ? &textured_ : nullptr, area,
                   box_shown_ ? vp_test::kPanelLabel : nullptr, &open);
     if (source_shown_ && draw_source(area)) {
@@ -816,9 +817,10 @@ class ControlsTest : public ::testing::Test {
   vp_test::Scratch scratch_;
   std::unique_ptr<StreamPlayer> player_;
   bool normals_ = false;        // the view's shading, which the controls flip
-  bool unlit_ = false;          // the view's Unlit, which its box flips
   bool textured_ = false;       // the view's Texture, which its box flips
   bool texture_shown_ = false;  // Texture's box drawn: a texture is bound
+  bool cull_ = false;           // the view's Cull, which its box flips
+  bool wireframe_ = false;      // the view's Wire, which its box flips
   std::optional<PlaybackStats> stats_;
   StatsPanel panel_;
   std::optional<FrameStamp> shown_;
@@ -900,7 +902,7 @@ TEST_F(ControlsTest, DeblockIsOnAtFirstAndATapTogglesIt) {
 }
 
 // 340 points across, the row with Deblock would be wider than the panel may
-// grow, so Deblock is below it, at its left, Unlit after it, and the status
+// grow, so Deblock is below it, at its left, Wire after it, and the status
 // line below them; a tap there toggles it.
 TEST_F(ControlsTest, WhereTheRowWouldNotFitDeblockIsBelowIt) {
   width_ = 340;
@@ -911,9 +913,10 @@ TEST_F(ControlsTest, WhereTheRowWouldNotFitDeblockIsBelowIt) {
   const glm::vec2 deblock =
       vp_test::control_top_left(window, vp_test::kDeblock);
   EXPECT_EQ(deblock.x, vp_test::control_top_left(window, 0).x);
-  const glm::vec2 unlit = vp_test::control_top_left(window, vp_test::kUnlit);
-  EXPECT_EQ(unlit.y, deblock.y);
-  EXPECT_GT(unlit.x, deblock.x);
+  const glm::vec2 wireframe =
+      vp_test::control_top_left(window, vp_test::kWireframe);
+  EXPECT_EQ(wireframe.y, deblock.y);
+  EXPECT_GT(wireframe.x, deblock.x);
   const float row = vp_test::control_size(window, 0).y;
   const float spacing = ImGui::GetStyle().ItemSpacing.y;
   EXPECT_NEAR(window.ContentSize.y,
@@ -926,11 +929,11 @@ TEST_F(ControlsTest, WhereTheRowWouldNotFitDeblockIsBelowIt) {
   EXPECT_TRUE(player_->playing()) << "the tap pressed Deblock alone";
 }
 
-// Unlit, a box after Deblock, off at first: a tap flips the view's Unlit and
+// Wire, a box after Deblock, off at first: a tap flips the view's Wire and
 // nothing else, and another flips it back. 400 points across, the row holds
-// Deblock but not Unlit, which takes a line below at its left; 600 across, it
+// Deblock but not Wire, which takes a line below at its left; 600 across, it
 // is on the row.
-TEST_F(ControlsTest, UnlitFlipsTheViewsUnlitAndFollowsDeblock) {
+TEST_F(ControlsTest, WireframeFlipsTheViewsWireframeAndFollowsDeblock) {
   for (const std::uint32_t width : {400u, 600u}) {
     SCOPED_TRACE(width);
     width_ = width;
@@ -938,26 +941,27 @@ TEST_F(ControlsTest, UnlitFlipsTheViewsUnlitAndFollowsDeblock) {
     frame();
     const ImGuiWindow& window = panel();
     EXPECT_TRUE(vp_test::deblock_on_row(window));
-    const glm::vec2 unlit = vp_test::control_top_left(window, vp_test::kUnlit);
+    const glm::vec2 wireframe =
+        vp_test::control_top_left(window, vp_test::kWireframe);
     const glm::vec2 first = vp_test::control_top_left(window, 0);
-    EXPECT_EQ(unlit.y == first.y, width == 600u);
-    EXPECT_EQ(item_under(control(vp_test::kUnlit)),
-              ImGui::FindWindowByName(kControlsWindow)->GetID("Unlit"));
-    ASSERT_FALSE(unlit_);
-    tap(control(vp_test::kUnlit));
-    EXPECT_TRUE(unlit_);
+    EXPECT_EQ(wireframe.y == first.y, width == 600u);
+    EXPECT_EQ(item_under(control(vp_test::kWireframe)),
+              ImGui::FindWindowByName(kControlsWindow)->GetID("Wire"));
+    ASSERT_FALSE(wireframe_);
+    tap(control(vp_test::kWireframe));
+    EXPECT_TRUE(wireframe_);
     EXPECT_FALSE(normals_);
     EXPECT_TRUE(player_->deblock());
-    EXPECT_TRUE(player_->playing()) << "the tap pressed Unlit alone";
-    tap(control(vp_test::kUnlit));
-    EXPECT_FALSE(unlit_);
+    EXPECT_TRUE(player_->playing()) << "the tap pressed Wire alone";
+    tap(control(vp_test::kWireframe));
+    EXPECT_FALSE(wireframe_);
   }
 }
 
-// Texture, a box after Unlit, is drawn only when given (a view with a texture
+// Texture, a box after Wire, is drawn only when given (a view with a texture
 // bound): without it, nothing is at its place, and 600 points across the
-// panel is narrower. Given, it is on Unlit's line, after it, 400 points
-// across, where Unlit is below the row, as 600, where both are on it; a tap
+// panel is narrower. Given, it is on Wire's line, after it, 400 points
+// across, where Wire is below the row, as 600, where both are on it; a tap
 // flips the view's Texture and nothing else, and another flips it back.
 TEST_F(ControlsTest, TextureIsDrawnOnlyWhenGivenAndATapFlipsIt) {
   const ImGuiID texture_id =
@@ -974,12 +978,14 @@ TEST_F(ControlsTest, TextureIsDrawnOnlyWhenGivenAndATapFlipsIt) {
     frame();
     frame();
     const ImGuiWindow& window = panel();
-    const glm::vec2 unlit = vp_test::control_top_left(window, vp_test::kUnlit);
+    const glm::vec2 wireframe =
+        vp_test::control_top_left(window, vp_test::kWireframe);
     const glm::vec2 texture =
         vp_test::control_top_left(window, vp_test::kTexture);
-    EXPECT_EQ(texture.y, unlit.y);
-    EXPECT_GT(texture.x, unlit.x);
-    EXPECT_EQ(unlit.y == vp_test::control_top_left(window, 0).y, width == 600u);
+    EXPECT_EQ(texture.y, wireframe.y);
+    EXPECT_GT(texture.x, wireframe.x);
+    EXPECT_EQ(wireframe.y == vp_test::control_top_left(window, 0).y,
+              width == 600u);
     if (width == 600u) {
       EXPECT_GT(window.Size.x, without);
     }
@@ -987,13 +993,33 @@ TEST_F(ControlsTest, TextureIsDrawnOnlyWhenGivenAndATapFlipsIt) {
     ASSERT_FALSE(textured_);
     tap(control(vp_test::kTexture));
     EXPECT_TRUE(textured_);
-    EXPECT_FALSE(unlit_);
+    EXPECT_FALSE(wireframe_);
     EXPECT_FALSE(normals_);
     EXPECT_TRUE(player_->deblock());
     EXPECT_TRUE(player_->playing()) << "the tap pressed Texture alone";
     tap(control(vp_test::kTexture));
     EXPECT_FALSE(textured_);
   }
+}
+
+// Cull, a box after Wire, off at first: a tap culls the view's back faces and
+// does nothing else, and another draws them again.
+TEST_F(ControlsTest, CullFlipsTheViewsBackFaceCulling) {
+  const ImGuiID cull_id =
+      ImGui::FindWindowByName(kControlsWindow)->GetID("Cull");
+  width_ = 600;
+  frame();
+  frame();
+  EXPECT_EQ(item_under(control(vp_test::kCull)), cull_id);
+  ASSERT_FALSE(cull_);
+  tap(control(vp_test::kCull));
+  EXPECT_TRUE(cull_);
+  EXPECT_FALSE(wireframe_);
+  EXPECT_FALSE(normals_);
+  EXPECT_TRUE(player_->deblock());
+  EXPECT_TRUE(player_->playing()) << "the tap pressed Cull alone";
+  tap(control(vp_test::kCull));
+  EXPECT_FALSE(cull_);
 }
 
 // Mute, a box after the others, is drawn only for a file with audio; a tap
@@ -1018,7 +1044,7 @@ TEST_F(ControlsTest, MuteIsDrawnOnlyWithAudioAndATapFlipsIt) {
   EXPECT_TRUE(player_->muted());
   EXPECT_TRUE(player_->playing()) << "the tap pressed Mute alone";
   EXPECT_TRUE(player_->deblock());
-  EXPECT_FALSE(unlit_);
+  EXPECT_FALSE(wireframe_);
   tap(mute());
   EXPECT_FALSE(player_->muted());
   // The status line, the controls' last item, on one row.
@@ -1032,9 +1058,9 @@ TEST_F(ControlsTest, MuteIsDrawnOnlyWithAudioAndATapFlipsIt) {
               window.Pos.x + window.WindowPadding.x, 1.0f);
 }
 
-// A live player's Texture, given, is after its Unlit on the line over the
+// A live player's Texture, given, is after its Wire on the line over the
 // status line, and a tap flips the view's Texture alone.
-TEST_F(ControlsTest, ALivePlayersTextureIsAfterItsUnlit) {
+TEST_F(ControlsTest, ALivePlayersTextureIsAfterItsWireframe) {
   core::Result<std::unique_ptr<StreamPlayer>> live =
       StreamPlayer::connect({"127.0.0.1", 47801});  // never started: no I/O
   ASSERT_TRUE(live.ok()) << live.status().message();
@@ -1043,13 +1069,14 @@ TEST_F(ControlsTest, ALivePlayersTextureIsAfterItsUnlit) {
   frame();
   frame();
   const ImGuiWindow& window = panel();
-  const glm::vec2 unlit = vp_test::live_top_left(window, vp_test::kUnlit);
+  const glm::vec2 wireframe =
+      vp_test::live_top_left(window, vp_test::kWireframe);
   const glm::vec2 texture = vp_test::live_top_left(window, vp_test::kTexture);
-  EXPECT_EQ(texture.y, unlit.y);
-  EXPECT_GT(texture.x, unlit.x);
+  EXPECT_EQ(texture.y, wireframe.y);
+  EXPECT_GT(texture.x, wireframe.x);
   tap(vp_test::live_middle(panel(), vp_test::kTexture));
   EXPECT_TRUE(textured_);
-  EXPECT_FALSE(unlit_);
+  EXPECT_FALSE(wireframe_);
   EXPECT_FALSE(normals_);
   EXPECT_TRUE(player_->deblock());
 }
@@ -1064,13 +1091,14 @@ TEST_F(ControlsTest, PauseAndNormalsFitTheirButtons) {
             vp_test::text_width(panel(), "Normals") + padding);
 }
 
-// A live player's controls are Normals, Deblock and Unlit over its status
-// line: a frame and a line tall and as wide as the wider of the two, which a
-// row with Play/Pause, Step and Loop would outgrow. A tap on Normals flips
-// the view's shading, one on Deblock the player's deblock, and one on Unlit
-// the view's Unlit.
-TEST_F(ControlsTest,
-       ALivePlayersControlsAreNormalsDeblockAndUnlitOverItsStatusLine) {
+// A live player's controls are Normals, Deblock, Wire and Cull over
+// its status line: a frame and a line tall and as wide as the wider of the
+// two, which a row with Play/Pause, Step and Loop would outgrow. A tap on
+// Normals flips the view's shading, one on Deblock the player's deblock, one
+// on Wire the view's wireframe and one on Cull its back-face culling.
+TEST_F(
+    ControlsTest,
+    ALivePlayersControlsAreNormalsDeblockWireframeAndBackFacesOverItsStatusLine) {
   core::Result<std::unique_ptr<StreamPlayer>> live =
       StreamPlayer::connect({"127.0.0.1", 47801});  // never started: no I/O
   ASSERT_TRUE(live.ok()) << live.status().message();
@@ -1089,10 +1117,10 @@ TEST_F(ControlsTest,
           ->CalcTextSizeA(line, FLT_MAX, 0.0f, "connecting to 127.0.0.1:47801")
           .x;
   const ImVec2 padding = ImGui::GetStyle().WindowPadding;
-  const glm::vec2 unlit = vp_test::live_top_left(window, vp_test::kUnlit);
-  const float row = unlit.x + vp_test::control_width(window, vp_test::kUnlit) -
+  const glm::vec2 cull = vp_test::live_top_left(window, vp_test::kCull);
+  const float row = cull.x + vp_test::control_width(window, vp_test::kCull) -
                     (window.Pos.x + padding.x);
-  EXPECT_EQ(unlit.y, window.Pos.y + padding.y);
+  EXPECT_EQ(cull.y, window.Pos.y + padding.y);
   EXPECT_NEAR(window.ContentSize.x, std::max(text, row), 1.0f);
   tap(control(0));
   EXPECT_TRUE(normals_);
@@ -1102,10 +1130,13 @@ TEST_F(ControlsTest,
   tap(vp_test::live_deblock_middle(panel()));
   EXPECT_FALSE(player_->deblock());
   EXPECT_FALSE(normals_);
-  tap(vp_test::live_middle(panel(), vp_test::kUnlit));
-  EXPECT_TRUE(unlit_);
+  tap(vp_test::live_middle(panel(), vp_test::kWireframe));
+  EXPECT_TRUE(wireframe_);
   EXPECT_FALSE(player_->deblock());
   EXPECT_FALSE(normals_);
+  tap(vp_test::live_middle(panel(), vp_test::kCull));
+  EXPECT_TRUE(cull_);
+  EXPECT_TRUE(wireframe_);
 }
 
 // Asked for, all of its window is the button, to its corner.
@@ -1714,7 +1745,7 @@ TEST_F(ControlsTest, ThePanelsBoxIsDrawnOnlyWhenGivenAndATapOpensAndClosesIt) {
   EXPECT_LT(panel().Pos.x + 0.5f * panel().Size.x, centre - 100.0f)
       << "the controls did not move into the scene's part";
   EXPECT_FALSE(textured_);
-  EXPECT_FALSE(unlit_);
+  EXPECT_FALSE(wireframe_);
   EXPECT_TRUE(player_->playing()) << "the tap pressed the box alone";
   tap(control(vp_test::kPanel));
   EXPECT_FALSE(program_.open());

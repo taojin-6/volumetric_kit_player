@@ -4,10 +4,10 @@
 #pragma once
 
 /// @file controls_layout.hpp
-/// Where draw_controls lays out its row, Deblock, Unlit, Texture and a
-/// program's panel's box on it or on lines below it, and draw_source its
-/// button, for the tests that put a finger on a control; and the stats'
-/// tables, for those that count their rows.
+/// Where draw_controls lays out its row, Deblock, Wire, Cull,
+/// Texture and a program's panel's box on it or on lines below it, and
+/// draw_source its button, for the tests that put a finger on a control; and
+/// the stats' tables, for those that count their rows.
 
 #include <cfloat>
 #include <cmath>
@@ -31,32 +31,34 @@ inline float text_width(const ImGuiWindow& panel, const std::string& text) {
       font->CalcTextSizeA(panel.FontRefSize, FLT_MAX, 0.0f, text.c_str()).x);
 }
 
-// The indices of Deblock's, Unlit's, Texture's and the panel's boxes, the
-// row's last controls (control_top_left); Texture's and the panel's are drawn
-// only when given, the panel's labelled kPanelLabel.
+// The indices of Deblock's, Wire's, Cull's, Texture's and the panel's boxes,
+// the row's last controls (control_top_left); Texture's and the panel's are
+// drawn only when given, the panel's labelled kPanelLabel.
 constexpr int kDeblock = 4;
-constexpr int kUnlit = 5;
-constexpr int kTexture = 6;
-constexpr int kPanel = 7;
+constexpr int kWireframe = 5;
+constexpr int kCull = 6;
+constexpr int kTexture = 7;
+constexpr int kPanel = 8;
 constexpr const char* kPanelLabel = "Panel";
-// Mute's, the last box, drawn for a file with audio alone (mute_top_left).
-constexpr int kMute = 8;
+// Mute's, drawn for a file with audio alone (mute_top_left).
+constexpr int kMute = 9;
 
-// Whether the row's `index`th control is a box: Loop, Deblock, Unlit,
+// Whether the row's `index`th control is a box: Loop, Deblock, Wire, Cull,
 // Texture, the panel's or Mute.
 inline bool is_box(int index) {
-  return index == 2 || index == kDeblock || index == kUnlit ||
-         index == kTexture || index == kPanel || index == kMute;
+  return index == 2 || index == kDeblock || index == kWireframe ||
+         index == kTexture || index == kPanel || index == kMute ||
+         index == kCull;
 }
 
 // The size of the row's `index`th control, in points, as the last frame laid
 // out `panel`: Play/Pause, Step, Loop's box, Normals, then Deblock's,
-// Unlit's, Texture's and the panel's boxes. Each is a frame tall; the buttons
-// are kButtonEms font sizes wide, and the boxes are square. A live player's row
-// is Normals, Deblock, Unlit and Texture, laid out as Play/Pause, Deblock,
-// Unlit and Texture are (live_top_left). The panel's context is current. The
-// font size is the panel's as of that frame: between frames ImGui's own is the
-// unscaled one.
+// Wire's, Cull's, Texture's and the panel's boxes. Each is a frame tall; the
+// buttons are kButtonEms font sizes wide, and the boxes are square. A live
+// player's row is Normals, Deblock, Wire, Cull and Texture, laid out as
+// Play/Pause, Deblock, Wire, Cull and Texture are (live_top_left). The panel's
+// context is current. The font size is the panel's as of that frame: between
+// frames ImGui's own is the unscaled one.
 inline glm::vec2 control_size(const ImGuiWindow& panel, int index) {
   const float font = panel.FontRefSize;
   const float height = font + 2.0f * ImGui::GetStyle().FramePadding.y;
@@ -70,12 +72,13 @@ inline float control_width(const ImGuiWindow& panel, int index) {
   if (!is_box(index)) {
     return control_size(panel, index).x;
   }
-  const char* label = index == 2          ? "Loop"
-                      : index == kDeblock ? "Deblock"
-                      : index == kUnlit   ? "Unlit"
-                      : index == kTexture ? "Texture"
-                      : index == kMute    ? "Mute"
-                                          : kPanelLabel;
+  const char* label = index == 2            ? "Loop"
+                      : index == kDeblock   ? "Deblock"
+                      : index == kWireframe ? "Wire"
+                      : index == kTexture   ? "Texture"
+                      : index == kMute      ? "Mute"
+                      : index == kCull      ? "Cull"
+                                            : kPanelLabel;
   return control_size(panel, index).x + ImGui::GetStyle().ItemInnerSpacing.x +
          text_width(panel, label);
 }
@@ -111,14 +114,16 @@ inline std::vector<glm::vec2> lay_out(const ImGuiWindow& panel,
 // it, so Texture's and the panel's, laid out last, leave the others' as they
 // are without them; the panel's is after Texture's, given with it here.
 inline glm::vec2 control_top_left(const ImGuiWindow& panel, int index) {
-  return lay_out(panel, {0, 1, 2, 3, kDeblock, kUnlit, kTexture, kPanel},
+  return lay_out(panel,
+                 {0, 1, 2, 3, kDeblock, kWireframe, kCull, kTexture, kPanel},
                  4)[index];
 }
 
 // Mute's top left, in points, for a file with audio and neither Texture nor
-// the panel's box: after Unlit.
+// the panel's box: after Cull.
 inline glm::vec2 mute_top_left(const ImGuiWindow& panel) {
-  return lay_out(panel, {0, 1, 2, 3, kDeblock, kUnlit, kMute}, 4).back();
+  return lay_out(panel, {0, 1, 2, 3, kDeblock, kWireframe, kCull, kMute}, 4)
+      .back();
 }
 
 // Whether Deblock is on the row, after Normals; else it is below the row.
@@ -126,11 +131,12 @@ inline bool deblock_on_row(const ImGuiWindow& panel) {
   return control_top_left(panel, kDeblock).y == control_top_left(panel, 0).y;
 }
 
-// A live player's Deblock's (`index` kDeblock), Unlit's (kUnlit) or
+// A live player's Deblock's (`index` kDeblock), Wire's (kWireframe), Cull's
+// (kCull) or
 // Texture's (kTexture) top left, in points: after Normals, which is laid out
 // as Play/Pause is.
 inline glm::vec2 live_top_left(const ImGuiWindow& panel, int index) {
-  return lay_out(panel, {3, kDeblock, kUnlit, kTexture},
+  return lay_out(panel, {3, kDeblock, kWireframe, kCull, kTexture},
                  1)[static_cast<std::size_t>(index - kDeblock + 1)];
 }
 inline glm::vec2 live_deblock_top_left(const ImGuiWindow& panel) {
@@ -142,7 +148,7 @@ inline glm::vec2 control_middle(const ImGuiWindow& panel, int index) {
   return control_top_left(panel, index) + 0.5f * control_size(panel, index);
 }
 
-// A live player's Deblock's, Unlit's or Texture's middle, in points.
+// A live player's Deblock's, Wire's, Cull's or Texture's middle, in points.
 inline glm::vec2 live_middle(const ImGuiWindow& panel, int index) {
   return live_top_left(panel, index) + 0.5f * control_size(panel, index);
 }

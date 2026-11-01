@@ -103,7 +103,10 @@ and, where its record names one, its capture set ("set N");
 Normals, shown pressed while on, colours the mesh by its world-space normals
 in place of lighting; and Deblock, on at first, has grid's decoder smooth
 each frame across its block faces, and while paused redoes the frame shown.
-Unlit shows the mesh's vertex colours unshaded; Normals takes precedence.
+Wire draws each triangle's edges over the mesh, black over light surfaces
+and white over dark ones; Cull culls the mesh's back faces, which are drawn
+by default. The player needs a GPU with line fill (`fillModeNonSolid`), which
+every Mac, iPhone, iPad and NVIDIA box has.
 Texture, a box shown once a program's `before_draw` binds a texture set,
 draws the mesh with that texture; off, as at first, the mesh is drawn in its
 own shading.
@@ -135,7 +138,8 @@ are the panel's shortcuts:
 | L | turns looping on or off |
 | N | turns Normals on or off |
 | D | turns Deblock on or off |
-| U | turns Unlit on or off |
+| W | turns Wire (the wireframe) on or off |
+| C | turns Cull (back faces) on or off |
 | T | turns Texture on or off |
 | M | turns Mute on or off |
 | A program's key | opens or closes its panel |
@@ -170,7 +174,7 @@ machine; for the lab's, over the VPN, copy it and set `source.host` to
 `taojin-desktop.arena.andrew.cmu.edu` or `192.168.21.217`.
 
 The picture joins at the sender's newest I-frame. The panel at the bottom is
-then Normals, Deblock and Unlit, and Texture where shown, over a status
+then Normals, Deblock, Wire and Cull, and Texture where shown, over a status
 line: connecting, live with the newest record's seq and set and how long
 nothing has come, or reconnecting with why, about every second until Esc.
 The keys that play, pause, step and loop do nothing. The stats show the
