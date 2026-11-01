@@ -92,8 +92,6 @@ struct PlayerViewConfig {
   /// them. The worker's queue never presents, so `needs_present` is refused.
   /// The default adds nothing.
   core::DeviceRequirements device_requirements;
-  /// The panel's Unlit, at start (PlayerView::unlit).
-  bool unlit = false;
   /// The panel's Texture, at start (PlayerView::textured).
   bool textured = false;
   /// A program's panel (FrameHooks::panel) at start: closed by default, its
@@ -199,8 +197,8 @@ class PlayerView {
   /// @param player   An opened player, not started.
   /// @param config   The UI's sizes, the Source button, validation, a
   ///                 measurement's timing, tile depth and labels, vertex
-  ///                 sharing, the hooks and their device requirements, Unlit
-  ///                 and Texture.
+  ///                 sharing, the hooks and their device requirements, and
+  ///                 Texture.
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
   ///         @p player or an empty @p extent; or the first failure (device,
   ///         `Unsupported` naming what no GPU offers of a program's required
@@ -229,8 +227,8 @@ class PlayerView {
   ///        mesh into the scene behind a GPU wait on its `ready` value
   ///        (already reached, so it stalls nothing; it carries the worker's
   ///        writes across queues) with the binding it returned, unless
-  ///        Texture is off and it names a texture set (@ref textured), and
-  ///        the view's own (Unlit), then the panel's record, and present
+  ///        Texture is off and it names a texture set (@ref textured), then
+  ///        the panel's record, and present
   ///        (PanelHooks). A frame taken is stamped when taken and when
   ///        presented (FrameStamp::taken, presented), and counted in the
   ///        stats once presented; a skipped frame is neither.
@@ -260,28 +258,42 @@ class PlayerView {
   ///        (the desktop's N key).
   /// @param normals  Whether to colour it by its normals.
   void set_normals(bool normals) noexcept { normals_ = normals; }
-  /// @return Whether the mesh shows its vertex colours unshaded: the view's
-  ///         own DrawBinding then clears kHybridMeshLit. @ref normals takes
-  ///         precedence. PlayerViewConfig::unlit at first; the panel's Unlit
-  ///         flips it.
-  bool unlit() const noexcept { return unlit_; }
-  /// @brief Show the vertex colours unshaded, or light them, from the next
-  ///        frame (the desktop's U key).
-  /// @param unlit  Whether to leave them unshaded.
-  void set_unlit(bool unlit) noexcept { unlit_ = unlit; }
   /// @return Whether the mesh is drawn with the texture set its program's
   ///         before_draw binds (DrawBinding::descriptor_set). Off, a binding
   ///         that names a set is left out whole, its flags' clears too, so
-  ///         the frame draws as with no binding: lit, unless Unlit; Normals
-  ///         as ever. before_draw still runs each frame. A binding that names
-  ///         no set applies either way. The panel shows the Texture box once
-  ///         a before_draw has bound a set, and keeps it.
+  ///         the frame draws as with no binding: lit; Normals as ever.
+  ///         before_draw still runs each frame. A binding that names no set
+  ///         applies either way. The panel shows the Texture box once a
+  ///         before_draw has bound a set, and keeps it.
   ///         PlayerViewConfig::textured at first; the box flips it.
   bool textured() const noexcept { return textured_; }
   /// @brief Draw the mesh with its binding's texture set, or without it, from
   ///        the next frame (the desktop's T key).
   /// @param textured  Whether to draw it with the texture.
   void set_textured(bool textured) noexcept { textured_ = textured; }
+  /// @return Whether the mesh's back faces are culled
+  ///         (kHybridMeshCullBackFaces); false at first, so both sides draw.
+  ///         The panel's Cull box flips it.
+  bool cull_back_faces() const noexcept { return cull_back_faces_; }
+  /// @brief Cull the mesh's back faces, or draw them, from the next frame
+  ///        (the desktop's C key).
+  /// @param cull  Whether to cull them.
+  void set_cull_back_faces(bool cull) noexcept { cull_back_faces_ = cull; }
+  /// @return Whether the mesh's triangle edges are drawn over it
+  ///         (kHybridMeshWireframe); false at first. The panel's Wire box,
+  ///         after Deblock and drawn where @ref wireframe_supported, flips
+  ///         it.
+  bool wireframe() const noexcept { return wireframe_; }
+  /// @brief Draw the triangle edges over the mesh, or not, from the next
+  ///        frame (the desktop's W key); without @ref wireframe_supported,
+  ///        nothing shows.
+  /// @param wireframe  Whether to draw them.
+  void set_wireframe(bool wireframe) noexcept { wireframe_ = wireframe; }
+  /// @return Whether the device draws edges
+  ///         (gfx::pipelines::HybridMeshPipeline::wireframe_supported).
+  bool wireframe_supported() const noexcept {
+    return mesh_pipeline_.wireframe_supported();
+  }
   /// @return Whether the program's panel (FrameHooks::panel) is open:
   ///         PlayerViewConfig::panel's at first, and never with no panel.
   ///         Its box in the controls and its close button flip it.
@@ -316,7 +328,9 @@ class PlayerView {
   VkRect2D scene_rect() const noexcept { return panel_.laid_out().scene; }
   /// @return The flags the mesh draws with (gfx::pipelines::HybridMeshFlags)
   ///         before a DrawBinding clears any: kHybridMeshNormals while
-  ///         @ref normals, else kHybridMeshLit.
+  ///         @ref normals, else kHybridMeshLit; with kHybridMeshCullBackFaces
+  ///         while @ref cull_back_faces, and kHybridMeshWireframe while
+  ///         @ref wireframe.
   std::uint32_t mesh_flags() const noexcept;
   /// @return The frames a commit hook skipped (FrameTaker::frames_skipped).
   std::uint64_t frames_skipped() const noexcept {
@@ -427,15 +441,16 @@ class PlayerView {
   gfx::ui::ImGuiOverlay overlay_;
   FrameExchange exchange_;
   gfx::camera::OrbitCamera camera_;
-  bool normals_ = false;         // the mesh's shading (mesh_flags)
-  bool unlit_ = false;           // its vertex colours unshaded
-  bool textured_ = false;        // drawn with before_draw's texture set
-  gfx::ui::DockedPanel panel_;   // the program's panel (FrameHooks::panel)
-  bool panel_drawn_ = false;     // the last frame laid it out open
-  PanelFrame panel_frame_;       // and that frame's rectangles
-  bool texture_bound_ = false;   // a before_draw has bound one: Texture shows
-  bool source_button_ = false;   // frame() draws Source
-  bool source_request_ = false;  // pressed since take_source_request
+  bool normals_ = false;          // the mesh's shading (mesh_flags)
+  bool textured_ = false;         // drawn with before_draw's texture set
+  bool cull_back_faces_ = false;  // back faces culled (mesh_flags)
+  bool wireframe_ = false;        // edges over the mesh (mesh_flags)
+  gfx::ui::DockedPanel panel_;    // the program's panel (FrameHooks::panel)
+  bool panel_drawn_ = false;      // the last frame laid it out open
+  PanelFrame panel_frame_;        // and that frame's rectangles
+  bool texture_bound_ = false;    // a before_draw has bound one: Texture shows
+  bool source_button_ = false;    // frame() draws Source
+  bool source_request_ = false;   // pressed since take_source_request
   std::optional<DeviceTiming> device_timing_;  // fixed; else the panel's
   bool profiled_ = false;      // the draw timed this tick (render_metrics)
   bool frame_failed_ = false;  // an interrupted frame requires a new view
@@ -443,7 +458,7 @@ class PlayerView {
   std::unique_ptr<StreamPlayer> player_;
   FrameHooks hooks_;     // the worker's until stop, the drawing thread's
   FrameTaker taker_;     // over player_ and exchange_, with hooks_
-  DrawBinding binding_;  // the last frame's draw's: before_draw's and Unlit
+  DrawBinding binding_;  // the last frame's draw's: before_draw's
   PlaybackStats stats_;  // from player_'s track
   std::optional<FrameStamp> shown_;
   std::uint32_t shown_triangles_ = 0;  // shown_'s mesh's

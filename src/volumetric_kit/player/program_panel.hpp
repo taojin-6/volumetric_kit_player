@@ -24,7 +24,7 @@ namespace volumetric_kit::player {
 ///
 /// @code
 /// const gfx::ui::PanelLayout& laid = panel.layout(drawable);
-/// draw_controls(player, shown, normals, unlit, nullptr,
+/// draw_controls(player, shown, normals, cull, nullptr, nullptr,
 ///               scene_area(laid, panel.open()));
 /// @endcode
 UiArea scene_area(const gfx::ui::PanelLayout& laid, bool open);

@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Wire and Cull, boxes after Deblock (W and C on the desktop): Wire draws
+  each triangle's edges over the mesh where the GPU offers line fill
+  (`PlayerView::wireframe`, `wireframe_supported`), and Cull culls the mesh's
+  back faces (`PlayerView::cull_back_faces`), off at first. The view's device
+  asks for `fillModeNonSolid`; gfx is pinned at its PR #172.
 - The repository's skeleton: CMake, the agents' guide, the formatting hooks,
   and CI that builds and tests on the family's self-hosted Mac and Linux GPU
   runners, with lint and the `required` gate hosted.
@@ -259,6 +264,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session, with no counts. An Audio record of more than a second is passed
   over unread (`LiveAudio::takes`), and a connection's end drops what the
   output holds. A live stream with no Audio track plays as before.
+
+### Removed
+
+- Unlit: the panel's box, the U key, `PlayerView::unlit` / `set_unlit` and
+  `PlayerViewConfig::unlit`. Wire takes its place on the row.
 
 ### Changed
 
