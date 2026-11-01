@@ -97,8 +97,8 @@ vkc_require_sibling(
 # controls and stats panels (ImGui) and the profiler that times the draw. Its
 # tests, examples and -Werror stay off in a subproject. Its GLFW tier is built
 # for player_desktop alone, so not on iOS: the library links no window system
-# (the top-level CMakeLists.txt checks). The pin is gfx #172's head (ca05650),
-# on main at #170's merge, for HybridMeshFlags' kHybridMeshCullBackFaces and
+# (the top-level CMakeLists.txt checks). The pin is gfx main at #172's merge
+# (77fefdc), for HybridMeshFlags' kHybridMeshCullBackFaces and
 # kHybridMeshWireframe, whose edge pass needs the device's fillModeNonSolid.
 # Before it, main at #168's merge (df3a0de), whose windows render at 4x MSAA
 # (#167, #168): the swapchain's layout().samples is 4, so the view's pipelines
@@ -121,7 +121,7 @@ set(VG_WITH_GLFW ${VP_DESKTOP_APP})
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  GIT_TAG ca0565078dec899fe4a73afe312cc7fab2a0d742)
+  GIT_TAG 77fefdc06a6ff5494bced3fd793fdf37b8b94c6e)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
 if(VP_BUILD_TESTS)

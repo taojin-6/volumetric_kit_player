@@ -264,7 +264,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- build: gfx at #172's head (ca05650), whose `kHybridMeshCullBackFaces` and
+- build: gfx at #172's merge (77fefdc), whose `kHybridMeshCullBackFaces` and
   `kHybridMeshWireframe` the Wire and Cull boxes draw with.
 - build: core at #76's merge (c52a86a, 0.35.0), which the player requires:
   an image with `TRANSIENT_ATTACHMENT` usage, as gfx's 4x MSAA window
