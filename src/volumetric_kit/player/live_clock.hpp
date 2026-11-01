@@ -54,7 +54,8 @@ inline constexpr std::chrono::nanoseconds kSlewFall{
 enum class DelayNeed : std::uint8_t {
   kNone,     ///< None: D is 0. There is no fixed floor.
   kArrival,  ///< The played track's records: the latest after its
-             ///< earliest, over the window, plus the lead (LiveClock).
+             ///< earliest, over the window, a spike's left out, plus the
+             ///< lead (LiveClock).
   kProgram,  ///< A program's own (FrameHooks::live_delay).
   kAudio,    ///< The stream's audio (live_audio.hpp: audio_need).
 };
@@ -82,8 +83,8 @@ struct Playout {
   /// D's target: the largest need, clamped to [0, kMaxLiveDelay].
   std::chrono::nanoseconds target{0};
   DelayNeed need = DelayNeed::kNone;  ///< The need that set the target.
-  /// That need passed kMaxLiveDelay: frames that needed more are late by
-  /// the excess.
+  /// That need passed kMaxLiveDelay, or a spike lasts (LiveClock): frames
+  /// that needed more than D are late.
   bool clamped = false;
   /// The worker's lead: a record's decode begins at its present time less
   /// this, so its frame is published by then.
@@ -212,14 +213,21 @@ class AudioMaster {
 /// nor a program's target point (offset + its need) at once: a program's
 /// need counts from the offset.
 ///
-/// **Needs.** The arrival need is the largest lateness over the window, plus
-/// the lead. A record's lateness is its `arrival − pts` less the larger of
-/// two offsets: the offset as it arrived, and the offset now. So a fast
-/// record entering or leaving the window leaves the target point
-/// (offset + target) where it was. A join's burst adds nothing, as each
-/// record of it is a new least. The program's need is its answer at each
-/// record (FrameHooks::live_delay), and audio's its feeder's (LiveAudio). The
-/// target is the largest need, clamped to [0, kMaxLiveDelay].
+/// **Needs.** The arrival need is the largest lateness over the window, a
+/// spike's records left out, plus the lead. A record's lateness is its
+/// `arrival − pts` less the larger of two offsets: the offset as it arrived,
+/// and the offset now. So a fast record entering or leaving the window leaves
+/// the target point (offset + target) where it was. A join's burst adds
+/// nothing, as each record of it is a new least. The program's need is its
+/// answer at each record (FrameHooks::live_delay), and audio's its feeder's
+/// (LiveAudio). The target is the largest need, clamped to [0, kMaxLiveDelay].
+///
+/// **Spikes.** A record whose lateness plus the lead passes kMaxLiveDelay is
+/// late at any D: it is a spike's, and so is each record after one until a
+/// record is no later than the largest lateness of the window's records
+/// outside spikes, or none of those is left. So D rises neither for a delay
+/// it cannot cover nor for the backlog that drains behind it, and a lasting
+/// slower link raises it once its records come within the clamp.
 ///
 /// **Point.** At each write, the applied point steps toward the offset plus
 /// the target (@ref step_point), with the time since the last step; while
@@ -320,12 +328,13 @@ class LiveClock {
   void reset();
 
  private:
-  // One record: when it arrived, its arrival − pts, and the offset as it
-  // arrived.
+  // One record: when it arrived, its arrival − pts, the offset as it
+  // arrived, and whether it is a spike's.
   struct Arrival {
     Clock::time_point at;
     std::chrono::nanoseconds ahead;
     std::chrono::nanoseconds least;
+    bool spike;
   };
   // One publish: when it happened, and how long it took.
   struct Lead {

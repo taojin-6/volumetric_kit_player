@@ -180,7 +180,8 @@ Each live frame is drawn at its present time on a playout clock
 (`live_clock.hpp`): its pts, plus the least arrival − pts over the last
 10 s, plus a delay D, the largest need stated, at most 1 s. The needs are
 the stream's own lateness with the worker's lead, and a program's
-(`FrameHooks::live_delay`); with none D is 0. Records wait as bytes before
+(`FrameHooks::live_delay`); with none D is 0. A record late past that second,
+and the backlog behind it, raise no D. Records wait as bytes before
 their decode, and a program may hold a frame until its own data is ready, or
 refuse it (`FrameHooks::data_ready`), while the frame before stays shown. The
 stats show D and the need that set it ("delay 123 ms · program"), and the

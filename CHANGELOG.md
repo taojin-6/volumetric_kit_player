@@ -262,6 +262,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Live, a record late past D's 1 s clamp, and the backlog that drains behind
+  it, raise no arrival need (`LiveClock`): a delay spike leaves D where it
+  was, rather than at 1 s for 10 s and then falling 25 ms a second, and the
+  stats flag it "over 1 s".
 - build: core at #76's merge (c52a86a, 0.35.0), which the player requires:
   an image with `TRANSIENT_ATTACHMENT` usage, as gfx's 4x MSAA window
   targets are, takes lazily allocated memory (Metal's memoryless storage on

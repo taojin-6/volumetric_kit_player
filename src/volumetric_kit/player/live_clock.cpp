@@ -169,8 +169,9 @@ void LiveClock::arrived(std::uint64_t pts_ns, Clock::time_point at,
   }
   expire(arrivals_, &arrivals_head_, &arrivals_size_, at);
   const nanoseconds ahead = since_epoch(at) - pts_ns_of(pts_ns);
-  // Its offset as it arrived: update's.
-  push(arrivals_, &arrivals_head_, &arrivals_size_, Arrival{at, ahead, ahead});
+  // Its offset as it arrived, and whether it is a spike's: update's.
+  push(arrivals_, &arrivals_head_, &arrivals_size_,
+       Arrival{at, ahead, ahead, false});
   program_need_ = std::max(program_need, nanoseconds(0));
   audio_need_ = std::max(audio_need, nanoseconds(0));
   update(at, /*arrival=*/true);
@@ -225,11 +226,31 @@ void LiveClock::update(Clock::time_point at, bool arrival) {
   }
   // Each record's lateness against the larger of the offset as it arrived
   // and the offset now, so a fast record entering or leaving moves no
-  // target point.
+  // target point; a spike's records left out.
+  const auto lateness = [&next](const Arrival& record) {
+    return record.ahead - std::max(record.least, next.offset);
+  };
+  const std::size_t before = arrival ? arrivals_size_ - 1 : arrivals_size_;
   nanoseconds late(0);
-  for (std::size_t i = 0; i < arrivals_size_; ++i) {
-    const Arrival& arrival = arrivals_[at_of(arrivals_head_, i)];
-    late = std::max(late, arrival.ahead - std::max(arrival.least, next.offset));
+  bool steady = false;  // a record before the newest outside spikes
+  for (std::size_t i = 0; i < before; ++i) {
+    const Arrival& record = arrivals_[at_of(arrivals_head_, i)];
+    if (!record.spike) {
+      late = std::max(late, lateness(record));
+      steady = true;
+    }
+  }
+  if (arrival) {
+    // The newest is a spike's past the clamp, and after a spike's record
+    // while it is later than every steady one.
+    Arrival& newest = arrivals_[at_of(arrivals_head_, before)];
+    const bool after_spike =
+        before > 0 && arrivals_[at_of(arrivals_head_, before - 1)].spike;
+    newest.spike = lateness(newest) + next.lead > kMaxLiveDelay ||
+                   (after_spike && steady && lateness(newest) > late);
+    if (!newest.spike) {
+      late = std::max(late, lateness(newest));
+    }
   }
   const nanoseconds arrival_need = late + next.lead;
   nanoseconds need = arrival_need;
@@ -243,7 +264,9 @@ void LiveClock::update(Clock::time_point at, bool arrival) {
     need = audio_need_;
     next.need = DelayNeed::kAudio;
   }
-  next.clamped = need > kMaxLiveDelay;
+  next.clamped = need > kMaxLiveDelay ||
+                 (arrivals_size_ > 0 &&
+                  arrivals_[at_of(arrivals_head_, arrivals_size_ - 1)].spike);
   next.target = std::min(need, kMaxLiveDelay);
   if (!state_ || next.target > state_->target) {
     rose_at_ = at;

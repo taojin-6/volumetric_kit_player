@@ -19,7 +19,13 @@
 // 1 s GOP arriving together at a join lands at the steady point; a program's
 // need sets the target, a tie named arrival; the clamp at kMaxLiveDelay; the
 // lead is the largest over the window; point() is time()'s point after each
-// write; reset forgets everything; and after a warm-up, ten thousand records
+// write; a spike, a record late past the clamp and the backlog draining
+// behind it, a large record in it included, raises no D and is flagged, a
+// record exactly at the clamp counting and one a nanosecond past a spike's;
+// a lasting slower link still raises D, within the clamp at once, past it
+// once the offset brings its records within, and after a spike once no
+// record from before it is left; repeated spikes cost their records late,
+// never D; reset forgets everything; and after a warm-up, ten thousand records
 // and publishes allocate nothing. While audio plays the point slews, up
 // kSlewRise a kSlewEvery and at most that a step, down only once the target
 // has not risen for kLiveWindow, kSlewFall a second and at most that a step,
@@ -512,6 +518,172 @@ TEST(LiveClock, PointIsTimesPointAfterEachWrite) {
     clock.published(ms(static_cast<double>(k % 5)),
                     t0 + kPeriod * static_cast<std::int64_t>(k) + ms(9));
     ASSERT_EQ(clock.point(), clock.time()->point) << "publish " << k;
+  }
+}
+
+// The worker's lead in the spike tests: each record's publish takes it.
+constexpr nanoseconds kLead = ms(20);
+
+// Record `k`'s steady arrival: its time t0 + k periods, plus its jitter,
+// k % 7 ms, so 6 ms the largest.
+Clock::time_point steady_at(std::uint64_t k) {
+  return t0 + kPeriod * static_cast<std::int64_t>(k) +
+         ms(static_cast<double>(k % 7));
+}
+
+// A path that delivers in order, as TCP does: record k arrives `extra` after
+// its steady arrival, but no sooner than `spacing` after the record before,
+// the time its bytes take; each one's publish takes kLead.
+class Path {
+ public:
+  explicit Path(LiveClock& clock) : clock_(clock) {}
+
+  // Record k; its arrival.
+  Clock::time_point send(std::uint64_t k, nanoseconds extra = {},
+                         nanoseconds spacing = ms(5)) {
+    Clock::time_point at = steady_at(k) + extra;
+    if (last_) {
+      at = std::max(at, *last_ + spacing);
+    }
+    last_ = at;
+    clock_.arrived(k * kPeriodNs, at, nanoseconds(0));
+    clock_.published(kLead, at);
+    return at;
+  }
+
+ private:
+  LiveClock& clock_;
+  std::optional<Clock::time_point> last_;
+};
+
+// Whether record `k`, arrived at `at`, is released for its present time:
+// on time.
+bool on_time(const LiveClock& clock, std::uint64_t k, Clock::time_point at) {
+  const Playout playout = now_of(clock);
+  return vkp::present(playout.point, k * kPeriodNs) - playout.lead >= at;
+}
+
+// r2b's spike: every record sent in 2 s from 20 s comes 1.2 s late, so the
+// records sent in the 1.2 s after drain behind them, 5 ms apart, one of them
+// a large record of 120 ms. D never rises: N, the time from the drain's end
+// until D is back, is 0. Without the rule D sat at the clamp for 10 s, then
+// fell 25 ms a second. The spike's records are late, as at any D; from the
+// drain's end every record is on time. Mutants: no record past the clamp a
+// spike's (D 1 s); the drain counted (D 975 ms).
+TEST(LiveClockSpike, ASpikePastTheClampAndItsDrainLeaveDWhereItWas) {
+  LiveClock clock;
+  Path path(clock);
+  std::uint64_t k = 0;
+  for (; k < 500; ++k) {
+    path.send(k);
+  }
+  const nanoseconds before = now_of(clock).target;
+  ASSERT_EQ(before, ms(26)) << "the jitter's 6 ms and the lead";
+  for (; k < 1'100; ++k) {
+    const Clock::time_point at = path.send(
+        k, k < 550 ? ms(1'200) : nanoseconds(0), k == 570 ? ms(120) : ms(5));
+    const Playout playout = now_of(clock);
+    ASSERT_LE(playout.target, before) << "record " << k;
+    ASSERT_LE(playout.delay(), before) << "record " << k;
+    if (at - steady_at(k) + kLead > vkp::kMaxLiveDelay) {
+      EXPECT_FALSE(on_time(clock, k, at)) << "record " << k;
+      EXPECT_TRUE(playout.clamped) << "record " << k;
+    }
+    if (k >= 600) {
+      ASSERT_TRUE(on_time(clock, k, at)) << "record " << k;
+      ASSERT_FALSE(playout.clamped) << "record " << k;
+    }
+  }
+}
+
+// The clamp's edge, past the join: a record whose lateness plus the lead is
+// kMaxLiveDelay exactly is covered and raises D to it, as ever; a
+// nanosecond later it is a spike's and D stays. Mutant: >= for >.
+TEST(LiveClockSpike, ARecordAtTheClampCountsANanosecondPastIsASpikes) {
+  for (const nanoseconds past : {nanoseconds(0), nanoseconds(1)}) {
+    SCOPED_TRACE(past.count());
+    LiveClock clock;
+    Path path(clock);
+    std::uint64_t k = 0;
+    for (; k < 300; ++k) {
+      path.send(k);
+    }
+    // Record 300's jitter is 6 ms.
+    const Clock::time_point at =
+        path.send(k, vkp::kMaxLiveDelay - kLead - ms(6) + past);
+    const Playout playout = now_of(clock);
+    EXPECT_EQ(playout.target, past.count() == 0 ? vkp::kMaxLiveDelay : ms(26));
+    EXPECT_EQ(playout.delay(), playout.target);
+    EXPECT_EQ(playout.clamped, past.count() != 0);
+    EXPECT_EQ(on_time(clock, k, at), past.count() == 0);
+  }
+}
+
+// A link that stays slower raises D (latency gives). By 500 ms, within the
+// clamp: at once, every record on time. By 1.2 s, past it: its records are
+// late until the offset, risen once the window holds them alone, brings them
+// within the clamp, 10.8 s on, as the clamp alone did; by 12 s, every record
+// on time at D ≥ 900 ms. A spike that leaves the link 300 ms slower: D rises
+// once the window holds no record from before it, by 10 s on, and every
+// record is on time. Mutant: a spike that never ends with no steady record
+// left.
+TEST(LiveClockSpike, ALastingSlowerLinkStillRaisesD) {
+  const auto run = [](nanoseconds extra, std::uint64_t spike_until,
+                      std::uint64_t on_time_from, nanoseconds least_d) {
+    LiveClock clock;
+    Path path(clock);
+    std::uint64_t k = 0;
+    for (; k < 500; ++k) {
+      path.send(k);
+    }
+    for (; k < 1'100; ++k) {
+      const Clock::time_point at =
+          path.send(k, k < spike_until ? ms(1'200) : extra);
+      if (k >= on_time_from) {
+        ASSERT_TRUE(on_time(clock, k, at)) << "record " << k;
+      }
+      if (k == on_time_from) {
+        EXPECT_GE(now_of(clock).delay(), least_d);
+      }
+    }
+  };
+  {
+    SCOPED_TRACE("500 ms slower");
+    run(ms(500), 0, 500, ms(520));
+  }
+  {
+    SCOPED_TRACE("1.2 s slower");
+    run(ms(1'200), 0, 800, ms(900));
+  }
+  {
+    SCOPED_TRACE("a spike, then 300 ms slower");
+    run(ms(300), 550, 750, ms(300));
+  }
+}
+
+// Spikes 6 s apart, each as r2b's: D stays, and each costs its own records,
+// late at any D, while every record between the drains and after the last is
+// on time. Repeated spikes cost late frames, held or skipped, each time,
+// never latency.
+TEST(LiveClockSpike, RepeatedSpikesCostLateRecordsNotLatency) {
+  LiveClock clock;
+  Path path(clock);
+  std::uint64_t k = 0;
+  for (; k < 500; ++k) {
+    path.send(k);
+  }
+  const nanoseconds before = now_of(clock).target;
+  for (; k < 1'100; ++k) {
+    const bool spike = (k >= 500 && k < 550) || (k >= 650 && k < 700);
+    const Clock::time_point at =
+        path.send(k, spike ? ms(1'200) : nanoseconds(0));
+    ASSERT_LE(now_of(clock).target, before) << "record " << k;
+    if (spike) {
+      EXPECT_FALSE(on_time(clock, k, at)) << "record " << k;
+    }
+    if ((k >= 600 && k < 650) || k >= 750) {
+      EXPECT_TRUE(on_time(clock, k, at)) << "record " << k;
+    }
   }
 }
 

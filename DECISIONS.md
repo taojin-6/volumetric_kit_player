@@ -4,6 +4,40 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-11-01 — A spike past the clamp leaves D where it was
+
+A record whose lateness plus the lead passes D's 1 s clamp is a spike's,
+and so is each record after one until a record is no later than the
+largest lateness of the window's records outside spikes, or none of those is
+left (`LiveClock`). A spike's records count in no arrival need, and the stats
+flag a spike "over 1 s", as a clamped need. The owner chose it, as the live
+transport plan recommended. Why: such a record is late at any D. Counted, it
+held D at the clamp for the 10 s window, and D then fell 25 ms a second: a
++1.2 s delay of 2 s on an emulated 70 ms path held D at 1 s, set by arrival,
+from 22 to 32 s (measured 2026-11-01), and from 1 s the fall takes 39 s more.
+
+- **The backlog behind a spike is the spike's.** The records sent after the
+  delay ends drain behind the late ones, their lateness falling from past the
+  clamp to none; counted, the first within the clamp held D near 1 s for the
+  window (978 ms in the unit test). It ends at the first record back within
+  the steady lateness, not at the first to come at the stream's pace: a
+  large record in the drain comes slower than the pace and would end it
+  early.
+- **A lasting slower link still raises D.** Within the clamp, at once, as
+  before. Past it, its records are late until the offset, risen once the
+  window holds them alone, brings them within the clamp, 10.8 s on at a
+  20 ms lead; from the offset's rise the same records are on time as with
+  the clamp alone, and before it every record is late at any D, drawn as it
+  comes. A spike that leaves the link slower than before ends once no
+  record from before it is left, within 10 s, its records late until then.
+- **The cost:** a spike's frames, and the drained ones a raised D would have
+  shown a second late, are passed over, the last frame drawn staying until
+  the stream is back at the live edge. Repeated spikes cost that each time,
+  never a lasting delay. A delay that rises gradually past the clamp still
+  raises D by its records within it.
+- **A program's need is its own:** one that counts a spike's late frames
+  still holds D up by them (`FrameHooks::live_delay`).
+
 ## 2026-10-31 — CI: ThreadSanitizer's leg runs a test binary in one process
 
 With `VP_TEST_PER_BINARY`, which only the ThreadSanitizer leg turns on,
@@ -248,7 +282,9 @@ frame waits for it; the latency grows instead.
   clock"*). There is no fixed floor, and D is clamped at 1 s; a frame that
   needed more is
   late by the excess: the stats flag it ("over 1 s"), and the log's
-  `target_ms` reads 1000. Why from pts and not
+  `target_ms` reads 1000. *Since 2026-11-01 a record past the clamp, and
+  the backlog behind it, raise no arrival need ("A spike past the clamp
+  leaves D where it was").* Why from pts and not
   from each record's arrival: a wait counted from arrival carries the
   arrival's jitter onto the screen.
 - **The offset follows the least down at once, and up at most 25 ms a
