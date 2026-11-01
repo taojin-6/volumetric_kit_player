@@ -148,9 +148,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `PlayerViewConfig::make_hooks`; `PlayerView::frames_skipped`,
   `frames_held`, `record_mesh` and `target_layout`; `mesh_wiring`'s `holds`,
   one mesh more in the ring.
-- Unlit: a box in the panel and the desktop's U key show the mesh's vertex
-  colours unshaded, through the view's own `DrawBinding`
-  (`PlayerView::unlit`, `set_unlit`, `PlayerViewConfig::unlit`).
 - Texture: a box in the panel, shown once a program's `before_draw` binds a
   texture set, and the desktop's T key draw the mesh with or without that
   set (`PlayerView::textured`, `set_textured`, `PlayerViewConfig::textured`).
@@ -259,6 +256,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session, with no counts. An Audio record of more than a second is passed
   over unread (`LiveAudio::takes`), and a connection's end drops what the
   output holds. A live stream with no Audio track plays as before.
+- Wire and Cull, boxes after Deblock (W and C on the desktop), both off at
+  first: Wire draws each triangle's edges over the mesh
+  (`PlayerView::wireframe`), and Cull culls its back faces
+  (`PlayerView::cull_back_faces`). The view requires line fill
+  (`fillModeNonSolid`), which every Mac, iPhone, iPad and NVIDIA box has.
 
 ### Changed
 
@@ -266,6 +268,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, raise no arrival need (`LiveClock`): a delay spike leaves D where it
   was, rather than at 1 s for 10 s and then falling 25 ms a second, and the
   stats flag it "over 1 s".
+- build: gfx at #172's merge (77fefdc), whose `kHybridMeshCullBackFaces` and
+  `kHybridMeshWireframe` the Wire and Cull boxes draw with.
 - build: core at #76's merge (c52a86a, 0.35.0), which the player requires:
   an image with `TRANSIENT_ATTACHMENT` usage, as gfx's 4x MSAA window
   targets are, takes lazily allocated memory (Metal's memoryless storage on
@@ -448,8 +452,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   passes `PlayerView::render_metrics().sections` to `MeasureLog::add`.
 - `MeasureLog::add` takes the frame's mesh, for its triangles and vertices,
   in place of its triangle count: `add(stamp, view->mesh(), render)`.
-- `draw_controls` takes the view's `unlit` after its `normals`, then its
-  `textured`, or null for no Texture box, then the area it goes in
+- `draw_controls` takes the view's `wireframe` and its back-face cull after
+  its `normals`, then its `textured`, or null for no Texture box, then the area it goes in
   (`work_area()`), and a panel's box's label and state, or none;
   `draw_source` and `StatsPanel::draw` take the area too.
 - A program whose `before_draw` binds a texture set sets

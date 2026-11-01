@@ -32,23 +32,22 @@
 // kHybridMeshLit cleared shows the image's value in an offscreen pixel
 // (record_mesh), with Texture on, and with it off, as at first, the pixel a
 // binding of no set draws, its Texture box shown once a set is bound, flipping
-// it and staying; a binding of no set applies with Texture off as on; Unlit,
-// from the panel's box or set_unlit, shows the vertex colour unshaded, and off
-// it is shaded; the headlight lights what faces the viewer from every side, on
-// the device, and from cameras in worlds of any axes, on the host (headlight);
-// a commit hook holds and skips frames; the hooks' stats line is the stats'
-// last; and a before_draw failure stops the view. A program's panel
-// (FrameHooks::panel), open, docks right on a landscape drawable and at the
-// bottom on a portrait one, or where its content shows larger: its drawing
-// fills its content, the mesh is centred in the scene and drawn nowhere else,
-// its hooks run each frame, its key and box open and close it, as do its
-// close button and a handle release below 25 %, and pointer input reaches it
-// while open; closed, none of its hooks runs, the scene is the whole
-// drawable, and the frame's pixels and the controls' place are a view's with
-// no panel; and its prepare's failure stops the view. A live view presents, on
-// the two images its swapchain asks for (checked on the host). A program's
-// device requirements (PlayerViewConfig::device_requirements), merged with
-// grid's on the host (worker_requirements): none leave grid's alone, a
+// it and staying; a binding of no set applies with Texture off as on; Back
+// faces' culling and the wireframe set the mesh's flags; the headlight lights
+// what faces the viewer from every side, on the device, and from cameras in
+// worlds of any axes, on the host (headlight); a commit hook holds and skips
+// frames; the hooks' stats line is the stats' last; and a before_draw failure
+// stops the view. A program's panel (FrameHooks::panel), open, docks right on a
+// landscape drawable and at the bottom on a portrait one, or where its content
+// shows larger: its drawing fills its content, the mesh is centred in the scene
+// and drawn nowhere else, its hooks run each frame, its key and box open and
+// close it, as do its close button and a handle release below 25 %, and pointer
+// input reaches it while open; closed, none of its hooks runs, the scene is the
+// whole drawable, and the frame's pixels and the controls' place are a view's
+// with no panel; and its prepare's failure stops the view. A live view
+// presents, on the two images its swapchain asks for (checked on the host). A
+// program's device requirements (PlayerViewConfig::device_requirements), merged
+// with grid's on the host (worker_requirements): none leave grid's alone, a
 // program's add to grid's, which stay, and a host allocation failure in the
 // merge is OutOfMemory. On the device, none leave the device as grid's alone
 // makes it; an optional extension is enabled on the hooks' devices where the
@@ -351,8 +350,8 @@ class PlayerViewTest : public core::test::VulkanTest {
   }
 
   // The view's config: at `ui_scale_` and `ui_min_frame_height_`, with
-  // Source while `source_button_`, validated as the test policy asks, Unlit
-  // as `unlit_`, Texture as `textured_` and with `make_hooks_`'s hooks and
+  // Source while `source_button_`, validated as the test policy asks,
+  // Texture as `textured_` and with `make_hooks_`'s hooks and
   // `device_requirements_`.
   PlayerViewConfig config() {
     PlayerViewConfig config;
@@ -363,7 +362,6 @@ class PlayerViewTest : public core::test::VulkanTest {
     config.compact_stats = compact_stats_;
     config.device_timing = device_timing_;
     config.share_vertices = share_vertices_;
-    config.unlit = unlit_;
     config.textured = textured_;
     config.panel = panel_;
     config.device_requirements = device_requirements_;
@@ -776,7 +774,6 @@ class PlayerViewTest : public core::test::VulkanTest {
   bool compact_stats_ = PlayerViewConfig{}.compact_stats;
   std::optional<DeviceTiming> device_timing_;
   bool share_vertices_ = PlayerViewConfig{}.share_vertices;
-  bool unlit_ = PlayerViewConfig{}.unlit;
   bool textured_ = PlayerViewConfig{}.textured;
   gfx::ui::DockedPanelConfig panel_ = PlayerViewConfig{}.panel;
   MakeHooks make_hooks_;  // the view's hooks, with the context noted
@@ -1025,6 +1022,94 @@ TEST_F(PlayerViewTest, ATapOnNormalsSwitchesTheMeshsFlags) {
   EXPECT_EQ(view_->mesh_flags(), kHybridMeshNormals);
   EXPECT_TRUE(present());
   EXPECT_TRUE(view_->player().playing()) << "the taps pressed Normals alone";
+}
+
+// Both sides drawn and no edges at first; set_cull_back_faces(true) adds
+// kHybridMeshCullBackFaces to mesh_flags() and set_wireframe(true)
+// kHybridMeshWireframe, and frames keep presenting; the panel's boxes are the
+// controls test's, and what the draw shows WireReachesTheDraw's.
+TEST_F(PlayerViewTest, CullAndWireSetTheMeshsFlags) {
+  using gfx::pipelines::kHybridMeshCullBackFaces;
+  using gfx::pipelines::kHybridMeshLit;
+  using gfx::pipelines::kHybridMeshNormals;
+  using gfx::pipelines::kHybridMeshWireframe;
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  EXPECT_FALSE(view_->cull_back_faces());
+  EXPECT_FALSE(view_->wireframe());
+  EXPECT_EQ(view_->mesh_flags(), kHybridMeshLit);
+  view_->set_cull_back_faces(true);
+  EXPECT_EQ(view_->mesh_flags(), kHybridMeshLit | kHybridMeshCullBackFaces);
+  view_->set_wireframe(true);
+  EXPECT_EQ(view_->mesh_flags(),
+            kHybridMeshLit | kHybridMeshCullBackFaces | kHybridMeshWireframe);
+  view_->set_normals(true);
+  EXPECT_EQ(view_->mesh_flags(), kHybridMeshNormals | kHybridMeshCullBackFaces |
+                                     kHybridMeshWireframe);
+  const std::uint64_t before = view_->shown()->index;
+  ASSERT_TRUE(tick_until([&] { return view_->shown()->index != before; }))
+      << "no frame drawn culled with edges";
+  EXPECT_TRUE(present());
+  view_->set_normals(false);
+  view_->set_cull_back_faces(false);
+  view_->set_wireframe(false);
+  EXPECT_EQ(view_->mesh_flags(), kHybridMeshLit);
+}
+
+// Wire reaches the draw: the mesh drawn again as the last frame drew it
+// (record_mesh) shows its edges over the sphere with Wire on, changing many
+// pixels, also under a binding that clears kHybridMeshLit, and draws as before
+// with it off. (Cull leaves a closed sphere seen from outside as it is.)
+TEST_F(PlayerViewTest, WireReachesTheDraw) {
+  const auto clear = std::make_shared<std::atomic<bool>>(false);
+  make_hooks_ = [clear](const HookContext&) -> core::Result<FrameHooks> {
+    FrameHooks hooks;
+    hooks.before_draw = [clear](VkCommandBuffer, const FrameStamp&) {
+      DrawBinding binding;
+      if (*clear) {
+        binding.mesh_flags_clear = gfx::pipelines::kHybridMeshLit;
+      }
+      return core::Result<DrawBinding>(binding);
+    };
+    return hooks;
+  };
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  aim_at(view_->shown()->index);
+  constexpr VkExtent2D kSide{64, 64};
+  const auto drawn = [&] {
+    EXPECT_TRUE(present());
+    return offscreen(
+        kSide, [&](VkCommandBuffer cmd) { view_->record_mesh(cmd, kSide); });
+  };
+  // Pixels more than 10 codes apart in R, G or B.
+  const auto changed = [](const std::vector<std::array<int, 4>>& a,
+                          const std::vector<std::array<int, 4>>& b) {
+    int count = 0;
+    for (std::size_t i = 0; i < std::min(a.size(), b.size()); ++i) {
+      count += std::abs(a[i][0] - b[i][0]) > 10 ||
+               std::abs(a[i][1] - b[i][1]) > 10 ||
+               std::abs(a[i][2] - b[i][2]) > 10;
+    }
+    return count;
+  };
+  for (const bool unlit : {false, true}) {
+    SCOPED_TRACE(unlit ? "a binding clears kHybridMeshLit" : "lit");
+    *clear = unlit;
+    view_->set_wireframe(false);
+    const std::vector<std::array<int, 4>> plain = drawn();
+    ASSERT_EQ(plain.size(),
+              static_cast<std::size_t>(kSide.width) * kSide.height);
+    view_->set_wireframe(true);
+    const std::vector<std::array<int, 4>> wire = drawn();
+    ASSERT_EQ(wire.size(), plain.size());
+    EXPECT_GT(changed(plain, wire), 50) << "no edges drawn";
+    view_->set_wireframe(false);
+    EXPECT_EQ(changed(plain, drawn()), 0) << "edges stayed with Wire off";
+  }
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
 }
 
 // The true-SDF stream, which the deblock runs on, paused on frame 0, none of
@@ -2001,9 +2086,7 @@ TEST_F(PlayerViewTest, ABoundImagesSetIsDrawnWithTheClearedFlags) {
 // value at the next frame, and off again as with no set. The panel has no
 // Texture box until a set is bound, and has it then, Texture off; a tap on
 // it flips Texture, as set_textured does, and the box stays once none is
-// bound. Unlit, Texture off, a frame that binds a set draws as one that
-// binds none. The pixel faces away from the headlight, so lit and unlit
-// differ there.
+// bound.
 TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
   const auto bind = std::make_shared<std::atomic<bool>>(false);
   const auto drawn = std::make_shared<std::atomic<int>>(0);
@@ -2034,7 +2117,7 @@ TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
   ASSERT_TRUE(present());
   EXPECT_GE(*drawn - before, 2) << "before_draw ran each frame, Texture off";
   expect_mesh_pixel(none, "off");
-  // The box, now that a set is bound, after Unlit, with Texture never on.
+  // The box, now that a set is bound, after Cull, with Texture never on.
   EXPECT_EQ(item_under(vp_test::control_middle(*controls, vp_test::kTexture)),
             texture_id)
       << "no box while Texture is off";
@@ -2053,7 +2136,7 @@ TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
   EXPECT_FALSE(view_->textured());
   ASSERT_TRUE(present());
   expect_mesh_pixel(none, "off from the box");
-  EXPECT_FALSE(view_->unlit()) << "the tap pressed Texture alone";
+  EXPECT_FALSE(view_->wireframe()) << "the tap pressed Texture alone";
   EXPECT_FALSE(view_->player().playing()) << "the tap pressed Texture alone";
 
   // The box stays with no set bound since: a frame binds none, and the next,
@@ -2063,25 +2146,15 @@ TEST_F(PlayerViewTest, TextureOffDrawsAsNoBindingAndOnDrawsTheTexture) {
   EXPECT_EQ(item_under(vp_test::control_middle(*controls, vp_test::kTexture)),
             texture_id)
       << "the box went with the set";
-
-  // Unlit applies with Texture off and a set bound: the frame draws the pixel
-  // Unlit draws with no set, which is not the lit one.
-  view_->set_unlit(true);
-  ASSERT_TRUE(present());
-  const std::vector<int> unlit = mesh_pixel();
-  ASSERT_TRUE(differs(none, unlit)) << "lit and unlit draw the same pixel";
-  *bind = true;
-  ASSERT_TRUE(present());
-  expect_mesh_pixel(unlit, "off, a set bound, Unlit");
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
 }
 
 // A binding that names no set applies with Texture off as on: a before_draw
-// that clears kHybridMeshLit with no set draws the mesh as set_unlit(true)
-// does, the same pixel within 1 code, Texture off and then on; that pixel is
-// not the lit one, or the comparisons would show nothing: it faces away from
-// the headlight.
+// that clears kHybridMeshLit with no set draws the mesh's vertex colour
+// unshaded, within 1 code, Texture off and then on; lit, that pixel is shaded
+// darker, or the comparisons would show nothing: it faces away from the
+// headlight.
 TEST_F(PlayerViewTest, ABindingOfNoSetAppliesWithTextureOffOrOn) {
   const auto clear = std::make_shared<std::atomic<bool>>(false);
   probe_ = kAwayFromTheLight;
@@ -2103,11 +2176,16 @@ TEST_F(PlayerViewTest, ABindingOfNoSetAppliesWithTextureOffOrOn) {
   aim_at(view_->shown()->index);
   ASSERT_TRUE(present());
   const std::vector<int> lit = mesh_pixel();
-  view_->set_unlit(true);
-  ASSERT_TRUE(present());
-  const std::vector<int> unlit = mesh_pixel();
-  view_->set_unlit(false);
-  ASSERT_TRUE(differs(lit, unlit)) << "lit and unlit draw the same pixel";
+  // The mesh's vertex colour, one for every vertex: what an unlit draw shows.
+  const std::vector<double> linear =
+      uniform_colour(view_->mesh(), *context_->device, *context_->allocator);
+  ASSERT_EQ(linear.size(), 3u);
+  const std::vector<int> unlit{encoded(linear[0]), encoded(linear[1]),
+                               encoded(linear[2])};
+  ASSERT_EQ(lit.size(), 4u);
+  for (std::size_t c = 0; c < 3; ++c) {
+    ASSERT_LT(lit[c], unlit[c] - 10) << "component " << c << " unshaded lit";
+  }
 
   *clear = true;
   ASSERT_TRUE(present());
@@ -2117,46 +2195,6 @@ TEST_F(PlayerViewTest, ABindingOfNoSetAppliesWithTextureOffOrOn) {
   expect_mesh_pixel(unlit, "Texture on");
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
-}
-
-// Unlit: the view's own binding clears kHybridMeshLit, so a pixel of the
-// mesh is its vertex colour within 1 code; lit, the same pixel is shaded
-// darker, as it faces away from the headlight. The panel's box flips it, as
-// set_unlit does.
-TEST_F(PlayerViewTest, UnlitShowsTheVertexColourUnshaded) {
-  make_hooks_ = [](const HookContext&) {
-    return core::Result<FrameHooks>(FrameHooks{});
-  };
-  unlit_ = true;
-  probe_ = kAwayFromTheLight;
-  ASSERT_TRUE(make_view(/*playing=*/false));
-  EXPECT_TRUE(view_->unlit());
-  view_->player().step();
-  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
-  aim_at(view_->shown()->index);
-  ASSERT_TRUE(present());
-  // The mesh's vertex colour, one for every vertex.
-  const std::vector<double> linear =
-      uniform_colour(view_->mesh(), *context_->device, *context_->allocator);
-  ASSERT_EQ(linear.size(), 3u);
-  const std::vector<int> colour{encoded(linear[0]), encoded(linear[1]),
-                                encoded(linear[2])};
-  expect_mesh_pixel(colour, "Unlit");
-  ImGui::SetCurrentContext(view_->ui_context());
-  const ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
-  ASSERT_NE(panel, nullptr);
-  tap(vp_test::control_middle(*panel, vp_test::kUnlit));
-  EXPECT_FALSE(view_->unlit());
-  ASSERT_TRUE(present());
-  const std::vector<int> lit = mesh_pixel();
-  ASSERT_EQ(lit.size(), 4u);
-  for (std::size_t c = 0; c < 3; ++c) {
-    EXPECT_LT(lit[c], colour[c] - 10) << "component " << c << " unshaded";
-  }
-  view_->set_unlit(true);
-  ASSERT_TRUE(present());
-  expect_mesh_pixel(colour, "Unlit again");
-  EXPECT_FALSE(view_->player().playing()) << "the tap pressed Unlit alone";
 }
 
 // The headlight through the view: from each side the camera takes, the

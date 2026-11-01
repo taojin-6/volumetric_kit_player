@@ -60,33 +60,36 @@ struct UiArea {
 /// @pre An ImGui frame is open.
 UiArea work_area();
 
-/// @brief Draw Play/Pause, Step, Loop, Normals, Deblock, Unlit and, when
-///        given, Texture and a program's panel's box, and Mute for a file
-///        with audio (StreamPlayer::has_audio), in a row, the status
-///        line below, at the bottom centre of @p area, so they stay clear of
-///        a notch, a home indicator and the panel; a live player's
-///        (StreamPlayer::live), Normals, Deblock, Unlit and, when given,
-///        Texture and the panel's box over its @ref live_status_line.
-///        Deblock, a box that shows and sets StreamPlayer::deblock, then
-///        Unlit, Texture, the panel's and Mute, which shows and sets
-///        StreamPlayer::muted, boxes, each go after the line's
-///        last control, or start a line below when it would not fit @p area
-///        with them, as Deblock does on a phone in portrait; a status line
-///        too wide for it breaks between its parts, as a stats line does.
-///        There is no text field, so touch needs no keyboard.
+/// @brief Draw Play/Pause, Step, Loop, Normals, Deblock, Wire (the
+///        wireframe), Cull (back faces) and, when given, Texture
+///        and a program's panel's box, and Mute for a file with audio
+///        (StreamPlayer::has_audio), in a row, the status line below, at the
+///        bottom centre of @p area, so they stay clear of a notch, a home
+///        indicator and the panel; a live player's (StreamPlayer::live),
+///        Normals and the same boxes over its @ref live_status_line. Deblock,
+///        a box that shows and sets StreamPlayer::deblock, then Wire, Cull,
+///        Texture, the panel's and Mute, which shows and sets
+///        StreamPlayer::muted, boxes, each go after the line's last control,
+///        or start a line below when it would not fit @p area with them, as
+///        Deblock does on a phone in portrait; a status line too wide for it
+///        breaks between its parts, as a stats line does. There is no text
+///        field, so touch needs no keyboard.
 ///
 /// @code
 /// overlay.new_frame();
-/// draw_controls(player, shown, normals, unlit, &textured, work_area(),
-///               "Inspect", &panel_open);
+/// draw_controls(player, shown, normals, wireframe, cull, &textured,
+///               work_area(), "Inspect", &panel_open);
 /// @endcode
 /// @param player      The controls act on it; they are safe from this thread.
 /// @param shown       The last stream frame drawn, for the status line.
 /// @param normals     The view's shading (PlayerView::normals): a press on
 ///                    Normals flips it, and the button shows pressed while
 ///                    on.
-/// @param unlit       The view's Unlit (PlayerView::unlit), which its box
-///                    shows and a press flips.
+/// @param wireframe   The view's wireframe (PlayerView::wireframe), which
+///                    Wire shows and a press flips.
+/// @param cull        Whether the view culls back faces
+///                    (PlayerView::cull_back_faces), which Cull shows and a
+///                    press flips.
 /// @param textured    The view's Texture (PlayerView::textured), which its
 ///                    box shows and a press flips; null draws no Texture box,
 ///                    as for a view with no texture bound.
@@ -97,7 +100,7 @@ UiArea work_area();
 ///                    press flips; given with @p panel_label.
 /// @pre An ImGui frame is open on the view's context.
 void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
-                   bool& normals, bool& unlit, bool* textured,
+                   bool& normals, bool& wireframe, bool& cull, bool* textured,
                    const UiArea& area, const char* panel_label = nullptr,
                    bool* panel_open = nullptr);
 

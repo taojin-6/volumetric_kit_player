@@ -150,16 +150,18 @@ bool draw_box(const char* label, bool* on, const UiArea& area) {
   return ImGui::Checkbox(label, on);
 }
 
-// Deblock, Unlit and, given, Texture, the panel's and, with audio, Mute, each
-// a box after the line's last control, or below it when the line would not
-// fit `area` with it.
-void draw_boxes(StreamPlayer& player, bool& unlit, bool* textured,
-                const UiArea& area, const char* panel_label, bool* panel_open) {
+// Deblock, Wire, Cull and, given, Texture, the panel's and, with audio, Mute,
+// each a box after the line's last control, or below it
+// when the line would not fit `area` with it.
+void draw_boxes(StreamPlayer& player, bool& wireframe, bool& cull,
+                bool* textured, const UiArea& area, const char* panel_label,
+                bool* panel_open) {
   bool on = player.deblock();
   if (draw_box("Deblock", &on, area)) {
     player.set_deblock(on);
   }
-  draw_box("Unlit", &unlit, area);
+  draw_box("Wire", &wireframe, area);
+  draw_box("Cull", &cull, area);
   if (textured != nullptr) {
     draw_box("Texture", textured, area);
   }
@@ -174,13 +176,13 @@ void draw_boxes(StreamPlayer& player, bool& unlit, bool* textured,
   }
 }
 
-// A file's controls: Play/Pause, Step, Loop, Normals, Deblock, Unlit and,
-// given, Texture and the panel's box; returns its status line.
+// A file's controls: Play/Pause, Step, Loop, Normals, then draw_boxes';
+// returns its status line.
 std::string draw_file_controls(StreamPlayer& player,
                                const std::optional<FrameStamp>& shown,
-                               bool& normals, bool& unlit, bool* textured,
-                               const UiArea& area, const char* panel_label,
-                               bool* panel_open) {
+                               bool& normals, bool& wireframe, bool& cull,
+                               bool* textured, const UiArea& area,
+                               const char* panel_label, bool* panel_open) {
   const ImVec2 button = button_size();
   // One ID for both labels, so a press that flips the label completes.
   if (ImGui::Button(player.playing() ? "Pause###play" : "Play###play",
@@ -202,7 +204,7 @@ std::string draw_file_controls(StreamPlayer& player,
   }
   ImGui::SameLine();
   draw_normals(normals);
-  draw_boxes(player, unlit, textured, area, panel_label, panel_open);
+  draw_boxes(player, wireframe, cull, textured, area, panel_label, panel_open);
   return status_line(shown, player.frame_count(), player.playing(), loop,
                      player.audio_status());
 }
@@ -216,7 +218,7 @@ UiArea work_area() {
 }
 
 void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
-                   bool& normals, bool& unlit, bool* textured,
+                   bool& normals, bool& wireframe, bool& cull, bool* textured,
                    const UiArea& area, const char* panel_label,
                    bool* panel_open) {
   ImGui::SetNextWindowPos(
@@ -227,11 +229,12 @@ void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
     std::string status;
     if (player.live()) {
       draw_normals(normals);
-      draw_boxes(player, unlit, textured, area, panel_label, panel_open);
+      draw_boxes(player, wireframe, cull, textured, area, panel_label,
+                 panel_open);
       status = live_status_line(player.live_status(), Playback::Clock::now());
     } else {
-      status = draw_file_controls(player, shown, normals, unlit, textured, area,
-                                  panel_label, panel_open);
+      status = draw_file_controls(player, shown, normals, wireframe, cull,
+                                  textured, area, panel_label, panel_open);
     }
     draw_parted_line(status, text_room(area));
   }

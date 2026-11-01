@@ -373,7 +373,6 @@ TEST(DesktopViewConfig, KeepsTheProgramsSettingsWithTheScenariosValidation) {
   config.view.tile_depth = 1;
   config.view.debug_labels = false;
   config.view.share_vertices = false;
-  config.view.unlit = true;
   config.view.textured = true;
   config.view.make_hooks = &no_hooks;
   config.view.device_requirements.optional_extensions = {"VK_VP_test_kept"};
@@ -397,7 +396,6 @@ TEST(DesktopViewConfig, KeepsTheProgramsSettingsWithTheScenariosValidation) {
     EXPECT_EQ(view.tile_depth, 1u);
     EXPECT_FALSE(view.debug_labels);
     EXPECT_FALSE(view.share_vertices);
-    EXPECT_TRUE(view.unlit);
     EXPECT_TRUE(view.textured);
     const MakeHooksFn* kept = view.make_hooks.target<MakeHooksFn>();
     ASSERT_NE(kept, nullptr) << "make_hooks dropped";

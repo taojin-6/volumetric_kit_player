@@ -52,8 +52,9 @@ Input& input_of(GLFWwindow* window) {
 }
 
 // The panel's controls as keys: Space plays or pauses, Right steps, L loops,
-// which a live player ignores, N flips Normals, D the deblock, U Unlit, T
-// Texture, M the mute, and a program's key its panel (PlayerView::panel_key).
+// which a live player ignores, N flips Normals, D the deblock, W Wire (the
+// wireframe), C Cull (back faces), T Texture, M the mute, and a program's key
+// its panel (PlayerView::panel_key).
 // Esc closes the window.
 void on_key(GLFWwindow* window, int key, int /*scancode*/, int action,
             int /*mods*/) {
@@ -78,12 +79,14 @@ void on_key(GLFWwindow* window, int key, int /*scancode*/, int action,
     view->set_normals(!view->normals());
   } else if (key == GLFW_KEY_D) {
     player.set_deblock(!player.deblock());
-  } else if (key == GLFW_KEY_U) {
-    view->set_unlit(!view->unlit());
   } else if (key == GLFW_KEY_T) {
     view->set_textured(!view->textured());
   } else if (key == GLFW_KEY_M) {
     player.set_muted(!player.muted());
+  } else if (key == GLFW_KEY_C) {
+    view->set_cull_back_faces(!view->cull_back_faces());
+  } else if (key == GLFW_KEY_W) {
+    view->set_wireframe(!view->wireframe());
   } else if (view->panel_key() != 0 && key == view->panel_key()) {
     view->set_panel_open(!view->panel_open());
   }
