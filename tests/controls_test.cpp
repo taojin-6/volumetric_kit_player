@@ -13,19 +13,20 @@
 // playing(), Step pauses, Loop toggles, Normals flips the view's shading and
 // shows pressed while on, hovered or not, Deblock, on at first, toggles the
 // player's deblock, on the row or, where the row would not fit, below it,
-// Wire, off at first, flips the view's Wire, after Deblock or below it,
-// Texture is drawn only when given, after Wire, and flips the view's Texture,
+// Wire, off at first, flips the view's wireframe, after Deblock or below it,
+// Cull, off at first, after Wire, flips its back-face culling, Texture is
+// drawn only when given, after Cull, and flips the view's Texture,
 // a live player's too, Mute is drawn only for a file with audio and flips the
 // player's mute, its status line naming the audio's state,
 // "Pause" and "Normals" fit their buttons, a finger on the
 // controls is ImGui's, and they keep clear of the safe area; a status line too
 // wide for the work area breaks between its parts, the rows after the first
-// indented; a live player's, never started, are Normals, Deblock and Wire over
-// its status line. The Source button is drawn only when asked for, at the work
-// area's top right clear of the safe area and of the stats' body, leaving the
-// controls where they were, and a tap on it is one press. The stats sit at the
-// work area's top left; a finger on their header is ImGui's and on their body
-// the scene's; a tap on the header closes them, with nothing rebuilt, and
+// indented; a live player's, never started, are Normals, Deblock, Wire and Cull
+// over its status line. The Source button is drawn only when asked for, at the
+// work area's top right clear of the safe area and of the stats' body, leaving
+// the controls where they were, and a tap on it is one press. The stats sit at
+// the work area's top left; a finger on their header is ImGui's and on their
+// body the scene's; a tap on the header closes them, with nothing rebuilt, and
 // another opens them with the frames taken meanwhile; their figures hold for a
 // refresh; a program's text is their last, a row for each of its lines, read
 // a program-line refresh apart at most, never while they are closed, and at
@@ -643,8 +644,7 @@ class ControlsTest : public ::testing::Test {
     scene_area_ = scene_area(laid, laid_open);
     const UiArea& area = scene_area_;
     bool open = laid_open;
-    draw_controls(*player_, controls_shown_, normals_, cull_,
-                  wireframe_shown_ ? &wireframe_ : nullptr,
+    draw_controls(*player_, controls_shown_, normals_, wireframe_, cull_,
                   texture_shown_ ? &textured_ : nullptr, area,
                   box_shown_ ? vp_test::kPanelLabel : nullptr, &open);
     if (source_shown_ && draw_source(area)) {
@@ -816,12 +816,11 @@ class ControlsTest : public ::testing::Test {
 
   vp_test::Scratch scratch_;
   std::unique_ptr<StreamPlayer> player_;
-  bool normals_ = false;         // the view's shading, which the controls flip
-  bool textured_ = false;        // the view's Texture, which its box flips
-  bool texture_shown_ = false;   // Texture's box drawn: a texture is bound
-  bool cull_ = false;            // the view's Cull, which its box flips
-  bool wireframe_ = false;       // the view's Wire, which its box flips
-  bool wireframe_shown_ = true;  // Wire's box drawn: edges are drawn
+  bool normals_ = false;        // the view's shading, which the controls flip
+  bool textured_ = false;       // the view's Texture, which its box flips
+  bool texture_shown_ = false;  // Texture's box drawn: a texture is bound
+  bool cull_ = false;           // the view's Cull, which its box flips
+  bool wireframe_ = false;      // the view's Wire, which its box flips
   std::optional<PlaybackStats> stats_;
   StatsPanel panel_;
   std::optional<FrameStamp> shown_;
@@ -1004,31 +1003,23 @@ TEST_F(ControlsTest, TextureIsDrawnOnlyWhenGivenAndATapFlipsIt) {
 }
 
 // Cull, a box after Wire, off at first: a tap culls the view's back faces and
-// does nothing else, and another draws them again. Without Wire (a device
-// that draws no edges) it follows Deblock.
+// does nothing else, and another draws them again.
 TEST_F(ControlsTest, CullFlipsTheViewsBackFaceCulling) {
   const ImGuiID cull_id =
       ImGui::FindWindowByName(kControlsWindow)->GetID("Cull");
   width_ = 600;
-  for (const bool wireframe : {true, false}) {
-    SCOPED_TRACE(wireframe ? "after Wire" : "after Deblock");
-    wireframe_shown_ = wireframe;
-    frame();
-    frame();
-    const glm::vec2 middle =
-        vp_test::cull_top_left(panel(), wireframe) +
-        0.5f * vp_test::control_size(panel(), vp_test::kCull);
-    EXPECT_EQ(item_under(middle), cull_id);
-    ASSERT_FALSE(cull_);
-    tap(middle);
-    EXPECT_TRUE(cull_);
-    EXPECT_FALSE(wireframe_);
-    EXPECT_FALSE(normals_);
-    EXPECT_TRUE(player_->deblock());
-    EXPECT_TRUE(player_->playing()) << "the tap pressed Cull alone";
-    tap(middle);
-    EXPECT_FALSE(cull_);
-  }
+  frame();
+  frame();
+  EXPECT_EQ(item_under(control(vp_test::kCull)), cull_id);
+  ASSERT_FALSE(cull_);
+  tap(control(vp_test::kCull));
+  EXPECT_TRUE(cull_);
+  EXPECT_FALSE(wireframe_);
+  EXPECT_FALSE(normals_);
+  EXPECT_TRUE(player_->deblock());
+  EXPECT_TRUE(player_->playing()) << "the tap pressed Cull alone";
+  tap(control(vp_test::kCull));
+  EXPECT_FALSE(cull_);
 }
 
 // Mute, a box after the others, is drawn only for a file with audio; a tap

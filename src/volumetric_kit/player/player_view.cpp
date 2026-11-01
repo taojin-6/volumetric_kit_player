@@ -89,8 +89,9 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   device_config.instance.app_name = "volumetric_kit_player";
   device_config.instance.enable_validation = config.validation;
   device_config.instance.request_debug_utils = config.debug_labels;
-  // Line fill, for the Wire box; every device the player runs on offers
-  // it (MoltenVK on macOS and iOS, NVIDIA, lavapipe).
+  // Line fill, for the Wire box: required, so a GPU without it is refused.
+  // Every device the player runs on has it (MoltenVK on macOS and iOS,
+  // NVIDIA, lavapipe).
   app_config.device.features.fillModeNonSolid = VK_TRUE;
   device_config.graphics = app_config.device;
   VKC_ASSIGN(const core::DeviceRequirements requirements,
@@ -227,8 +228,7 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   const UiArea area = scene_area(docked, panel_drawn_);
   bool panel_box = panel_drawn_;
   // Texture's box once a before_draw has bound a set; the panel's, given.
-  draw_controls(*player_, shown_, normals_, cull_back_faces_,
-                wireframe_supported() ? &wireframe_ : nullptr,
+  draw_controls(*player_, shown_, normals_, wireframe_, cull_back_faces_,
                 texture_bound_ ? &textured_ : nullptr, area,
                 has_panel()
                     ? (panel.label.empty() ? panel.title : panel.label).c_str()

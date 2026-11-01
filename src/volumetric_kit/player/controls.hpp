@@ -61,7 +61,7 @@ struct UiArea {
 UiArea work_area();
 
 /// @brief Draw Play/Pause, Step, Loop, Normals, Deblock, Wire (the
-///        wireframe) when given, Cull (back faces) and, when given, Texture
+///        wireframe), Cull (back faces) and, when given, Texture
 ///        and a program's panel's box, and Mute for a file with audio
 ///        (StreamPlayer::has_audio), in a row, the status line below, at the
 ///        bottom centre of @p area, so they stay clear of a notch, a home
@@ -77,7 +77,7 @@ UiArea work_area();
 ///
 /// @code
 /// overlay.new_frame();
-/// draw_controls(player, shown, normals, cull, &wireframe, &textured,
+/// draw_controls(player, shown, normals, wireframe, cull, &textured,
 ///               work_area(), "Inspect", &panel_open);
 /// @endcode
 /// @param player      The controls act on it; they are safe from this thread.
@@ -85,12 +85,11 @@ UiArea work_area();
 /// @param normals     The view's shading (PlayerView::normals): a press on
 ///                    Normals flips it, and the button shows pressed while
 ///                    on.
+/// @param wireframe   The view's wireframe (PlayerView::wireframe), which
+///                    Wire shows and a press flips.
 /// @param cull        Whether the view culls back faces
 ///                    (PlayerView::cull_back_faces), which Cull shows and a
 ///                    press flips.
-/// @param wireframe   The view's wireframe (PlayerView::wireframe), which
-///                    Wire shows and a press flips; null draws no Wire box,
-///                    as for a device that draws no edges.
 /// @param textured    The view's Texture (PlayerView::textured), which its
 ///                    box shows and a press flips; null draws no Texture box,
 ///                    as for a view with no texture bound.
@@ -101,7 +100,7 @@ UiArea work_area();
 ///                    press flips; given with @p panel_label.
 /// @pre An ImGui frame is open on the view's context.
 void draw_controls(StreamPlayer& player, const std::optional<FrameStamp>& shown,
-                   bool& normals, bool& cull, bool* wireframe, bool* textured,
+                   bool& normals, bool& wireframe, bool& cull, bool* textured,
                    const UiArea& area, const char* panel_label = nullptr,
                    bool* panel_open = nullptr);
 

@@ -17,10 +17,12 @@ its `kHybridMeshCullBackFaces`; W and C on the desktop.
   still draws unshaded through its own binding's `kHybridMeshLit` clear.
 - **Why these labels.** Only "Wire" and "Cull" fit that row; "Wireframe" or
   "Back faces" wrap it.
-- **Cull is off at first,** so both sides draw as before. Wire is drawn only
-  where the view's pipeline has gfx's edge pass
-  (`HybridMeshPipeline::wireframe_supported`); the view's device asks for
-  `fillModeNonSolid`, which every Mac, iPhone, iPad and NVIDIA box offers.
+- **Cull is off at first,** so both sides draw as before.
+- **The view requires line fill.** Its device asks for `fillModeNonSolid`,
+  for gfx's edge pass, and `PlayerView::create` refuses a GPU without it: every
+  Mac, iPhone, iPad and NVIDIA box has it, and the core has no optional
+  features, so Wire is always shown rather than hidden on a GPU none of the
+  player's targets is.
 
 ## 2026-10-31 — CI: ThreadSanitizer's leg runs a test binary in one process
 
@@ -692,8 +694,8 @@ amends 2026-10-25's library entry.
 `frame_hooks.hpp`: `FrameHooks`, made once by `PlayerViewConfig::make_hooks`
 from a `HookContext`. Why: a caller adds GPU work to a frame and chooses what
 each display frame draws, a readback or a measurement for one, with no copy
-of the worker or the view; the panel's Unlit, `vp_probe --latency` and
-`--save-meshes` are such callers.
+of the worker or the view; `vp_probe --latency` and `--save-meshes` are such
+callers.
 
 - **Where each runs:** `after_mesh` on the worker before every publish, a
   frame's, one meshed again after a redo, a paused toggle's rebuild and a

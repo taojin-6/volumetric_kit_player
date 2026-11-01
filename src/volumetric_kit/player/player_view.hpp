@@ -201,7 +201,9 @@ class PlayerView {
   ///                 Texture.
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
   ///         @p player or an empty @p extent; or the first failure (device,
-  ///         `Unsupported` naming what no GPU offers of a program's required
+  ///         `Unsupported` for a GPU without line fill (`fillModeNonSolid`,
+  ///         for Wire; every Mac, iPhone, iPad and NVIDIA box has it) or
+  ///         naming what no GPU offers of a program's required
   ///         extensions or features among them, swapchain, pipeline, overlay,
   ///         profiler, make_hooks, StreamPlayer::start). Host allocation
   ///         failures return `OutOfMemory`.
@@ -281,19 +283,12 @@ class PlayerView {
   void set_cull_back_faces(bool cull) noexcept { cull_back_faces_ = cull; }
   /// @return Whether the mesh's triangle edges are drawn over it
   ///         (kHybridMeshWireframe); false at first. The panel's Wire box,
-  ///         after Deblock and drawn where @ref wireframe_supported, flips
-  ///         it.
+  ///         after Deblock, flips it.
   bool wireframe() const noexcept { return wireframe_; }
   /// @brief Draw the triangle edges over the mesh, or not, from the next
-  ///        frame (the desktop's W key); without @ref wireframe_supported,
-  ///        nothing shows.
+  ///        frame (the desktop's W key).
   /// @param wireframe  Whether to draw them.
   void set_wireframe(bool wireframe) noexcept { wireframe_ = wireframe; }
-  /// @return Whether the device draws edges
-  ///         (gfx::pipelines::HybridMeshPipeline::wireframe_supported).
-  bool wireframe_supported() const noexcept {
-    return mesh_pipeline_.wireframe_supported();
-  }
   /// @return Whether the program's panel (FrameHooks::panel) is open:
   ///         PlayerViewConfig::panel's at first, and never with no panel.
   ///         Its box in the controls and its close button flip it.

@@ -104,9 +104,9 @@ Normals, shown pressed while on, colours the mesh by its world-space normals
 in place of lighting; and Deblock, on at first, has grid's decoder smooth
 each frame across its block faces, and while paused redoes the frame shown.
 Wire draws each triangle's edges over the mesh, black over light surfaces
-and white over dark ones, where the GPU offers line fill (every Mac, iPhone,
-iPad and NVIDIA box does); Cull culls the mesh's back faces, which are drawn
-by default.
+and white over dark ones; Cull culls the mesh's back faces, which are drawn
+by default. The player needs a GPU with line fill (`fillModeNonSolid`), which
+every Mac, iPhone, iPad and NVIDIA box has.
 Texture, a box shown once a program's `before_draw` binds a texture set,
 draws the mesh with that texture; off, as at first, the mesh is drawn in its
 own shading.

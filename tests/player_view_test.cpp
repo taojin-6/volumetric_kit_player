@@ -1026,9 +1026,8 @@ TEST_F(PlayerViewTest, ATapOnNormalsSwitchesTheMeshsFlags) {
 
 // Both sides drawn and no edges at first; set_cull_back_faces(true) adds
 // kHybridMeshCullBackFaces to mesh_flags() and set_wireframe(true)
-// kHybridMeshWireframe, which the view's device draws (it enables
-// fillModeNonSolid), and frames keep presenting; the panel's boxes are the
-// controls test's.
+// kHybridMeshWireframe, and frames keep presenting; the panel's boxes are the
+// controls test's, and what the draw shows WireReachesTheDraw's.
 TEST_F(PlayerViewTest, CullAndWireSetTheMeshsFlags) {
   using gfx::pipelines::kHybridMeshCullBackFaces;
   using gfx::pipelines::kHybridMeshLit;
@@ -1036,7 +1035,6 @@ TEST_F(PlayerViewTest, CullAndWireSetTheMeshsFlags) {
   using gfx::pipelines::kHybridMeshWireframe;
   ASSERT_TRUE(make_view());
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
-  EXPECT_TRUE(view_->wireframe_supported());
   EXPECT_FALSE(view_->cull_back_faces());
   EXPECT_FALSE(view_->wireframe());
   EXPECT_EQ(view_->mesh_flags(), kHybridMeshLit);
@@ -1056,6 +1054,62 @@ TEST_F(PlayerViewTest, CullAndWireSetTheMeshsFlags) {
   view_->set_cull_back_faces(false);
   view_->set_wireframe(false);
   EXPECT_EQ(view_->mesh_flags(), kHybridMeshLit);
+}
+
+// Wire reaches the draw: the mesh drawn again as the last frame drew it
+// (record_mesh) shows its edges over the sphere with Wire on, changing many
+// pixels, also under a binding that clears kHybridMeshLit, and draws as before
+// with it off. (Cull leaves a closed sphere seen from outside as it is.)
+TEST_F(PlayerViewTest, WireReachesTheDraw) {
+  const auto clear = std::make_shared<std::atomic<bool>>(false);
+  make_hooks_ = [clear](const HookContext&) -> core::Result<FrameHooks> {
+    FrameHooks hooks;
+    hooks.before_draw = [clear](VkCommandBuffer, const FrameStamp&) {
+      DrawBinding binding;
+      if (*clear) {
+        binding.mesh_flags_clear = gfx::pipelines::kHybridMeshLit;
+      }
+      return core::Result<DrawBinding>(binding);
+    };
+    return hooks;
+  };
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  aim_at(view_->shown()->index);
+  constexpr VkExtent2D kSide{64, 64};
+  const auto drawn = [&] {
+    EXPECT_TRUE(present());
+    return offscreen(
+        kSide, [&](VkCommandBuffer cmd) { view_->record_mesh(cmd, kSide); });
+  };
+  // Pixels more than 10 codes apart in R, G or B.
+  const auto changed = [](const std::vector<std::array<int, 4>>& a,
+                          const std::vector<std::array<int, 4>>& b) {
+    int count = 0;
+    for (std::size_t i = 0; i < std::min(a.size(), b.size()); ++i) {
+      count += std::abs(a[i][0] - b[i][0]) > 10 ||
+               std::abs(a[i][1] - b[i][1]) > 10 ||
+               std::abs(a[i][2] - b[i][2]) > 10;
+    }
+    return count;
+  };
+  for (const bool unlit : {false, true}) {
+    SCOPED_TRACE(unlit ? "a binding clears kHybridMeshLit" : "lit");
+    *clear = unlit;
+    view_->set_wireframe(false);
+    const std::vector<std::array<int, 4>> plain = drawn();
+    ASSERT_EQ(plain.size(),
+              static_cast<std::size_t>(kSide.width) * kSide.height);
+    view_->set_wireframe(true);
+    const std::vector<std::array<int, 4>> wire = drawn();
+    ASSERT_EQ(wire.size(), plain.size());
+    EXPECT_GT(changed(plain, wire), 50) << "no edges drawn";
+    view_->set_wireframe(false);
+    EXPECT_EQ(changed(plain, drawn()), 0) << "edges stayed with Wire off";
+  }
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
 }
 
 // The true-SDF stream, which the deblock runs on, paused on frame 0, none of

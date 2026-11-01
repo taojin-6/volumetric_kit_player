@@ -123,8 +123,8 @@ struct PanelHooks {
   /// title.
   std::string label;
   /// The desktop's key that opens and closes it: an upper-case letter, which
-  /// GLFW's key codes match, other than the view's own (L, N, D, U, T,
-  /// which keep their meaning); 0, none.
+  /// GLFW's key codes match, other than the view's own (L, N, D, W, C, T,
+  /// M, which keep their meaning); 0, none.
   char key = 0;
   /// The header's items, such as buttons, inside its ImGui window
   /// (gfx::ui::DockedPanel::draw_chrome); and captions over the content on
