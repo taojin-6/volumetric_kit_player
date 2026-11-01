@@ -265,9 +265,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Live, a record late past D's 1 s clamp, and the backlog that drains behind
-  it, raise no arrival need (`LiveClock`): a delay spike leaves D where it
-  was, rather than at 1 s for 10 s and then falling 25 ms a second, and the
-  stats flag it "over 1 s".
+  it until the records come at the stream's pace again (`kDrainSpan`), raise
+  no arrival need (`LiveClock`): a delay spike leaves D where it was, rather
+  than at 1 s for 10 s and then falling 25 ms a second, and the stats flag
+  its records past the clamp "over 1 s".
 - build: gfx at #172's merge (77fefdc), whose `kHybridMeshCullBackFaces` and
   `kHybridMeshWireframe` the Wire and Cull boxes draw with.
 - build: core at #76's merge (c52a86a, 0.35.0), which the player requires:
