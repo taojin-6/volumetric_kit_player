@@ -36,7 +36,10 @@ from 22 to 32 s (measured 2026-11-01), and from 1 s the fall takes 39 s more.
   never a lasting delay. A delay that rises gradually past the clamp still
   raises D by its records within it.
 - **A program's need is its own:** one that counts a spike's late frames
-  still holds D up by them (`FrameHooks::live_delay`).
+  still holds D up by them (`FrameHooks::live_delay`). Measured on the same
+  path with the rule (one run), the arrival need stayed at its 121 ms
+  throughout, while such a program's need raised D to 1 s once, at 23 s,
+  and D fell from there: 397 ms at 48 s, against 758 ms before.
 
 ## 2026-10-31 — CI: ThreadSanitizer's leg runs a test binary in one process
 

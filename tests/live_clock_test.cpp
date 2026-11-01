@@ -563,13 +563,13 @@ bool on_time(const LiveClock& clock, std::uint64_t k, Clock::time_point at) {
   return vkp::present(playout.point, k * kPeriodNs) - playout.lead >= at;
 }
 
-// r2b's spike: every record sent in 2 s from 20 s comes 1.2 s late, so the
+// A measured spike: every record sent in 2 s from 20 s comes 1.2 s late, so the
 // records sent in the 1.2 s after drain behind them, 5 ms apart, one of them
 // a large record of 120 ms. D never rises: N, the time from the drain's end
 // until D is back, is 0. Without the rule D sat at the clamp for 10 s, then
 // fell 25 ms a second. The spike's records are late, as at any D; from the
 // drain's end every record is on time. Mutants: no record past the clamp a
-// spike's (D 1 s); the drain counted (D 975 ms).
+// spike's (D 1 s); the drain counted (D 978 ms).
 TEST(LiveClockSpike, ASpikePastTheClampAndItsDrainLeaveDWhereItWas) {
   LiveClock clock;
   Path path(clock);
@@ -661,7 +661,7 @@ TEST(LiveClockSpike, ALastingSlowerLinkStillRaisesD) {
   }
 }
 
-// Spikes 6 s apart, each as r2b's: D stays, and each costs its own records,
+// Spikes 6 s apart, each as above: D stays, and each costs its own records,
 // late at any D, while every record between the drains and after the last is
 // on time. Repeated spikes cost late frames, held or skipped, each time,
 // never latency.
