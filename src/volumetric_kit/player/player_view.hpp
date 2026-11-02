@@ -281,13 +281,13 @@ class PlayerView {
   ///        (the desktop's C key).
   /// @param cull  Whether to cull them.
   void set_cull_back_faces(bool cull) noexcept { cull_back_faces_ = cull; }
-  /// @return Whether the mesh's triangle edges are drawn over it
-  ///         (kHybridMeshWireframe); false at first. The panel's Wire box,
-  ///         after Deblock, flips it.
+  /// @return Whether the mesh is drawn as its triangles' edges alone, hidden
+  ///         ones removed (kHybridMeshWireframe); false at first. The panel's
+  ///         Wire box, after Deblock, flips it.
   bool wireframe() const noexcept { return wireframe_; }
-  /// @brief Draw the triangle edges over the mesh, or not, from the next
+  /// @brief Draw the mesh as its triangles' edges, or filled, from the next
   ///        frame (the desktop's W key).
-  /// @param wireframe  Whether to draw them.
+  /// @param wireframe  Whether to draw the edges alone.
   void set_wireframe(bool wireframe) noexcept { wireframe_ = wireframe; }
   /// @return Whether the program's panel (FrameHooks::panel) is open:
   ///         PlayerViewConfig::panel's at first, and never with no panel.
@@ -439,7 +439,7 @@ class PlayerView {
   bool normals_ = false;          // the mesh's shading (mesh_flags)
   bool textured_ = false;         // drawn with before_draw's texture set
   bool cull_back_faces_ = false;  // back faces culled (mesh_flags)
-  bool wireframe_ = false;        // edges over the mesh (mesh_flags)
+  bool wireframe_ = false;        // the edges alone (mesh_flags)
   gfx::ui::DockedPanel panel_;    // the program's panel (FrameHooks::panel)
   bool panel_drawn_ = false;      // the last frame laid it out open
   PanelFrame panel_frame_;        // and that frame's rectangles

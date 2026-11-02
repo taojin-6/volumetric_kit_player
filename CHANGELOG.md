@@ -257,8 +257,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   over unread (`LiveAudio::takes`), and a connection's end drops what the
   output holds. A live stream with no Audio track plays as before.
 - Wire and Cull, boxes after Deblock (W and C on the desktop), both off at
-  first: Wire draws each triangle's edges over the mesh
-  (`PlayerView::wireframe`), and Cull culls its back faces
+  first: Wire draws the mesh as its triangles' edges alone, hidden ones
+  removed (`PlayerView::wireframe`), and Cull culls its back faces
   (`PlayerView::cull_back_faces`). The view requires line fill
   (`fillModeNonSolid`), which every Mac, iPhone, iPad and NVIDIA box has.
 
@@ -269,7 +269,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no arrival need (`LiveClock`): a delay spike leaves D where it was, rather
   than at 1 s for 10 s and then falling 25 ms a second, and the stats flag
   its records past the clamp "over 1 s".
-- build: gfx at #172's merge (77fefdc), whose `kHybridMeshCullBackFaces` and
+- build: gfx at #173's merge (ffc1a17), whose `kHybridMeshCullBackFaces` and
   `kHybridMeshWireframe` the Wire and Cull boxes draw with.
 - build: core at #76's merge (c52a86a, 0.35.0), which the player requires:
   an image with `TRANSIENT_ATTACHMENT` usage, as gfx's 4x MSAA window

@@ -56,7 +56,8 @@ emulated 70 ms path held D at 1 s, set by arrival, from 22 to 32 s (measured
 
 The panel's Unlit box and the U key are gone (`PlayerView::unlit`,
 `set_unlit`, `PlayerViewConfig::unlit`), and two boxes follow Deblock: Wire,
-gfx's `kHybridMeshWireframe` (the triangles' edges over the mesh), and Cull,
+gfx's `kHybridMeshWireframe` (the triangles' edges alone, hidden ones removed),
+and Cull,
 its `kHybridMeshCullBackFaces`; W and C on the desktop.
 
 - **Why Unlit goes.** The owner had no use for it, and an iPhone in landscape

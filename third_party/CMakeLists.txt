@@ -97,19 +97,19 @@ vkc_require_sibling(
 # controls and stats panels (ImGui) and the profiler that times the draw. Its
 # tests, examples and -Werror stay off in a subproject. Its GLFW tier is built
 # for player_desktop alone, so not on iOS: the library links no window system
-# (the top-level CMakeLists.txt checks). The pin is gfx main at #172's merge
-# (77fefdc), for HybridMeshFlags' kHybridMeshCullBackFaces and
-# kHybridMeshWireframe, whose edge pass needs the device's fillModeNonSolid.
-# Before it, main at #168's merge (df3a0de), whose windows render at 4x MSAA
-# (#167, #168): the swapchain's layout().samples is 4, so the view's pipelines
-# draw multisampled, and the tests' offscreen targets take the view's layout
-# with offscreen_desc. Before it, #166's ui::DockedPanel, which lays out a
-# program's panel and draws its handle and header, on main at #165's merge
-# (928146c), for HybridMeshFrame::viewport, which draws the mesh in the scene's
-# part. What the player uses besides is as at #153's merge (123d013):
-# ui::draw_stage_table's host, wait and GPU columns under a ui::StageWindow, and
-# the frame loop's own wait, submit and present rows; beside them, #150's FIFO
-# present by default, which the view takes, #148's
+# (the top-level CMakeLists.txt checks). The pin is gfx main at #173's merge
+# (ffc1a17), for HybridMeshFlags' kHybridMeshCullBackFaces and
+# kHybridMeshWireframe (#172), the edges alone (#173), whose line pass needs the
+# device's fillModeNonSolid. Before it, main at #168's merge (df3a0de), whose
+# windows render at 4x MSAA (#167, #168): the swapchain's layout().samples is 4,
+# so the view's pipelines draw multisampled, and the tests' offscreen targets
+# take the view's layout with offscreen_desc. Before it, #166's ui::DockedPanel,
+# which lays out a program's panel and draws its handle and header, on main at
+# #165's merge (928146c), for HybridMeshFrame::viewport, which draws the mesh in
+# the scene's part. What the player uses besides is as at #153's merge
+# (123d013): ui::draw_stage_table's host, wait and GPU columns under a
+# ui::StageWindow, and the frame loop's own wait, submit and present rows;
+# beside them, #150's FIFO present by default, which the view takes, #148's
 # ImGuiOverlayConfig::min_frame_height and ui::begin_collapsible_panel, #146's
 # windowing::SurfaceSource and glfw::Library, #145's ImGuiTouch, #144's sRGB
 # ImGui fix and #143's orbit drag gestures. Since #158,
@@ -121,7 +121,7 @@ set(VG_WITH_GLFW ${VP_DESKTOP_APP})
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  GIT_TAG 77fefdc06a6ff5494bced3fd793fdf37b8b94c6e)
+  GIT_TAG ffc1a17a3d14aeb546e5484067dbf0160e76c60c)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
 if(VP_BUILD_TESTS)

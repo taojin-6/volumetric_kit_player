@@ -1057,9 +1057,9 @@ TEST_F(PlayerViewTest, CullAndWireSetTheMeshsFlags) {
 }
 
 // Wire reaches the draw: the mesh drawn again as the last frame drew it
-// (record_mesh) shows its edges over the sphere with Wire on, changing many
-// pixels, also under a binding that clears kHybridMeshLit, and draws as before
-// with it off. (Cull leaves a closed sphere seen from outside as it is.)
+// (record_mesh) shows its edges alone with Wire on, changing many pixels, also
+// under a binding that clears kHybridMeshLit, and draws as before with it off.
+// (Cull leaves a closed sphere seen from outside as it is.)
 TEST_F(PlayerViewTest, WireReachesTheDraw) {
   const auto clear = std::make_shared<std::atomic<bool>>(false);
   make_hooks_ = [clear](const HookContext&) -> core::Result<FrameHooks> {
