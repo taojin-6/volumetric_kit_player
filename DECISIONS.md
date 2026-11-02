@@ -4,6 +4,54 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-11-01 — A spike past the clamp leaves D where it was
+
+A record whose lateness plus the lead passes D's 1 s clamp is a spike's,
+and so is each record after one until the backlog behind it has drained, or
+no record outside spikes is left (`LiveClock`). A spike's records count in no
+arrival need, and the stats flag a record past the clamp "over 1 s", as a
+clamped need. The owner chose it, as the live transport plan recommended.
+Why: such a record is late at any D. Counted, it held D at the clamp for the
+10 s window, and D then fell 25 ms a second: a +1.2 s delay of 2 s on an
+emulated 70 ms path held D at 1 s, set by arrival, from 22 to 32 s (measured
+2026-11-01), and from 1 s the fall to the path's 121 ms takes 35 s more.
+
+- **The backlog behind a spike is the spike's.** The records sent after the
+  delay ends drain behind the late ones, their lateness falling from past the
+  clamp to none; counted, the first within the clamp held D near 1 s for the
+  window (978 ms in the unit test).
+- **The drain ends at the stream's pace,** at a record whose `arrival − pts`
+  is no lower than that of the spike's record 12 before it (`kDrainSpan`).
+  Not at the first record back within the earlier lateness: a link that
+  comes back slower never reaches it, and its records stayed the spike's,
+  late, until none from before was left, 10 s. Over 12 records, not 2: a
+  large record in the drain, or a few records slowed behind another
+  connection's large message on the link, come slower than the pace, and
+  two in a row ended it early in a model of the clock (D 683-858 ms). From
+  the spike's record only: a stall's records come in one burst, and judged
+  from a record before the stall the burst ended it (D 989 ms). A drain
+  barely faster than the stream still ends early: on a link 7 % faster than
+  the stream, records 20-55 ms apart, D rose to 981 ms in the model.
+- **A lasting slower link still raises D.** Within the clamp, at once, as
+  before. Past it, its records are late until the offset, risen once the
+  window holds them alone, brings them within the clamp, 10.8 s on at a
+  20 ms lead; from there the same records are on time as with the clamp
+  alone, and before it every record is late at any D, drawn as it comes. A
+  spike that leaves the link slower raises D once drained: 30 ms slower, a
+  span after the drain's end in the model, 16 records late past the
+  spike's 84.
+- **The cost:** a spike's frames, and the drained ones a raised D would have
+  shown a second late, are passed over, the last frame drawn staying until
+  the stream is back at the live edge. Repeated spikes cost that each time,
+  never a lasting delay. A delay that rises gradually past the clamp still
+  raises D by its records within it.
+- **A program's need is its own:** one that counts a spike's late frames
+  still holds D up by them (`FrameHooks::live_delay`). Measured on the same
+  path with the rule (one run), the arrival need was 114 ms during the
+  spike and never rose above the program's; that need raised D to 1 s once,
+  at 22 s, and D fell from there, 392 ms at 48 s. Without the rule, arrival
+  held D at the clamp from 22 to 32 s.
+
 ## 2026-11-01 — Wire and Cull replace Unlit
 
 The panel's Unlit box and the U key are gone (`PlayerView::unlit`,
@@ -268,7 +316,9 @@ frame waits for it; the latency grows instead.
   clock"*). There is no fixed floor, and D is clamped at 1 s; a frame that
   needed more is
   late by the excess: the stats flag it ("over 1 s"), and the log's
-  `target_ms` reads 1000. Why from pts and not
+  `target_ms` reads 1000. *Since 2026-11-01 a record past the clamp, and
+  the backlog behind it, raise no arrival need ("A spike past the clamp
+  leaves D where it was").* Why from pts and not
   from each record's arrival: a wait counted from arrival carries the
   arrival's jitter onto the screen.
 - **The offset follows the least down at once, and up at most 25 ms a
