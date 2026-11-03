@@ -13,16 +13,21 @@ is implemented.
 that its config and a sender's dial-out entry use; the player's was one of
 four copies.
 
-- **The core's reasons replace the player's,** in the dialog and for
-  `vp_probe --connect`: `"x" is not a port: a number from 1 to 65535, with
-  no leading zero` (it quotes the port alone), `"" names no host`, `"[::1]:5"
-  is IPv6, which is not supported` and `"h:5:6" has a second ':'; IPv6 is
-  not supported`. The dialog's two rules of its own stay the player's: no
-  host, and a ':' in Host, which points at the Port field. Why: they are the
-  dialog's fields' rules, not an address's.
+- **The core's reasons replace the player's.** The dialog shows
+  `parse_port`'s, `"x" is not a port: a number from 1 to 65535, with no
+  leading zero` (it quotes the port alone); its two rules of its own, no
+  host and a ':' in Host, which points at the Port field, run first and stay
+  the player's. Why: they are the dialog's fields' rules, not an address's.
+  `parse_live_address` returns `parse_host_port`'s, such as `"" names no
+  host`, `"[::1]:5" is IPv6, which is not supported` and `"h:5:6" has a
+  second ':'; IPv6 is not supported`, which reach only a caller that passes
+  its status on; `vp_probe --connect` prints its usage for any refusal, as
+  before.
 - **A port with a leading zero is refused,** "007" or "07101", where the
   player read 7: one rule family-wide, as an address part has none. The iOS
   app remembers the number it read ("7"), so a remembered port still loads.
+  So is an address that starts with '[', as "[lab]" or "[10.8.0.1]:7101",
+  which the player took and its lookup then failed.
 - **The host stays unchecked:** a name or a numeric address, looked up at
   connect (grid's `StreamClient`). A numeric-looking host that is not one
   numeric address, as "010.8.0.1", goes to the system's resolver, which
@@ -1172,12 +1177,12 @@ the desktop's N key.
   Normals (365 of 375 pt), the status line's row is full beside a 5-digit
   track's line, and a row of its own would lift the controls into the stats'
   body on a landscape phone.
-- **One parser for the typed fields, `parse_live_source`,** over
-  `parse_live_address`, into the source `open_source` plays, the desktop
-  app's call too, so the library links the core's config tier on every
-  platform. An empty port is port 0, the sender's default, as in a scenario;
-  a host with a ':' points at the Port field. Why: the port's range and the
-  default port each keep one home.
+- **One parser for the typed fields, `parse_live_source`,** its port read
+  by the core's `net::parse_port` (2026-11-02), into the source
+  `open_source` plays, the desktop app's call too, so the library links the
+  core's config tier on every platform. An empty port is port 0, the
+  sender's default, as in a scenario; a host with a ':' points at the Port
+  field. Why: the port's range and the default port each keep one home.
 - **The choice is remembered** in `NSUserDefaults`: the sender's host and
   port as the parser took them, or the file. While nothing plays, a tap on
   the label asks. Why: the lab's sender is typed once, and with no view

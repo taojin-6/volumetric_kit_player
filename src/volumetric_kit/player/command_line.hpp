@@ -4,8 +4,8 @@
 #pragma once
 
 /// @file command_line.hpp
-/// @brief What vp_probe's command line, the iOS app's measure launch and the
-///        player's addresses share in parsing their text. Player-internal.
+/// @brief What vp_probe's command line and the iOS app's measure launch share
+///        in parsing their text. Player-internal.
 
 #include <cstdint>
 #include <optional>
@@ -19,7 +19,7 @@
 
 namespace volumetric_kit::player {
 
-/// @brief Parse a count from 1, such as `--frames`' N or a port.
+/// @brief Parse a count from 1, such as `--frames`' N.
 ///
 /// @code
 /// const std::optional<std::uint64_t> frames = parse_count(argv[++i]);

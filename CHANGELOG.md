@@ -267,12 +267,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A live address is read by the core's parser: `parse_live_address` is
   `net::parse_host_port` on the sender's default port, and
   `parse_live_source`'s port `net::parse_port`. Their refusals give the
-  core's reasons, such as `"x" is not a port: a number from 1 to 65535, with
-  no leading zero` (was `'h:x': the port is a number from 1 to 65535`) and
-  `"" names no host` (was `'' names no host`); IPv6 (`[::1]:5`, `::1`,
-  `h:5:6`) gets a reason of its own; and a port with a leading zero, as
-  `007`, is now refused. The dialog's own refusals, no host and a `:` in
-  Host, are unchanged.
+  core's reasons: the dialog's Port field shows `"x" is not a port: a number
+  from 1 to 65535, with no leading zero` (was `'lab:x': the port is a number
+  from 1 to 65535`); `parse_live_address` returns such as `"" names no host`
+  (was `'' names no host`), and IPv6 (`[::1]:5`, `::1`, `h:5:6`) gets a
+  reason of its own. `vp_probe --connect` still prints its usage for any
+  refusal, and the dialog's own refusals, no host and a `:` in Host, are
+  unchanged. Newly refused: a port with a leading zero, as `007`, and an
+  address that starts with `[`, as `[lab]` or `[10.8.0.1]:7101`, which was
+  taken and failed at lookup.
 - build: core at #90's head (827face, 0.44.0), which the player requires:
   the net tier (0.43.0), whose `parse_host_port` and `parse_port` (0.44.0)
   the live addresses take and whose loopback sockets the tests take
