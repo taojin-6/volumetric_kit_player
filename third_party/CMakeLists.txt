@@ -12,21 +12,25 @@ include(FetchContent)
 # --- volumetric_kit_core -----------------------------------------------------
 # The device, Status/Result and the GPU test fixtures, declared first, and the
 # config tier: its Source, which the library's open_source takes on every
-# platform, and the Player profile the desktop app loads (DECISIONS.md). The pin
-# is core main at PR #76's merge (c52a86a, 0.35.0), newer than grid's own pin
-# (#70's, 0.30.0, the floor grid's library asks for). #76 places an image with
-# TRANSIENT_ATTACHMENT usage in lazily allocated memory (Metal's memoryless
-# storage on Apple GPUs), as gfx's 4x MSAA window targets are, and adds
-# HeapStats::lazy_bytes; #71 to #74 add FuseRealsense and source.audio and drop
-# fusion.depth_within_color. #68 to #70 add CI's trigger check, which the lint
-# job takes at this pin, and FuseOrbbec's output.max_viewers; #65 to #67 add
-# vulkan/fwd.hpp, test support for tests that are main()s of their own,
-# vkc_export_glsl and vkc_require_sibling, which checks grid below; the player's
-# code uses none of the rest. What it uses is as at #52's merge (0.21.0):
-# HostRing, whose slots grid's decoder and maps keep, in place where
-# device-mapped memory is cached and copied elsewhere; CommandBatch::input and
-# output; and DeviceCounters::dispatches and barriers, which the stamps and the
-# measure log carry. Under it, 0.20.0's rows with busy, wait and device halves
+# platform, and the Player profile the desktop app loads (DECISIONS.md); and the
+# net tier: its parse_host_port and parse_port, which a live address and the iOS
+# dialog's port go through, and the sockets grid's live client is built on. The
+# pin is core #90's head (827face, 0.44.0), whose parse_host_port and parse_port
+# are new; 0.43.0 (#89) brought the net tier and the tests' raw loopback sockets
+# (core/testing/net_loopback.hpp). Since #76's merge (0.35.0), whose lazily
+# allocated memory gfx's 4x MSAA window targets take, the core's test fixtures
+# report every repeat of a validation error (0.35.1), a pending submit's wait
+# returns once its timeline values read as set (0.36.0), and 0.37.0 to 0.42.0
+# add profiles and fields the Player profile does not take and Vulkan calls the
+# player does not make. CI's lint job takes the core's trigger check, and the
+# Mac leg its Homebrew key action, at this pin; #65 to #67 added vulkan/fwd.hpp,
+# test support for tests that are main()s of their own, vkc_export_glsl and
+# vkc_require_sibling, which checks grid below; the player's code uses none of
+# the rest. What it uses is as at #52's merge (0.21.0): HostRing, whose slots
+# grid's decoder and maps keep, in place where device-mapped memory is cached
+# and copied elsewhere; CommandBatch::input and output; and
+# DeviceCounters::dispatches and barriers, which the stamps and the measure log
+# carry. Under it, 0.20.0's rows with busy, wait and device halves
 # (core::DeviceTime), tiled device time, PendingBatch::device_rows and
 # device_span, GpuTimer::set_max_depth and Device::counters and calibrate. Its
 # iOS module, cmake/vkc_ios.cmake, links MoltenVK's iOS release (MoltenVK_ROOT)
@@ -42,48 +46,57 @@ endif()
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG c52a86ab8fcfd11fb6afbfeaf0ae9ef2209b18b2)
+  GIT_TAG 827faceafa580f5f586b9030ca117ec5679c5853)
 FetchContent_MakeAvailable(volumetric_kit_core)
-vkc_require_core(0.35.0 VULKAN CONFIG)
+vkc_require_core(0.44.0 VULKAN CONFIG)
 
 # --- volumetric_kit_grid -----------------------------------------------------
 # The stream reader, the codec's decode grid and its deblock, Marching Cubes,
 # the mesh exchange, the live stream's client, and for vp_probe's --save-meshes
 # and the tests' stream writer the PLY writer and the mesh integrator. Its tests
 # and examples are off, as is its -Werror in a subproject, so its library's core
-# floor is the one checked; its own core pin is the player's. The pin is grid
-# main at #11's merge (cf7c99a, 0.6.0), whose StreamServer serves every track of
-# a session, track 0's keys starting each GOP, so a sender serves its Audio
-# track beside the geometry (live_audio.hpp); #10 (0.5.0) muxes a CodecStream's
-# Audio tracks by pts, so each record rides right after the first frame at or
-# past its pts. #9's merge (0.4.0) brought TrackKind::Audio and
-# stream/audio.hpp, the Audio track the player plays (audio_feeder.hpp). Since
-# its first commits (cbf7a6e), recon #309's grid/ under grid's names
-# (DECISIONS.md, 2026-10-29), it has also brought marching-cubes vertex normals
-# from the field's gradient (0.2.1), StreamServer::viewers (0.2.0), the core
-# floor 0.30.0 (0.3.0) and an Encoder that holds P-frames a quantization step
-# against their reference (0.3.1), which the tests' streams are written with.
-# What the player uses besides is as at recon #277's merge: a frame decoded and
-# meshed in the caller's batch (codec::record_growing, finish_growing;
-# mesh::MarchingCubes::record_extract, finish, abandon), DeviceMesh::ready,
-# Decoder::claim_input and last_rounds, and the reads straight into caller
-# memory (StreamReader::read, networking::StreamClient::read); and since, recon
-# #293's CommitDecision, whose kDrop a commit hook's skip takes
-# (frame_hooks.hpp), #295's const volume::VoxelHashMap::record_compaction, so an
-# after_mesh hook, handed the grid read-only, records work that reads it, and
-# #299's Marching Cubes vertex on a corner whose distance is the iso-value
-# exactly that corner. vkc_require_sibling refuses an older grid, or one without
-# a tier the player links.
+# floor is the one checked (0.43.0, the first core with the net tier); its own
+# core pin is the player's. The pin is grid main at #19's merge (fb1e492,
+# 0.11.0), whose live stream sits on the core's net tier, every client message
+# the player's live_reason reads kept. Since 0.6.0: StreamServer::finish, which
+# ends a stream after each viewer's last record, CodecStream::finish through it
+# (0.7.0); BBR for a viewer off loopback on Linux (0.7.1);
+# StreamServer::draining (0.8.0); a sender that dials its reader, which grid
+# 0.11.0 moved to the core (0.9.0); and volume::RayCaster (0.10.0). The player
+# calls none of them; a StreamServer's destructor still closes its viewers at
+# once, as the tests' senders end. Before them, #11's merge (cf7c99a, 0.6.0),
+# whose StreamServer serves every track of a session, track 0's keys starting
+# each GOP, so a sender serves its Audio track beside the geometry
+# (live_audio.hpp); #10 (0.5.0) muxes a CodecStream's Audio tracks by pts, so
+# each record rides right after the first frame at or past its pts. #9's merge
+# (0.4.0) brought TrackKind::Audio and stream/audio.hpp, the Audio track the
+# player plays (audio_feeder.hpp). Since its first commits (cbf7a6e), recon
+# #309's grid/ under grid's names (DECISIONS.md, 2026-10-29), it has also
+# brought marching-cubes vertex normals from the field's gradient (0.2.1),
+# StreamServer::viewers (0.2.0), the core floor 0.30.0 (0.3.0) and an Encoder
+# that holds P-frames a quantization step against their reference (0.3.1), which
+# the tests' streams are written with. What the player uses besides is as at
+# recon #277's merge: a frame decoded and meshed in the caller's batch
+# (codec::record_growing, finish_growing; mesh::MarchingCubes::record_extract,
+# finish, abandon), DeviceMesh::ready, Decoder::claim_input and last_rounds, and
+# the reads straight into caller memory (StreamReader::read,
+# networking::StreamClient::read); and since, recon #293's CommitDecision, whose
+# kDrop a commit hook's skip takes (frame_hooks.hpp), #295's const
+# volume::VoxelHashMap::record_compaction, so an after_mesh hook, handed the
+# grid read-only, records work that reads it, and #299's Marching Cubes vertex
+# on a corner whose distance is the iso-value exactly that corner.
+# vkc_require_sibling refuses an older grid, or one without a tier the player
+# links.
 set(VGRID_BUILD_TESTS OFF)
 set(VGRID_BUILD_EXAMPLES OFF)
 FetchContent_Declare(
   volumetric_kit_grid
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
-  GIT_TAG cf7c99a0ca74839eb5c2d1afb5f58132cdf636b4)
+  GIT_TAG fb1e49255a7f234353e8717edbd96843f084ab86)
 FetchContent_MakeAvailable(volumetric_kit_grid)
 vkc_require_sibling(
   volumetric_kit::grid
-  0.6.0
+  0.11.0
   TARGETS
   volumetric_kit::grid_codec
   volumetric_kit::grid_mesh

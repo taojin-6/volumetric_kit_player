@@ -8,6 +8,8 @@
 #include <filesystem>
 #include <utility>
 
+#include "volumetric_kit/core/net/address.hpp"
+
 namespace volumetric_kit::player {
 namespace {
 
@@ -66,9 +68,7 @@ core::Result<cfg::Source> parse_live_source(std::string_view host,
   source.kind = cfg::SourceKind::Stream;
   source.host = std::string(host);
   if (!port.empty()) {
-    VKC_ASSIGN(const LiveAddress address,
-               parse_live_address(source.host + ":" + std::string(port)));
-    source.port = address.port;
+    VKC_ASSIGN(source.port, core::net::parse_port(port));
   }
   return source;
 }

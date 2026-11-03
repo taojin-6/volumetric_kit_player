@@ -26,15 +26,18 @@ struct LiveAddress {
   std::uint16_t port = grid::networking::kDefaultPort;  ///< 1 to 65535.
 };
 
-/// @brief Parse a live stream's address, on the host alone.
+/// @brief Parse a live stream's address, on the host alone: the core's
+///        `net::parse_host_port` on `grid::networking::kDefaultPort`.
 ///
 /// @code
 /// VKC_ASSIGN(const LiveAddress address, parse_live_address("lab:47801"));
 /// @endcode
-/// @param text  "host" or "host:port".
+/// @param text  "host" or "host:port"; the host, a name or a numeric IPv4
+///              address, is checked no further.
 /// @return The address, on `grid::networking::kDefaultPort` when it names
-///         none; `core::Status::Code::InvalidArgument` naming what is wrong
-///         for an empty host or a port that is not a number from 1 to 65535.
+///         none; `core::Status::Code::InvalidArgument` with the core's
+///         reason for no host, IPv6 (a leading '[' or a second ':'), or a
+///         port that is not a number from 1 to 65535 with no leading zero.
 core::Result<LiveAddress> parse_live_address(std::string_view text);
 
 /// @return @p address as "host:port".

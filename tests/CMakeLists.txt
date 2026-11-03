@@ -80,11 +80,14 @@ vp_add_test(audio_feeder volumetric_kit::player)
 vp_add_test(live_audio volumetric_kit::player)
 # The decode and mesh worker, on a device (the core's fixtures), over the tests'
 # streams; with VP_TEST_PER_BINARY its two longest suites in processes of their
-# own, as in one it bounds ThreadSanitizer's leg.
+# own, as in one it bounds ThreadSanitizer's leg. Its raw sender listens and
+# accepts on the core's loopback sockets (net_loopback.hpp) and sends through
+# the core's net tier, as the library links it.
 vp_add_test(
   stream_player
   STREAMS
   volumetric_kit::player
+  volumetric_kit::core_test_base
   volumetric_kit::core_test_support
   SUITES
   StreamPlayerTest
@@ -105,8 +108,10 @@ set_tests_properties(
              vp_streams
              TIMEOUT
              300)
-# The live connection and its retry, against a sender on 127.0.0.1: host only.
-vp_add_test(live_connection volumetric_kit::player)
+# The live connection and its retry, against a sender on 127.0.0.1 and the
+# core's closed port (net_loopback.hpp): host only.
+vp_add_test(live_connection volumetric_kit::player
+            volumetric_kit::core_test_base)
 # The mesh wiring, the controls and a program's panel on a CPU ImGui context,
 # and the shells' input rules: host only.
 vp_add_test(mesh_wiring volumetric_kit::player)

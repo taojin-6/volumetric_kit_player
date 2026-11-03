@@ -4,6 +4,38 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-11-02 — Live addresses through the core's parser
+
+`parse_live_address` is the core's `net::parse_host_port` on grid's
+`kDefaultPort`, and `parse_live_source` reads the Port field with the core's
+`net::parse_port`. The owner moved the family's networking into the core
+(the core's 2026-11-02 net entry), which holds the one `host:port` parser
+that its config and a sender's dial-out entry use; the player's was one of
+four copies.
+
+- **The core's reasons replace the player's,** in the dialog and for
+  `vp_probe --connect`: `"x" is not a port: a number from 1 to 65535, with
+  no leading zero` (it quotes the port alone), `"" names no host`, `"[::1]:5"
+  is IPv6, which is not supported` and `"h:5:6" has a second ':'; IPv6 is
+  not supported`. The dialog's two rules of its own stay the player's: no
+  host, and a ':' in Host, which points at the Port field. Why: they are the
+  dialog's fields' rules, not an address's.
+- **A port with a leading zero is refused,** "007" or "07101", where the
+  player read 7: one rule family-wide, as an address part has none. The iOS
+  app remembers the number it read ("7"), so a remembered port still loads.
+- **The host stays unchecked:** a name or a numeric address, looked up at
+  connect (grid's `StreamClient`). A numeric-looking host that is not one
+  numeric address, as "010.8.0.1", goes to the system's resolver, which
+  glibc reads as octal (8.8.0.1) and Apple's as 10.8.0.1, as before the
+  re-pin. Why: a scenario's `source.host` reaches the client too, with no
+  player parser on its way, so a refusal would belong to the client's
+  lookup, not to one of the player's entries.
+- **The tests' raw sockets are the core's** (`core/testing/net_loopback.hpp`:
+  the listener, the accept and the refused port), and the raw sender sends
+  through the core's net tier, so no SIGPIPE rule of the player's is left.
+  The library links `core_net` PUBLIC, as it links its other siblings, so the
+  tests link what the app runs.
+
 ## 2026-11-01 — A spike past the clamp leaves D where it was
 
 A record whose lateness plus the lead passes D's 1 s clamp is a spike's,
@@ -1171,7 +1203,7 @@ how to run it.
   scenario it refuses exits 2, as recon's examples do. Why: one way to start
   the family's scenario-driven programs, and a scenario names a stream or a
   sender, the window and a count once, in a file.
-- **A `source.port` of 0, or none, keeps `LiveAddress`'s port,** recon's
+- **A `source.port` of 0, or none, keeps `LiveAddress`'s port,** grid's
   `networking::kDefaultPort`. Why: the sender's default has one home.
 - **`vp_live_probe` keeps its `host[:port]`:** a tool for agents, not a
   program a scenario starts. *`vp_probe` takes `--connect` since
@@ -1180,7 +1212,7 @@ how to run it.
 ## 2026-10-21 — Live mode: a sender's stream over TCP
 
 `StreamPlayer::connect`, a scenario's `source.host` and
-`tests/vp_live_probe`; the headers say what each call does. recon's
+`tests/vp_live_probe`; the headers say what each call does. grid's
 `networking::StreamClient` reads what a `StreamServer` sends: the `.vrst`
 chunks, joined at the newest key.
 

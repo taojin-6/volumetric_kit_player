@@ -560,15 +560,30 @@ TEST(ParseLiveAddress, TakesAHostAndAnOptionalPort) {
             volumetric_kit::grid::networking::kDefaultPort);
 }
 
-TEST(ParseLiveAddress, RefusesNoHostAndAPortOutOfRange) {
-  for (const char* text :
-       {"", ":5", "h:0", "h:65536", "h:x", "h:5:6", "h:", "h:+5", "h:5 "}) {
-    const core::Status refused = parse_live_address(text).status();
-    EXPECT_EQ(refused.domain(), core::Status::Code::InvalidArgument)
-        << "'" << text << "'";
-    EXPECT_NE(refused.message().find(std::string("'") + text + "'"),
-              std::string::npos)
-        << refused.message();
+// The core's reasons (net::parse_host_port), whole; a port with a leading
+// zero, as "007", is refused.
+TEST(ParseLiveAddress, RefusesNoHostIPv6AndAPortOutOfRange) {
+  const std::string not_a_port =
+      " is not a port: a number from 1 to 65535, with no leading zero";
+  struct Case {
+    const char* text;
+    std::string message;
+  };
+  for (const Case& refused :
+       {Case{"", "\"\" names no host"}, Case{":5", "\":5\" names no host"},
+        Case{"h:0", "\"0\"" + not_a_port},
+        Case{"h:65536", "\"65536\"" + not_a_port},
+        Case{"h:x", "\"x\"" + not_a_port}, Case{"h:", "\"\"" + not_a_port},
+        Case{"h:+5", "\"+5\"" + not_a_port},
+        Case{"h:5 ", "\"5 \"" + not_a_port},
+        Case{"h:007", "\"007\"" + not_a_port},
+        Case{"h:5:6", "\"h:5:6\" has a second ':'; IPv6 is not supported"},
+        Case{"::1", "\"::1\" has a second ':'; IPv6 is not supported"},
+        Case{"[::1]:5", "\"[::1]:5\" is IPv6, which is not supported"}}) {
+    const core::Status status = parse_live_address(refused.text).status();
+    EXPECT_EQ(status.domain(), core::Status::Code::InvalidArgument)
+        << "'" << refused.text << "'";
+    EXPECT_EQ(status.message(), refused.message) << "'" << refused.text << "'";
   }
 }
 

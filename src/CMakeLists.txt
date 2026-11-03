@@ -35,6 +35,7 @@ target_include_directories(player PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(
   player
   PUBLIC volumetric_kit::core_config
+         volumetric_kit::core_net
          volumetric_kit::grid_codec
          volumetric_kit::grid_mesh
          volumetric_kit::grid_networking

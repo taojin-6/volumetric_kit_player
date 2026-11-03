@@ -41,7 +41,8 @@ core::Result<std::unique_ptr<StreamPlayer>> open_source(
 
 /// @brief Parse a sender's source from a host and a port typed apart, as the
 ///        iOS app's dialog takes them, on the host alone. Each is trimmed of
-///        surrounding spaces; the port's rule is @ref parse_live_address's.
+///        surrounding spaces; the port's rule is the core's `net::parse_port`,
+///        as in @ref parse_live_address.
 ///
 /// @code
 /// VKC_ASSIGN(const core::config::Source source,
@@ -54,7 +55,8 @@ core::Result<std::unique_ptr<StreamPlayer>> open_source(
 ///         one, which @ref open_source takes as LiveAddress's default;
 ///         `core::Status::Code::InvalidArgument`, a message for the person
 ///         typing, for an empty host, a host with a ':' (the port has its own
-///         field), or a port that is not a number from 1 to 65535.
+///         field), or, with `net::parse_port`'s reason, a port that is not a
+///         number from 1 to 65535 with no leading zero.
 core::Result<core::config::Source> parse_live_source(std::string_view host,
                                                      std::string_view port);
 
