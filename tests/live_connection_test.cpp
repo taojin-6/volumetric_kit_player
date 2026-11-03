@@ -24,6 +24,7 @@
 #include <utility>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/net_loopback.hpp"
 #include "volumetric_kit/grid/networking/stream_client.hpp"
 #include "volumetric_kit/grid/networking/stream_server.hpp"
 #include "volumetric_kit/grid/stream/session.hpp"
@@ -61,13 +62,6 @@ std::unique_ptr<networking::StreamServer> serve() {
       networking::StreamServer::start(session, options);
   EXPECT_TRUE(server.ok()) << server.status().message();
   return server.ok() ? std::move(server).value() : nullptr;
-}
-
-// A port on 127.0.0.1 that a server had a moment ago, now closed, so a
-// connect to it is refused; 0 with a failure recorded.
-std::uint16_t refusing_port() {
-  const std::unique_ptr<networking::StreamServer> server = serve();
-  return server != nullptr ? server->port() : 0;
 }
 
 // `client` read until `done` holds, true then, or until its connection ends,
@@ -154,7 +148,8 @@ TEST(LiveConnection, PollKeepsOneClientWhileConnected) {
 }
 
 TEST(LiveConnection, ARefusedConnectWaitsTheRetryBeforeTheNext) {
-  const std::uint16_t port = refusing_port();
+  // A port a listener had a moment ago, so a connect to it is refused.
+  const std::uint16_t port = core::test::closed_port();
   ASSERT_NE(port, 0);
   LiveConnection connection({"127.0.0.1", port}, kRetry);
   // StreamClient::connect never blocks: the client's next connects.

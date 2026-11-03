@@ -15,7 +15,7 @@
 // test. On the host: the view's settings run_desktop plays a scenario with
 // (desktop_view_config), the program's with the scenario's validation; the
 // scenarios in config/examples/, and parse_count, which vp_probe's --frames
-// and a live address's port take.
+// takes.
 
 #include <gtest/gtest.h>
 #include <poll.h>

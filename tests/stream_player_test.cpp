@@ -136,19 +136,14 @@
 
 #include "volumetric_kit/player/stream_player.hpp"
 
-#include <arpa/inet.h>
-#include <fcntl.h>
 #include <gtest/gtest.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <sys/types.h>  // IWYU pragma: keep (ssize_t on Linux)
+#include <poll.h>        // POLLIN, POLLOUT
+#include <sys/socket.h>  // SO_SNDBUF
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -165,6 +160,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -173,6 +169,8 @@
 #include "manual_clock.hpp"
 #include "test_stream.hpp"
 #include "volumetric_kit/core/base/unique_fd.hpp"
+#include "volumetric_kit/core/net/socket.hpp"
+#include "volumetric_kit/core/testing/net_loopback.hpp"
 #include "volumetric_kit/core/testing/vulkan_fixture.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
@@ -195,6 +193,7 @@
 namespace {
 
 namespace core = volumetric_kit::core;
+namespace net = core::net;
 namespace grid = volumetric_kit::grid;
 namespace networking = grid::networking;
 namespace stream = grid::stream;
@@ -3757,12 +3756,6 @@ constexpr auto kFlow = 20ms;
 // The most StreamClient takes in one receive (grid's StreamClient::next).
 constexpr std::size_t kClientReceive = std::size_t{2} << 20;
 
-#ifdef __APPLE__
-constexpr int kSendFlags = 0;  // SO_NOSIGPIPE is set on the socket
-#else
-constexpr int kSendFlags = MSG_NOSIGNAL;
-#endif
-
 // The tests' stream, read back: its session, and each record's info and
 // payload.
 // A file never asks a live hook, and its frames' release is their due, with
@@ -3815,40 +3808,13 @@ stream::RecordInfo restamped(const stream::RecordInfo& info,
   return next;
 }
 
-// A blocking listener on 127.0.0.1 at a free port, which goes into `*port`.
-core::UniqueFd listen_on_loopback(std::uint16_t* port) {
-  core::UniqueFd fd(::socket(AF_INET, SOCK_STREAM, 0));
-  sockaddr_in address{};
-  address.sin_family = AF_INET;
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  socklen_t size = sizeof address;
-  if (!fd.valid() ||
-      ::bind(fd.get(), reinterpret_cast<const sockaddr*>(&address),
-             sizeof address) != 0 ||
-      ::listen(fd.get(), 8) != 0 ||
-      ::getsockname(fd.get(), reinterpret_cast<sockaddr*>(&address), &size) !=
-          0) {
-    ADD_FAILURE() << "no listener on 127.0.0.1: " << std::strerror(errno);
-    return {};
-  }
-  *port = ntohs(address.sin_port);
-  return fd;
-}
-
-// A port on 127.0.0.1 that a listener had a moment ago, now closed, so a
-// connect to it is refused: macOS drops a SYN to a socket bound but not
-// listening.
-std::uint16_t refusing_port() {
-  std::uint16_t port = 0;
-  listen_on_loopback(&port);
-  return port;
-}
-
 // A sender of raw bytes on 127.0.0.1, for what a StreamServer cannot show (a
 // connection's end, bytes that are no stream). It takes one connection at a
 // time, sends it `feed`'s pieces from 0, one each `period`, an empty one
 // sending nothing, until the other end closes it; then it notes when, and
-// takes the next.
+// takes the next. It listens and accepts on the core's loopback sockets, and
+// sends as a sender does, through the core's net tier: non-blocking, never
+// raising SIGPIPE.
 class RawPeer {
  public:
   using Feed = std::function<Bytes(std::uint64_t piece)>;
@@ -3857,8 +3823,10 @@ class RawPeer {
       : feed_(std::move(feed)),
         period_(period),
         send_buffer_(send_buffer),
-        listener_(listen_on_loopback(&port_)),
-        thread_([this] { run(); }) {}
+        listener_(core::test::bind_loopback()),
+        thread_([this] { run(); }) {
+    EXPECT_TRUE(listener_.fd.valid()) << "no listener on 127.0.0.1";
+  }
   ~RawPeer() {
     stop_ = true;
     thread_.join();
@@ -3866,7 +3834,7 @@ class RawPeer {
   RawPeer(const RawPeer&) = delete;
   RawPeer& operator=(const RawPeer&) = delete;
 
-  std::uint16_t port() const { return port_; }
+  std::uint16_t port() const { return listener_.port; }
 
   // The connections taken so far.
   std::size_t accepted() const {
@@ -3887,11 +3855,7 @@ class RawPeer {
  private:
   void run() {
     while (!stop_) {
-      pollfd ready{listener_.get(), POLLIN, 0};
-      if (::poll(&ready, 1, 10) != 1) {
-        continue;
-      }
-      core::UniqueFd peer(::accept(listener_.get(), nullptr, nullptr));
+      core::UniqueFd peer = core::test::accept_within(listener_.fd.get(), 10ms);
       if (!peer.valid() || !prepare(peer.get())) {
         continue;
       }
@@ -3909,23 +3873,15 @@ class RawPeer {
     }
   }
 
-  // Non-blocking, optionally bounded buffering, and on Apple no SIGPIPE.
+  // Non-blocking and on Apple no SIGPIPE (net::prepare), and optionally
+  // bounded buffering.
   bool prepare(int fd) const {
-    const int flags = ::fcntl(fd, F_GETFL);
-    if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+    if (!net::prepare(kApi, fd).ok()) {
       return false;
     }
-    if (send_buffer_ != 0 &&
-        ::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &send_buffer_,
-                     sizeof send_buffer_) != 0) {
-      return false;
-    }
-#ifdef __APPLE__
-    const int on = 1;
-    return ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on) == 0;
-#else
-    return true;
-#endif
+    return send_buffer_ == 0 ||
+           ::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &send_buffer_,
+                        sizeof send_buffer_) == 0;
   }
 
   // Feed `fd` until its other end closes it, or stop.
@@ -3951,14 +3907,14 @@ class RawPeer {
         std::clamp(std::chrono::duration_cast<std::chrono::milliseconds>(
                        until - SteadyClock::now()),
                    0ms, 5ms);
-    pollfd ready{fd, POLLIN, 0};
-    if (::poll(&ready, 1, static_cast<int>(wait.count())) != 1) {
+    const core::Result<short> ready = net::wait_for(kApi, fd, POLLIN, wait);
+    if (!ready.ok() || *ready == 0) {
       return false;
     }
-    char bytes[256];
-    const ssize_t got = ::recv(fd, bytes, sizeof bytes, 0);
-    return got == 0 || (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
-                        errno != EINTR);
+    std::uint8_t bytes[256];
+    const core::Result<net::Received> got =
+        net::receive_some(kApi, fd, bytes, sizeof bytes);
+    return !got.ok() || got->closed;
   }
 
   // Send `bytes` whole, resuming partial sends while the socket is full:
@@ -3969,26 +3925,26 @@ class RawPeer {
       if (stop_) {
         return false;
       }
-      const ssize_t n =
-          ::send(fd, bytes.data() + sent, bytes.size() - sent, kSendFlags);
-      if (n > 0) {
-        sent += static_cast<std::size_t>(n);
-      } else if (n < 0 &&
-                 (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-        pollfd ready{fd, POLLOUT, 0};
-        ::poll(&ready, 1, 5);
-      } else {
+      const core::Result<std::size_t> n =
+          net::send_some(kApi, fd, bytes.data() + sent, bytes.size() - sent);
+      if (!n.ok()) {
         return false;
+      }
+      sent += *n;
+      if (*n == 0) {  // full
+        (void)net::wait_for(kApi, fd, POLLOUT, 5ms);
       }
     }
     return true;
   }
 
+  // The name the net tier's messages start with.
+  static constexpr std::string_view kApi = "RawPeer";
+
   Feed feed_;  // the peer's thread's alone
   const std::chrono::milliseconds period_;
   const int send_buffer_;
-  std::uint16_t port_ = 0;
-  core::UniqueFd listener_;
+  const core::test::LoopbackListener listener_;
   std::atomic<bool> stop_{false};
   mutable std::mutex mutex_;
   mutable std::condition_variable closed_cv_;
@@ -5152,7 +5108,10 @@ TEST_F(LivePlayerTest, ANameThatDoesNotResolveShowsWhyWhileStatusStaysOk) {
 }
 
 TEST_F(LivePlayerTest, AStopIsPromptWhileARefusedConnectWaitsToRetry) {
-  StreamPlayer* player = start_live(refusing_port());
+  // A port a listener had a moment ago, so a connect to it is refused.
+  const std::uint16_t port = core::test::closed_port();
+  ASSERT_NE(port, 0);
+  StreamPlayer* player = start_live(port);
   ASSERT_NE(player, nullptr);
   ASSERT_TRUE(
       eventually([&] { return !player->live_status().last_error.empty(); }));

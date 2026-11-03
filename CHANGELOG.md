@@ -264,6 +264,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A live address is read by the core's parser: `parse_live_address` is
+  `net::parse_host_port` on the sender's default port, and
+  `parse_live_source`'s port `net::parse_port`. Their refusals give the
+  core's reasons: the dialog's Port field shows `"x" is not a port: a number
+  from 1 to 65535, with no leading zero` (was `'lab:x': the port is a number
+  from 1 to 65535`); `parse_live_address` returns such as `"" names no host`
+  (was `'' names no host`), and IPv6 (`[::1]:5`, `::1`, `h:5:6`) gets a
+  reason of its own. `vp_probe --connect` still prints its usage for any
+  refusal, and the dialog's own refusals, no host and a `:` in Host, are
+  unchanged. Newly refused: a port with a leading zero, as `007`, and an
+  address that starts with `[`, as `[lab]` or `[10.8.0.1]:7101`, which was
+  taken and failed at lookup.
+- build: core at #90's head (827face, 0.44.0), which the player requires:
+  the net tier (0.43.0), whose `parse_host_port` and `parse_port` (0.44.0)
+  the live addresses take and whose loopback sockets the tests take
+  (`core/testing/net_loopback.hpp`). The library links `core_net`. CI's
+  lint job and the Mac leg's Homebrew key take the core's actions at the
+  new pin.
+- build: grid at #19's merge (fb1e492, 0.11.0), which the player requires,
+  its live stream on the core's net tier with every client message kept;
+  since 0.6.0 it also brought `StreamServer::finish` (0.7.0), BBR off
+  loopback on Linux (0.7.1), `StreamServer::draining` (0.8.0), dial-out
+  (0.9.0, moved to the core in 0.11.0) and `volume::RayCaster` (0.10.0),
+  none of which the player calls.
 - Live, a record late past D's 1 s clamp, and the backlog that drains behind
   it until the records come at the stream's pace again (`kDrainSpan`), raise
   no arrival need (`LiveClock`): a delay spike leaves D where it was, rather

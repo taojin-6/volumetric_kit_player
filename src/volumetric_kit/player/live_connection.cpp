@@ -3,31 +3,16 @@
 
 #include "volumetric_kit/player/live_connection.hpp"
 
-#include <optional>
 #include <utility>
 
-#include "volumetric_kit/player/command_line.hpp"
+#include "volumetric_kit/core/net/address.hpp"
 
 namespace volumetric_kit::player {
 
 core::Result<LiveAddress> parse_live_address(std::string_view text) {
-  const std::size_t colon = text.find(':');
-  LiveAddress address;
-  address.host = std::string(text.substr(0, colon));
-  if (address.host.empty()) {
-    return core::Status::invalid_argument("'" + std::string(text) +
-                                          "' names no host");
-  }
-  if (colon == std::string_view::npos) {
-    return address;
-  }
-  const std::optional<std::uint64_t> port = parse_count(text.substr(colon + 1));
-  if (!port || *port > 65535) {
-    return core::Status::invalid_argument(
-        "'" + std::string(text) + "': the port is a number from 1 to 65535");
-  }
-  address.port = static_cast<std::uint16_t>(*port);
-  return address;
+  VKC_ASSIGN(core::net::HostPort at,
+             core::net::parse_host_port(text, grid::networking::kDefaultPort));
+  return LiveAddress{std::move(at.host), at.port};
 }
 
 std::string to_string(const LiveAddress& address) {

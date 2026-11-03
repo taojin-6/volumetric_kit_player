@@ -7,8 +7,9 @@
 // otherwise. parse_live_source, the iOS dialog's fields: the host and the port
 // trimmed; an empty port the sender's default, through open_source; and
 // refused, an empty host, a host with a ':', pointing at the Port field, and a
-// port parse_live_address refuses, with its message. folder_source: the first
-// .vrst in the names' order, in any case, in the folder; with none, nothing.
+// port the core's net::parse_port refuses, with its reason. folder_source: the
+// first .vrst in the names' order, in any case, in the folder; with none,
+// nothing.
 
 #include "volumetric_kit/player/scenario.hpp"
 
@@ -34,7 +35,6 @@ using volumetric_kit::player::folder_source;
 using volumetric_kit::player::LiveAddress;
 using volumetric_kit::player::LiveState;
 using volumetric_kit::player::open_source;
-using volumetric_kit::player::parse_live_address;
 using volumetric_kit::player::parse_live_source;
 using volumetric_kit::player::StreamPlayer;
 using vp_test::Scratch;
@@ -161,15 +161,17 @@ TEST(ParseLiveSource, RefusesAColonInTheHostForThePortField) {
             "'lab:5' has a ':': type the port in the Port field");
 }
 
-// parse_live_address's refusal, whole, of the address the fields make.
+// The core's reason (net::parse_port), whole, which quotes the port alone; a
+// leading zero, as "007", is refused.
 TEST(ParseLiveSource, RefusesAPortThatIsNotANumberFrom1To65535) {
-  for (const char* port :
-       {"0", "65536", "x", "-1", "+5", "5 6", "5:6", "99999999999999999999"}) {
+  for (const char* port : {"0", "65536", "x", "-1", "+5", "5 6", "5:6",
+                           "99999999999999999999", "007", "07101"}) {
     const core::Status refused = parse_live_source("lab", port).status();
     EXPECT_EQ(refused.domain(), Code::InvalidArgument) << "'" << port << "'";
-    EXPECT_EQ(
-        refused.message(),
-        parse_live_address(std::string("lab:") + port).status().message());
+    EXPECT_EQ(refused.message(),
+              std::string("\"") + port +
+                  "\" is not a port: a number from 1 to 65535, with no "
+                  "leading zero");
   }
 }
 
