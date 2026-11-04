@@ -223,22 +223,16 @@ jobs:
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
         # Set on the command, as macOS strips DYLD_* from a step's env when it
-        # starts the system's bash. CI leaves out the `stress` soak, runs the
-        # `consumer` builds on the ubuntu-26.04 leg alone, and the TSan leg
-        # skips the view's rerun on MoltenVK's specialized families
-        # (DECISIONS.md, CI and 2026-10-25).
+        # starts the system's bash. CI leaves out the `stress` soak and the
+        # `consumer` builds, a step of their own below, and the TSan leg the
+        # `no_tsan` label (DECISIONS.md, CI and 2026-11-04).
         run: |
           labels="stress|consumer"
-          if [ "${{ matrix.os }}" = ubuntu-26.04 ]; then
-            labels="stress"
-          fi
-          skip=""
           if [ "${{ matrix.tsan }}" = true ]; then
-            skip="-E vp_player_view_on_moltenvk_specialized"
+            labels="${labels}|no_tsan"
           fi
-          # ${skip} is unquoted, to split into its arguments.
           DYLD_FALLBACK_LIBRARY_PATH="${VP_LAYER_LIBRARY_PATH:-}" \
-            ctest --test-dir build --output-on-failure -LE "${labels}" ${skip} \
+            ctest --test-dir build --output-on-failure -LE "${labels}" \
               --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
           # A binary's one test passes when a case skips, so name each skip.
           if [ "${{ matrix.tsan }}" = true ]; then
@@ -262,6 +256,16 @@ jobs:
             ctest --test-dir build --output-on-failure \
               -R '^(StreamPlayerTest|LivePlayerTest|PlayerViewTest)\.' \
               --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
+
+      # The player as another project builds on it, and configured alone
+      # (label `consumer`): CMake, not a device, so one leg, after the GPU
+      # tests, whose processes its build would otherwise share the host with
+      # (DECISIONS.md, 2026-10-25 and 2026-11-04).
+      - name: Consumer builds (ubuntu-26.04)
+        if: matrix.os == 'ubuntu-26.04'
+        run: |
+          ctest --test-dir build --output-on-failure -L consumer \
+            --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
       # The iOS app (DECISIONS.md), built Release, as it ships, and unsigned
       # (no team) from the sources the configure above fetched, on MoltenVK's

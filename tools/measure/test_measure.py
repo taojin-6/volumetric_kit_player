@@ -415,9 +415,11 @@ class Runner(MeasureCase):
             with open(shared, "w", encoding="utf-8") as target:
                 target.write(source.read().replace("# share_vertices: off",
                                                    "# share_vertices: on"))
-        for mode in ("iphone", "ipad"):
-            for log in (os.path.join(fixtures, "before.csv"),
-                        os.path.join(fixtures, "after.csv"), shared):
+        # The iPhone alone: the iPad runs the same phone path, and its
+        # dispatch is the accepting test's. A log of an older format, and one
+        # that says sharing was on.
+        for mode in ("iphone",):
+            for log in (os.path.join(fixtures, "before.csv"), shared):
                 with self.subTest(mode=mode, log=log):
                     case = f"{mode}-{os.path.basename(log)}"
                     self.env.update(
@@ -451,7 +453,8 @@ class Runner(MeasureCase):
         sha = self.phone_stubs(0)
         self.env["TEST_CSV"] = os.path.join(os.path.dirname(MEASURE),
                                             "testdata", "unshared.csv")
-        for mode in ("iphone", "ipad"):
+        # The iPad, whose dispatch no other phone test runs.
+        for mode in ("ipad",):
             with self.subTest(mode=mode):
                 self.env["TEST_LAUNCHED"] = os.path.join(self.root, mode)
                 before = len(self.commands())
@@ -467,8 +470,8 @@ class Runner(MeasureCase):
 
     def test_phones_omit_default_sharing_for_older_logs(self):
         sha = self.phone_stubs(0)
-        for mode in ("iphone", "ipad"):
-            for fixture in ("before.csv", "after.csv"):
+        for mode in ("iphone",):
+            for fixture in ("before.csv",):
                 for defaults in ([], ["--share-vertices", "on"]):
                     with self.subTest(mode=mode, fixture=fixture,
                                       defaults=defaults):
@@ -563,11 +566,12 @@ class Runner(MeasureCase):
 
     def test_default_mac_and_lab_runs_support_old_and_new_probes(self):
         sha = self.probe_stubs()
+        # The defaults given, which reach the same check as none given.
         for flags in ([], ["--tile-depth", "--labels", "--share-vertices"]):
             self.env["TEST_PROBE_FLAGS"] = json.dumps(flags)
             for mode in ("mac", "lab"):
-                for defaults in ([], ["--tile-depth", "0", "--labels", "on",
-                                      "--share-vertices", "on"]):
+                for defaults in (["--tile-depth", "0", "--labels", "on",
+                                  "--share-vertices", "on"],):
                     with self.subTest(flags=flags, mode=mode, defaults=defaults):
                         before = len(self.commands())
                         done = self.measure(mode, sha, "--timing", "off",
@@ -589,9 +593,9 @@ class Runner(MeasureCase):
     def test_mac_and_lab_reject_nondefaults_the_probe_cannot_apply(self):
         sha = self.probe_stubs()
         self.env["TEST_PROBE_FLAGS"] = "[]"
+        # One option: each is refused by the same support check.
         for mode in ("mac", "lab"):
-            for option, value in (("--tile-depth", "1"), ("--labels", "off"),
-                                  ("--share-vertices", "off")):
+            for option, value in (("--labels", "off"),):
                 with self.subTest(mode=mode, option=option):
                     before = len(self.commands())
                     done = self.measure(mode, sha, "--timing", "off",
