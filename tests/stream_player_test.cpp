@@ -4293,8 +4293,7 @@ class LivePlayerTest : public StreamPlayerTest {
       tail.assign(burst.end() - withheld, burst.end());
       burst.resize(burst.size() - withheld);
     }
-    // Then a key that decodes, so the records before it count to the frames
-    // taken up to it, however the drain and the take interleave.
+    // Then a key that decodes, whose decode batch shows the burst released.
     stream::RecordInfo closing = recording_.infos[kIntraPeriod];
     closing.seq = info.seq + 1;
     closing.pts_ns = closing.seq * kLiveStepNs;
@@ -4331,10 +4330,14 @@ class LivePlayerTest : public StreamPlayerTest {
         1ms, time_sender ? static_cast<int>(kClientReceive) : 0);
     StreamPlayer* player = start_live(peer.port());
     ASSERT_NE(player, nullptr);
+    // With K0 meshed, the submits after it are decodes: P1's, then the key's
+    // once the burst before it is released, its records undecodable.
+    std::uint64_t meshed = 0;
     if (untaken) {
       const std::atomic<bool> cancel{false};
       ASSERT_TRUE(
           eventually([&] { return !exchange_.wait_collected(0ms, cancel); }));
+      meshed = device().counters().submits;
     } else {
       ASSERT_TRUE(eventually([&] {
         const LiveStatus status = player->live_status();
@@ -4361,20 +4364,20 @@ class LivePlayerTest : public StreamPlayerTest {
             .count());
     ASSERT_TRUE(eventually([&] { return player->live_status().seq == last; }));
     if (untaken) {
+      // A record counts toward a frame at its release, not at its read: the
+      // take waits for the key's decode, so the mesh rule cannot mesh P1
+      // with the burst half released.
+      ASSERT_TRUE(eventually([&] {
+        return device().counters().submits >= meshed + 2;
+      })) << "the records behind the untaken K0 were not all released";
       const std::optional<FrameStamp> first = take(kArrival);
       ASSERT_TRUE(first.has_value());
       EXPECT_EQ(first->index, 0u);
-      // P1 meshed, if the take came while the burst was still released, and
-      // the key: every record after K0 counted once.
-      std::uint64_t records = 0;
-      for (std::uint64_t index = 0; index != last;) {
-        const std::optional<FrameStamp> next = take(kArrival);
-        ASSERT_TRUE(next.has_value()) << "no frame after " << index;
-        EXPECT_TRUE(next->index == 1 || next->index == last) << next->index;
-        index = next->index;
-        records += next->records;
-      }
-      EXPECT_EQ(records, count + 3);
+      // The key, decoded last, for P1, record 2, the burst and itself.
+      const std::optional<FrameStamp> next = take(kArrival);
+      ASSERT_TRUE(next.has_value());
+      EXPECT_EQ(next->index, last);
+      EXPECT_EQ(next->records, count + 3);
     }
     EXPECT_LT(stop_time(*player), kPrompt);
     EXPECT_TRUE(player->status().ok()) << player->status().message();

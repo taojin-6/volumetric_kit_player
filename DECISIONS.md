@@ -53,7 +53,7 @@ the whole suite: every bug caught before is still caught.
   41383623048) no longer race the worker. A live record counts toward a
   frame at its release, not at its read, so
   `AnUntakenMeshDoesNotDelayBufferedRecords` ends its burst with a key and
-  sums the records of the frames up to it, and
+  takes once the key's decode batch shows the burst released, and
   `AllPublishedWhileAMeshWaitsAreDecodedAndTheNewestShown` takes once each
   record behind K0 has its decode batch.
   `AParkClosesAnIdleConnectionWithinASlice` allows 250 ms, a quarter of the
