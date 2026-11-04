@@ -10,17 +10,18 @@
 // worker's failure surfaces from frame(); an audio output's interruption
 // pauses the player at the next frame; a tap on Normals switches the mesh's
 // flags from lit to normals and back, and frames keep presenting; a tap on
-// Deblock while paused shows the frame shown rebuilt, and the stats say so; the
-// panel draws at a phone's scale; in portrait and in landscape, at the iOS
-// shell's sizes, its controls fit a phone and a fingertip, as does Source,
-// clear of them, and so do the compact stats, clear of both, with a program's
-// line or none, a live view's too, with the profiler's draw row and its loop's
-// in the renderer's table, the draw's device half timing the whole pass; the
-// worker and the draw are device-timed while the stats are open, not while they
-// are closed, and the worker as a measurement fixes it whatever they show, the
-// draw then only while they are open and the timing is not off, each frame
-// taken counted once; Source is off by default, and a tap on it is one request;
-// ui_wants_pointer() follows a finger on the panel, which controls_test.cpp
+// Deblock while paused draws the frame shown rebuilt and takes it as the frame
+// shown; the panel draws at a phone's scale; in portrait and in landscape, at
+// the iOS shell's sizes, its controls fit a phone and a fingertip, as does
+// Source, clear of them, and so do a live view's compact stats, clear of both,
+// with the longest program's line, the profiler's draw row and its loop's in
+// the renderer's table, and a file view's in landscape, with the worker's three
+// stages; the draw's device half times the whole pass; the worker and the draw
+// are device-timed while the stats are open, not while they are closed, and the
+// worker as a measurement fixes it whatever they show, the draw then only while
+// they are open and the timing is not off, each frame taken counted once;
+// Source is off by default, and a tap on it is one request; ui_wants_pointer()
+// follows a finger on the panel, which controls_test.cpp
 // checks on the stats' header and body; each mesh is drawn behind a GPU wait on
 // its ready value, reached, with no error the layer reports; a frame drawn is
 // stamped from its due time to its present call, and the stats show its
@@ -96,6 +97,7 @@
 #include "program_requirements.hpp"
 #include "test_allocation_failure.hpp"
 #include "test_stream.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"  // VKC_TEST_SANITIZED
 #include "volumetric_kit/core/testing/vulkan_fixture.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -1112,10 +1114,10 @@ TEST_F(PlayerViewTest, WireReachesTheDraw) {
       << view_->player().status().message();
 }
 
-// The true-SDF stream, which the deblock runs on, paused on frame 0, none of
-// whose blocks it keeps exact, as the stats say: a tap turns the deblock
-// off, and the worker's rebuild of frame 0 is drawn; the stats, past a
-// refresh, say it is off.
+// The true-SDF stream, which the deblock runs on, paused on frame 0: a tap
+// turns the deblock off, and the worker's rebuild of frame 0 is taken as the
+// frame shown (shown(), which before_draw and the stats are given). What the
+// stats then say is ControlsTest's.
 TEST_F(PlayerViewTest, ATapOnDeblockWhilePausedRebuildsTheFrameShown) {
   const std::string path =
       scratch_.copy(VP_TEST_STREAMS, vp_test::kTrueSdfStream);
@@ -1124,17 +1126,6 @@ TEST_F(PlayerViewTest, ATapOnDeblockWhilePausedRebuildsTheFrameShown) {
   view_->player().step();
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
   EXPECT_TRUE(view_->shown()->deblock_on);
-  EXPECT_STREQ(view_->shown()->deblock.filter, "R");
-  // Under 1,000 blocks, so their count has no thousands to group.
-  const std::uint32_t blocks = view_->shown()->deblock.block_count;
-  EXPECT_GT(blocks, 0u);
-  EXPECT_LT(blocks, 1'000u);
-  EXPECT_EQ(view_->shown()->deblock.exact_blocks, 0u);
-  tick_for(2 * StatsPanel::kRefresh);
-  const std::vector<std::string> before = view_->stats_panel().lines();
-  ASSERT_EQ(before.size(), 6u);
-  EXPECT_EQ(before[2], "deblock R · T 1.962 mm · 0 of " +
-                           std::to_string(blocks) + " blocks exact");
   ImGui::SetCurrentContext(view_->ui_context());
   const ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
   ASSERT_NE(panel, nullptr);
@@ -1144,10 +1135,6 @@ TEST_F(PlayerViewTest, ATapOnDeblockWhilePausedRebuildsTheFrameShown) {
       << "no rebuild drawn";
   EXPECT_EQ(view_->shown()->index, 0u);
   EXPECT_FALSE(view_->shown()->deblock_on);
-  tick_for(2 * StatsPanel::kRefresh);
-  const std::vector<std::string> after = view_->stats_panel().lines();
-  ASSERT_EQ(after.size(), 6u);
-  EXPECT_EQ(after[2], "deblock off · T 1.962 mm");
   EXPECT_FALSE(view_->player().playing());
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
@@ -1308,61 +1295,50 @@ TEST_F(PlayerViewTest, ATapOnSourceIsOneRequest) {
   EXPECT_FALSE(view_->player().playing());
 }
 
-// On the narrowest phone in portrait and the shortest with a notch in
-// landscape, at the iOS shell's sizes, Source and the compact stats included,
-// playing, past a refresh so the stats hold a frame's figures, with no
-// program's line and with kProgramLine: their tables have the worker's three
-// stages and the renderer's draw row and its loop's frame wait and present,
-// and they fit the phone (expect_stats_fit).
-TEST_F(PlayerViewTest, TheStatsFitAPhone) {
-  size_as_a_phone();
-  for (const std::string line : {"", kProgramLine}) {
-    make_hooks_ = line_hooks(line);
-    for (const Phone& phone : kPhones) {
-      SCOPED_TRACE(std::to_string(phone.pixels.width) + " \"" + line + "\"");
-      touch_.reset();
-      view_.reset();
-      extent_ = phone.pixels;
-      safe_area_ = phone.safe_area;
-      ASSERT_TRUE(make_view());
-      ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
-      tick_for(2 * StatsPanel::kRefresh);
-      ImGui::SetCurrentContext(view_->ui_context());
-      EXPECT_EQ(stats_rows("stages"), 3);
-      EXPECT_EQ(stats_rows("render"), 3);
-      expect_stats_fit();
-    }
-  }
-}
-
-// A live view's compact stats on the phones of TheStatsFitAPhone, the tests'
-// stream served from 127.0.0.1 and shown record by record, past a refresh,
-// with no program's line and with kProgramLine: they fit the phone.
+// A live view's compact stats on the narrowest phone in portrait and the
+// shortest with a notch in landscape, at the iOS shell's sizes, Source
+// included, the tests' stream served from 127.0.0.1 and shown record by
+// record, past a refresh so the stats hold a frame's figures, with
+// kProgramLine, the longest a program's line may be: the renderer's table has
+// the draw row and its loop's frame wait and present, and they fit the phone
+// (expect_stats_fit). Then a file view's, whose worker column is its own (its
+// three stages, the read row among them), on the landscape phone, where a
+// fourth line in that column runs the stats over the controls.
 TEST_F(PlayerViewTest, ALiveViewsStatsFitAPhone) {
   size_as_a_phone();
   core::Result<std::unique_ptr<grid::stream::StreamReader>> reader =
       grid::stream::StreamReader::open(path_);
   ASSERT_TRUE(reader.ok()) << reader.status().message();
-  for (const std::string line : {"", kProgramLine}) {
-    make_hooks_ = line_hooks(line);
-    for (const Phone& phone : kPhones) {
-      SCOPED_TRACE(std::to_string(phone.pixels.width) + " \"" + line + "\"");
-      extent_ = phone.pixels;
-      safe_area_ = phone.safe_area;
-      grid::networking::ServerOptions options;
-      options.host = "127.0.0.1";
-      options.port = 0;  // a free one: other tests serve at the same time
-      core::Result<std::unique_ptr<grid::networking::StreamServer>> server =
-          grid::networking::StreamServer::start((*reader)->session(), options);
-      ASSERT_TRUE(server.ok()) << server.status().message();
-      ASSERT_TRUE(make_live_view(**reader, **server));
-      tick_for(2 * StatsPanel::kRefresh);
-      expect_stats_fit();
-      // The view goes before its sender.
-      touch_.reset();
-      view_.reset();
-    }
+  make_hooks_ = line_hooks(kProgramLine);
+  for (const Phone& phone : kPhones) {
+    SCOPED_TRACE(std::to_string(phone.pixels.width));
+    extent_ = phone.pixels;
+    safe_area_ = phone.safe_area;
+    grid::networking::ServerOptions options;
+    options.host = "127.0.0.1";
+    options.port = 0;  // a free one: other tests serve at the same time
+    core::Result<std::unique_ptr<grid::networking::StreamServer>> server =
+        grid::networking::StreamServer::start((*reader)->session(), options);
+    ASSERT_TRUE(server.ok()) << server.status().message();
+    ASSERT_TRUE(make_live_view(**reader, **server));
+    tick_for(2 * StatsPanel::kRefresh);
+    ImGui::SetCurrentContext(view_->ui_context());
+    EXPECT_EQ(stats_rows("render"), 3);
+    expect_stats_fit();
+    // The view goes before its sender.
+    touch_.reset();
+    view_.reset();
   }
+  SCOPED_TRACE("a file, landscape");
+  extent_ = kLandscapePhone;
+  safe_area_ = kLandscapeSafeArea;
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  tick_for(2 * StatsPanel::kRefresh);
+  ImGui::SetCurrentContext(view_->ui_context());
+  EXPECT_EQ(stats_rows("stages"), 3);
+  EXPECT_EQ(stats_rows("render"), 3);
+  expect_stats_fit();
 }
 
 // A program's hooks are made with the live player's playout clock, and with
@@ -1411,8 +1387,12 @@ TEST_F(PlayerViewTest, AProgramsHooksHaveTheLiveClockAndNoneForAFile) {
 // M5 Max, under other tests' load too: inside, 0.002 to 0.01 ms, at times
 // one spike to 1 ms; around it, mostly 0.02 to 0.2 ms, at times as low as
 // 0.002. The mean, unlike the median, a run of low readings does not sink,
-// but a spike lifts it: it misses a scope inside about 1 run in 20.
+// but a spike lifts it: it misses a scope inside about 1 run in 20. Not under
+// a sanitizer: the draw is the view's thread alone (DECISIONS.md, 2026-11-04).
 TEST_F(PlayerViewTest, TheDrawRowTimesTheWholePass) {
+#ifdef VKC_TEST_SANITIZED
+  GTEST_SKIP() << "the Release legs run it";
+#endif
   extent_ = kPhone;
   ASSERT_TRUE(make_view());
   ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));

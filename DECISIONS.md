@@ -4,6 +4,76 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-11-04 — Tests: the round-2 budget
+
+The owner's answers to the round-2 test-budget proposal. The budget is about
+5 s an entry in Release and 30 s under a sanitizer, each entry run alone on a
+quiet box. A leg leaves out a whole entry by a ctest label and a single case
+by a skip in its code, never by a filter in the workflow. Each change below
+was checked against the audit's planted bugs, and three more from the PR's
+review (a rebuild not taken as the frame shown, a file view's stats column a
+line too long, an idle park noticed 10 slices late), all of them run again
+against the whole suite: every bug caught before is still caught.
+
+- **The tests' streams pause 100 ms before frame 3** (`kGapNs`), not 500 ms,
+  as every pass of a file waits it out. Pacing by index rather than by pts is
+  then caught by `AFramesDueTimeIsTheOneTheClockSet` alone. The park tests
+  wait past the next frame's due time itself, and the pause test checks that
+  its frame came before it was due.
+- **Dropped:** `AtANeedEachRecordIsAFrameInOrderAndDFallsStepByStep` (D's
+  fall is the LiveClock host tests'),
+  `AConsumerPauseLeavesStatusOkThenGetsTheNewest` and `TheStatsFitAPhone`
+  (the layout is ControlsTest's and `ALiveViewsStatsFitAPhone`'s, which
+  also fits a file view on the landscape phone, where a file's worker
+  column runs over the controls with one line more).
+- **Shorter, with the same claims:** `ARefusedFrameReturnsItsMeshSlot` over
+  2 passes, `ASkippedFrameIsNeverDrawnAndTheRingNeverRunsOut` over 1, which
+  still has more frames than the ring holds,
+  `DeviceIdleNeedsTwoTimedBatchesInARow` over `kFrames + 2` takes, the
+  two-track live stream for 1 s, the audio-free and the offset live streams
+  for 0.5 s, `ALiveViewsStatsFitAPhone` at `kProgramLine` alone,
+  `ATapOnDeblockWhilePausedRebuildsTheFrameShown` without its stats
+  refreshes (what the stats say is ControlsTest's; that the view takes the
+  rebuild as the frame shown is its own), and the measure runner's sweeps:
+  the iPhone for the phones' checks and the iPad for their dispatch, the
+  probes' defaults given, and one option refused.
+- **Skipped under a sanitizer** (the core's `VKC_TEST_SANITIZED`), each kept
+  on the Release legs: the partial record's drain, whose time only Linux
+  checks; the deblock pair's vertex-by-vertex compares; the draw row's
+  timing, on the view's thread alone; and the park while a recovery is due,
+  whose grown frame takes longer to record there than its pts step (about
+  0.23 s on an M5 Max). The planted races they reported are reported by
+  other cases too.
+- **The label `no_tsan`,** which the ThreadSanitizer leg leaves out:
+  `vp_measure_runner`, bash and Python alone, and the view's rerun on
+  MoltenVK's specialized families. The rerun leaves out
+  `ALiveViewsStatsFitAPhone` and `TheDrawRowTimesTheWholePass`, which check
+  a layout and a timing, not a crossing; a live view, its worker on grid's
+  family, still crosses there in
+  `AProgramsHooksHaveTheLiveClockAndNoneForAFile`. That the rerun loses no
+  crossing rests on reading: no queue-family bug was planted.
+- **The `consumer` builds are a step of their own,** after the tests on the
+  ubuntu-26.04 leg, so their build no longer shares the host with the GPU
+  tests. The synchronization-validation rerun is unchanged; it would need an
+  audit of its own.
+- **Four timing assumptions that failed on a loaded mini** (main run
+  41383623048) no longer race the worker. A live record counts toward a
+  frame at its release, not at its read, so
+  `AnUntakenMeshDoesNotDelayBufferedRecords` ends its burst with a key and
+  takes once the key's decode batch shows the burst released, and
+  `AllPublishedWhileAMeshWaitsAreDecodedAndTheNewestShown` takes once each
+  record behind K0 has its decode batch.
+  `AParkClosesAnIdleConnectionWithinASlice` allows 250 ms under a
+  sanitizer, a quarter of the wait to retry, and keeps `kClosed` (50 ms)
+  elsewhere: only the ThreadSanitizer leg failed it, and 250 ms would pass
+  an idle worker that notices the park 10 slices late. The fourth,
+  `AConsumerPause...`, went.
+- **`RecordsThatComeWhileABacklogDrainsAreStampedAsTheyCome` also checks the
+  reads:** they never stand for half the drain while a record waits. Since
+  2026-11-01 a record late past `kMaxLiveDelay` is a spike's and leaves D
+  as it was, so a drain longer than that hid stamps taken after it from D's
+  rise. That is how no read between releases passed on a loaded RTX 4090.
+
 ## 2026-11-02 — Live addresses through the core's parser
 
 `parse_live_address` is the core's `net::parse_host_port` on grid's
@@ -99,8 +169,9 @@ its `kHybridMeshCullBackFaces`; W and C on the desktop.
 
 - **Why Unlit goes.** The owner had no use for it, and an iPhone in landscape
   has room for one more box on the controls' rows, not two: a third line
-  pushes the controls under the compact stats (`TheStatsFitAPhone`). A program
-  still draws unshaded through its own binding's `kHybridMeshLit` clear.
+  pushes the controls under the compact stats (`ALiveViewsStatsFitAPhone`).
+  A program still draws unshaded through its own binding's `kHybridMeshLit`
+  clear.
 - **Why these labels.** Only "Wire" and "Cull" fit that row; "Wireframe" or
   "Back faces" wrap it.
 - **Cull is off at first,** so both sides draw as before.
@@ -243,8 +314,9 @@ ThreadSanitizer, Debug (the 2026-10-18 entry below listed both plain legs).
 
 - **Why:** the ThreadSanitizer leg is a Debug build of every target, so the
   assertions and the Debug-only validation it runs are the plain Debug leg's,
-  under a sanitizer as well. The one test it skips, the view's rerun on
-  MoltenVK's specialized families, still runs on the Release leg. Three Mac
+  under a sanitizer as well. What it leaves out, the `no_tsan` label and
+  the cases that skip under a sanitizer (2026-11-04), still runs on the
+  Release leg. Three Mac
   legs shared the family's two Mac runners,
   so the third queued about 150 s a run (246 s at most), for no check of its
   own.
@@ -899,7 +971,7 @@ This makes the failure explicit without submitting incomplete commands.
   the player configured alone has all three options ON. Why: a configure
   would not show that the library links outside the player's own tree. They
   check CMake, not a device, so CI runs them (label `consumer`) on the
-  ubuntu-26.04 leg alone.
+  ubuntu-26.04 leg alone, in a step after the tests (2026-11-04).
 
 ## 2026-10-25 — One batch per frame
 
@@ -1536,8 +1608,9 @@ How `StreamPlayer` plays a stream; its header says what each call does.
   instrumented too, which the core's `VKC_SANITIZE` (carried to every target
   that links the core) does not reach. A report fails its test. MoltenVK and
   the validation layer are not instrumented; no report points into them, so
-  there is no suppressions file. The leg skips the view's rerun on
-  MoltenVK's specialized queue families, which are no threading variable.
+  there is no suppressions file. The leg leaves out the view's rerun on
+  MoltenVK's specialized queue families, which are no threading variable
+  (since 2026-11-04 by the `no_tsan` label).
 - **CI leaves out the `stress` label** (`-LE stress`): the live park test
   at 50 cycles, which a plain `ctest` runs too and `ctest -L stress` selects.
   Why: each cycle is a timing check on a shared host, and 8 spread over the

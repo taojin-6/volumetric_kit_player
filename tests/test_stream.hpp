@@ -45,9 +45,10 @@ namespace grid = volumetric_kit::grid;
 constexpr std::uint64_t kFrames = 6;
 constexpr std::uint32_t kIntraPeriod = 3;
 constexpr std::uint64_t kPeriodNs = 40'000'000;  // 25 fps
-// The pause before frame kGapAt, so a pts is not its index times the period.
+// The pause before frame kGapAt, so a pts is not its index times the period;
+// short, as every pass of a file waits it out.
 constexpr std::uint64_t kGapAt = 3;
-constexpr std::uint64_t kGapNs = 500'000'000;
+constexpr std::uint64_t kGapNs = 100'000'000;
 
 // The streams' names in vp_write_stream's directory: the sphere; with frame
 // kEmptyFrame holding no block, so meshing nothing; as a true SDF, unmasked;
