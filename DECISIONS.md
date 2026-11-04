@@ -10,8 +10,10 @@ The owner's answers to the round-2 test-budget proposal. The budget is about
 5 s an entry in Release and 30 s under a sanitizer, each entry run alone on a
 quiet box. A leg leaves out a whole entry by a ctest label and a single case
 by a skip in its code, never by a filter in the workflow. Each change below
-was checked against the audit's planted bugs, all of them run again against
-the whole suite: every bug caught before is still caught.
+was checked against the audit's planted bugs, and three more from the PR's
+review (a rebuild not taken as the frame shown, a file view's stats column a
+line too long, an idle park noticed 10 slices late), all of them run again
+against the whole suite: every bug caught before is still caught.
 
 - **The tests' streams pause 100 ms before frame 3** (`kGapNs`), not 500 ms,
   as every pass of a file waits it out. Pacing by index rather than by pts is
@@ -20,18 +22,21 @@ the whole suite: every bug caught before is still caught.
   its frame came before it was due.
 - **Dropped:** `AtANeedEachRecordIsAFrameInOrderAndDFallsStepByStep` (D's
   fall is the LiveClock host tests'),
-  `AConsumerPauseLeavesStatusOkThenGetsTheNewest`, `TheStatsFitAPhone` (the
-  layout is `ALiveViewsStatsFitAPhone`'s and ControlsTest's) and
-  `ATapOnDeblockWhilePausedRebuildsTheFrameShown` (the tap is
-  ControlsTest's, the rebuild StreamPlayerTest's).
+  `AConsumerPauseLeavesStatusOkThenGetsTheNewest` and `TheStatsFitAPhone`
+  (the layout is ControlsTest's and `ALiveViewsStatsFitAPhone`'s, which
+  also fits a file view on the landscape phone, where a file's worker
+  column runs over the controls with one line more).
 - **Shorter, with the same claims:** `ARefusedFrameReturnsItsMeshSlot` over
   2 passes, `ASkippedFrameIsNeverDrawnAndTheRingNeverRunsOut` over 1, which
   still has more frames than the ring holds,
   `DeviceIdleNeedsTwoTimedBatchesInARow` over `kFrames + 2` takes, the
   two-track live stream for 1 s, the audio-free and the offset live streams
-  for 0.5 s, `ALiveViewsStatsFitAPhone` at `kProgramLine` alone, and the
-  measure runner's sweeps: the iPhone for the phones' checks and the iPad
-  for their dispatch, the probes' defaults given, and one option refused.
+  for 0.5 s, `ALiveViewsStatsFitAPhone` at `kProgramLine` alone,
+  `ATapOnDeblockWhilePausedRebuildsTheFrameShown` without its stats
+  refreshes (what the stats say is ControlsTest's; that the view takes the
+  rebuild as the frame shown is its own), and the measure runner's sweeps:
+  the iPhone for the phones' checks and the iPad for their dispatch, the
+  probes' defaults given, and one option refused.
 - **Skipped under a sanitizer** (the core's `VKC_TEST_SANITIZED`), each kept
   on the Release legs: the partial record's drain, whose time only Linux
   checks; the deblock pair's vertex-by-vertex compares; the draw row's
@@ -42,9 +47,11 @@ the whole suite: every bug caught before is still caught.
 - **The label `no_tsan`,** which the ThreadSanitizer leg leaves out:
   `vp_measure_runner`, bash and Python alone, and the view's rerun on
   MoltenVK's specialized families. The rerun leaves out
-  `ALiveViewsStatsFitAPhone` and `TheDrawRowTimesTheWholePass`, which use
-  the graphics queue, a general family in both. That grid's compute-only
-  family loses nothing rests on reading: no queue-family bug was planted.
+  `ALiveViewsStatsFitAPhone` and `TheDrawRowTimesTheWholePass`, which check
+  a layout and a timing, not a crossing; a live view, its worker on grid's
+  family, still crosses there in
+  `AProgramsHooksHaveTheLiveClockAndNoneForAFile`. That the rerun loses no
+  crossing rests on reading: no queue-family bug was planted.
 - **The `consumer` builds are a step of their own,** after the tests on the
   ubuntu-26.04 leg, so their build no longer shares the host with the GPU
   tests. The synchronization-validation rerun is unchanged; it would need an
@@ -56,8 +63,11 @@ the whole suite: every bug caught before is still caught.
   takes once the key's decode batch shows the burst released, and
   `AllPublishedWhileAMeshWaitsAreDecodedAndTheNewestShown` takes once each
   record behind K0 has its decode batch.
-  `AParkClosesAnIdleConnectionWithinASlice` allows 250 ms, a quarter of the
-  wait to retry. The fourth, `AConsumerPause...`, went.
+  `AParkClosesAnIdleConnectionWithinASlice` allows 250 ms under a
+  sanitizer, a quarter of the wait to retry, and keeps `kClosed` (50 ms)
+  elsewhere: only the ThreadSanitizer leg failed it, and 250 ms would pass
+  an idle worker that notices the park 10 slices late. The fourth,
+  `AConsumerPause...`, went.
 - **`RecordsThatComeWhileABacklogDrainsAreStampedAsTheyCome` also checks the
   reads:** they never stand for half the drain while a record waits. Since
   2026-11-01 a record late past `kMaxLiveDelay` is a spike's and leaves D

@@ -278,8 +278,9 @@ set_tests_properties(${hooked} PROPERTIES FIXTURES_REQUIRED vp_streams TIMEOUT
 # view's tests cross families rather than skip: on MoltenVK's default families
 # above, and again on its specialized ones, as the core's cross-family tests do,
 # where any skip but the one without a device fails. The rerun leaves out the
-# stats' phone layout and the draw row's timing, which use the graphics queue
-# alone, a general family in both, and which the default run keeps. It is no
+# stats' phone layout and the draw row's timing, which the default run keeps:
+# neither checks a crossing, and a live view, whose worker is on grid's family,
+# still crosses in AProgramsHooksHaveTheLiveClockAndNoneForAFile. It is no
 # threading variable, so the ThreadSanitizer leg leaves it out (label no_tsan).
 if(APPLE)
   add_test(

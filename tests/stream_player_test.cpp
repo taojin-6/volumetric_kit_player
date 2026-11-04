@@ -1819,10 +1819,11 @@ TEST_F(StreamPlayerTest, EveryMeshCarriesAReachedReadyValue) {
 // before when both were timed and nothing came between: not the first
 // frame's, and in the steady pass, the second, its first two frames'; and its
 // queue latency where the device calibrates its clocks. Untimed, neither.
-// Both are in ms: the idle under a second, as the stream's longest pts step
-// is kGapNs + kPeriodNs, and the latency, a submit's, under 100 ms (a
-// calibration may place the first timestamp a little before the submit
-// call, by its deviation).
+// Both are in ms: the idle under a second, well over the stream's longest
+// pts step, kGapNs + kPeriodNs (140 ms), so a loaded host's late take stays
+// under it, and the latency, a submit's, under 100 ms (a calibration may
+// place the first timestamp a little before the submit call, by its
+// deviation).
 TEST_F(StreamPlayerTest, DeviceIdleNeedsTwoTimedBatchesInARow) {
   constexpr double kMaxIdleMs = 1000.0;
   constexpr double kMaxQueueMs = 100.0;
@@ -4968,11 +4969,16 @@ TEST_F(LivePlayerTest, AParkClosesTheConnectionWithinASlice) {
 }
 
 // Parked while no record comes, as from a sender with no key yet: no step
-// refuses one, and the connection still closes, within kIdleClosed: a
-// quarter of the wait to retry, which a worker that missed the park would
-// wait out, and wide enough for a loaded sanitizer leg (57 ms seen).
+// refuses one, and the connection still closes, within kClosed, so an idle
+// worker notices the park within a slice or so. Under a sanitizer, within
+// 250 ms, a quarter of the wait to retry, which a worker that missed the park
+// would wait out: a loaded ThreadSanitizer leg took 57 ms.
 TEST_F(LivePlayerTest, AParkClosesAnIdleConnectionWithinASlice) {
+#ifdef VKC_TEST_SANITIZED
   constexpr auto kIdleClosed = 250ms;
+#else
+  constexpr auto kIdleClosed = kClosed;
+#endif
   const RawPeer peer(
       [feed = stream_feed()](std::uint64_t piece) {
         return piece == 0 ? feed(0) : Bytes();  // the session alone

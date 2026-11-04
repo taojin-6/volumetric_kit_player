@@ -9,17 +9,19 @@
 // still presents; 0 x 0 skips without blocking; a step moves one frame; the
 // worker's failure surfaces from frame(); an audio output's interruption
 // pauses the player at the next frame; a tap on Normals switches the mesh's
-// flags from lit to normals and back, and frames keep presenting; the
-// panel draws at a phone's scale; in portrait and in landscape, at the iOS
-// shell's sizes, its controls fit a phone and a fingertip, as does Source,
-// clear of them, and so do a live view's compact stats, clear of both, with
-// the longest program's line, the profiler's draw row and its loop's in the
-// renderer's table; the draw's device half times the whole pass; the
-// worker and the draw are device-timed while the stats are open, not while they
-// are closed, and the worker as a measurement fixes it whatever they show, the
-// draw then only while they are open and the timing is not off, each frame
-// taken counted once; Source is off by default, and a tap on it is one request;
-// ui_wants_pointer() follows a finger on the panel, which controls_test.cpp
+// flags from lit to normals and back, and frames keep presenting; a tap on
+// Deblock while paused draws the frame shown rebuilt and takes it as the frame
+// shown; the panel draws at a phone's scale; in portrait and in landscape, at
+// the iOS shell's sizes, its controls fit a phone and a fingertip, as does
+// Source, clear of them, and so do a live view's compact stats, clear of both,
+// with the longest program's line, the profiler's draw row and its loop's in
+// the renderer's table, and a file view's in landscape, with the worker's three
+// stages; the draw's device half times the whole pass; the worker and the draw
+// are device-timed while the stats are open, not while they are closed, and the
+// worker as a measurement fixes it whatever they show, the draw then only while
+// they are open and the timing is not off, each frame taken counted once;
+// Source is off by default, and a tap on it is one request; ui_wants_pointer()
+// follows a finger on the panel, which controls_test.cpp
 // checks on the stats' header and body; each mesh is drawn behind a GPU wait on
 // its ready value, reached, with no error the layer reports; a frame drawn is
 // stamped from its due time to its present call, and the stats show its
@@ -1112,6 +1114,32 @@ TEST_F(PlayerViewTest, WireReachesTheDraw) {
       << view_->player().status().message();
 }
 
+// The true-SDF stream, which the deblock runs on, paused on frame 0: a tap
+// turns the deblock off, and the worker's rebuild of frame 0 is taken as the
+// frame shown (shown(), which before_draw and the stats are given). What the
+// stats then say is ControlsTest's.
+TEST_F(PlayerViewTest, ATapOnDeblockWhilePausedRebuildsTheFrameShown) {
+  const std::string path =
+      scratch_.copy(VP_TEST_STREAMS, vp_test::kTrueSdfStream);
+  ASSERT_FALSE(path.empty());
+  ASSERT_TRUE(make_view(path, /*playing=*/false));
+  view_->player().step();
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  EXPECT_TRUE(view_->shown()->deblock_on);
+  ImGui::SetCurrentContext(view_->ui_context());
+  const ImGuiWindow* const panel = ImGui::FindWindowByName(kControlsWindow);
+  ASSERT_NE(panel, nullptr);
+  tap(vp_test::control_middle(*panel, vp_test::kDeblock));
+  EXPECT_FALSE(view_->player().deblock());
+  ASSERT_TRUE(tick_until([&] { return view_->shown()->rebuild; }))
+      << "no rebuild drawn";
+  EXPECT_EQ(view_->shown()->index, 0u);
+  EXPECT_FALSE(view_->shown()->deblock_on);
+  EXPECT_FALSE(view_->player().playing());
+  EXPECT_TRUE(view_->player().status().ok())
+      << view_->player().status().message();
+}
+
 TEST_F(PlayerViewTest, UiWantsPointerFollowsAFingerOnThePanel) {
   ASSERT_TRUE(make_view(/*playing=*/false));
   // An auto-sized panel takes its size on its second frame.
@@ -1273,7 +1301,9 @@ TEST_F(PlayerViewTest, ATapOnSourceIsOneRequest) {
 // record, past a refresh so the stats hold a frame's figures, with
 // kProgramLine, the longest a program's line may be: the renderer's table has
 // the draw row and its loop's frame wait and present, and they fit the phone
-// (expect_stats_fit).
+// (expect_stats_fit). Then a file view's, whose worker column is its own (its
+// three stages, the read row among them), on the landscape phone, where a
+// fourth line in that column runs the stats over the controls.
 TEST_F(PlayerViewTest, ALiveViewsStatsFitAPhone) {
   size_as_a_phone();
   core::Result<std::unique_ptr<grid::stream::StreamReader>> reader =
@@ -1299,6 +1329,16 @@ TEST_F(PlayerViewTest, ALiveViewsStatsFitAPhone) {
     touch_.reset();
     view_.reset();
   }
+  SCOPED_TRACE("a file, landscape");
+  extent_ = kLandscapePhone;
+  safe_area_ = kLandscapeSafeArea;
+  ASSERT_TRUE(make_view());
+  ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+  tick_for(2 * StatsPanel::kRefresh);
+  ImGui::SetCurrentContext(view_->ui_context());
+  EXPECT_EQ(stats_rows("stages"), 3);
+  EXPECT_EQ(stats_rows("render"), 3);
+  expect_stats_fit();
 }
 
 // A program's hooks are made with the live player's playout clock, and with
