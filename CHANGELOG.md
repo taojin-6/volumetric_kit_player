@@ -442,9 +442,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - ci: the ThreadSanitizer leg runs each test binary's cases in one process
   (`VP_TEST_PER_BINARY`), and `vp_stream_player_test`'s in one per named
   suite plus one for the rest; the other legs keep one process per case.
+- Tests, for the test budget: the tests' streams pause 100 ms before their
+  fourth frame (500 ms before); four cases go and nine are shorter, each
+  planted bug they caught still caught; under a sanitizer five cases skip,
+  which the Release legs keep; the ThreadSanitizer leg leaves out the
+  `no_tsan` label (`vp_measure_runner` and the view's rerun on MoltenVK's
+  specialized families, which no longer reruns the stats' phone fit or the
+  draw row); and the `consumer` builds are a CI step of their own after the
+  tests.
 
 ### Fixed
 
+- Tests: three live cases' waits no longer race the worker's releases on a
+  loaded runner (`AnUntakenMeshDoesNotDelayBufferedRecords`,
+  `AllPublishedWhileAMeshWaitsAreDecodedAndTheNewestShown`,
+  `AParkClosesAnIdleConnectionWithinASlice`), and
+  `RecordsThatComeWhileABacklogDrainsAreStampedAsTheyCome` catches reads
+  that stop during a drain however long the drain takes.
 - The view lights the mesh with a headlight (`player::headlight`): the light
   follows the camera, from just above and left of the eye, so what faces the
   viewer is lit in any world. gfx's default light, fixed in the world for +y
