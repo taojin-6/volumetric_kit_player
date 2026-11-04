@@ -5617,9 +5617,9 @@ TEST_F(LivePlayerTest, AFullRingStopsTheReadsUntilItsRecordsAreReleased) {
 // While a backlog drains, the records that come meanwhile are read between
 // its releases, each stamped as it comes: a program holds a frame while
 // records come every 5 ms, then lets it go, left untaken, so the backlog
-// drains with no mesh between. The lateness the clock holds (its arrival
-// need less the lead) rises by less than half the drain, or than half the
-// room below D's clamp where the drain is longer.
+// drains with no mesh between. The reads never stand for half the drain
+// while a record waits to be read, and the lateness the clock holds (its
+// arrival need less the lead) rises by less than half the drain.
 TEST_F(LivePlayerTest, RecordsThatComeWhileABacklogDrainsAreStampedAsTheyCome) {
   constexpr auto kPace = 5ms;  // the sender's, and its pts' step
   constexpr std::uint64_t kBacklog = 200;
@@ -5672,9 +5672,22 @@ TEST_F(LivePlayerTest, RecordsThatComeWhileABacklogDrainsAreStampedAsTheyCome) {
   const Playout before = player->live_clock()->time().value();
   const SteadyClock::time_point let_go = SteadyClock::now();
   *hold = false;
-  // A decode submitted a record released, and no mesh while it is untaken.
-  const bool drained = eventually(
-      [&] { return device().counters().submits >= submits + kBacklog; });
+  // A decode submitted a record released, and no mesh while it is untaken;
+  // meanwhile, the longest the newest record read stood while one sent was
+  // still to read.
+  std::uint64_t seen = player->live_status().seq;
+  SteadyClock::time_point moved = let_go;
+  SteadyClock::duration stood{};
+  const bool drained = eventually([&] {
+    const SteadyClock::time_point now = SteadyClock::now();
+    const std::uint64_t seq = player->live_status().seq;
+    if (seq != seen || seq >= sent) {
+      seen = seq;
+      moved = now;
+    }
+    stood = std::max(stood, now - moved);
+    return device().counters().submits >= submits + kBacklog;
+  });
   const SteadyClock::duration drain = SteadyClock::now() - let_go;
   const std::uint64_t since = sent;
   const bool read =
@@ -5688,18 +5701,19 @@ TEST_F(LivePlayerTest, RecordsThatComeWhileABacklogDrainsAreStampedAsTheyCome) {
                  << std::chrono::duration<double, std::milli>(drain).count()
                  << " ms";
   }
-  // Records read only once the drain ends would raise it by the drain, up to
-  // the room D's clamp leaves (kMaxLiveDelay), which a drain on a loaded host
-  // can outlast: half of either fails.
-  const std::chrono::nanoseconds lateness = before.target - before.lead;
-  const std::chrono::nanoseconds rise = (after.target - after.lead) - lateness;
-  const std::chrono::nanoseconds room = kMaxLiveDelay - lateness;
-  EXPECT_LT(rise, std::min<std::chrono::nanoseconds>(drain, room) / 2)
+  // Read between the releases: the reads never stood for half the drain. A
+  // drain past kMaxLiveDelay, as on a loaded host, would hide the stamps from
+  // the rise below: such late records are a spike's, which leaves D as it was.
+  EXPECT_LT(stood, drain / 2)
+      << std::chrono::duration<double, std::milli>(stood).count()
+      << " ms without a read while records came, over a drain of "
+      << std::chrono::duration<double, std::milli>(drain).count() << " ms";
+  const std::chrono::nanoseconds rise =
+      (after.target - after.lead) - (before.target - before.lead);
+  EXPECT_LT(rise, drain / 2)
       << std::chrono::duration<double, std::milli>(rise).count()
       << " ms of lateness over a drain of "
-      << std::chrono::duration<double, std::milli>(drain).count()
-      << " ms, with " << std::chrono::duration<double, std::milli>(room).count()
-      << " ms below the clamp";
+      << std::chrono::duration<double, std::milli>(drain).count() << " ms";
   EXPECT_LT(stop_time(*player), kPrompt);
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
