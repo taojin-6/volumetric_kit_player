@@ -3216,10 +3216,10 @@ TEST_F(StreamPlayerTest, AHeldFrameKeepsTheOneBeforeAndTheFileTwoAheadAtMost) {
   EXPECT_TRUE(player->status().ok()) << player->status().message();
 }
 
-// A commit hook that skips every odd frame, over a pass, more frames than the
-// ring one mesh deeper (mesh_wiring's holds) has slots: no odd frame is ever
-// drawn, the frame before stays live meanwhile, the next one follows, and the
-// ring never runs out.
+// A commit hook that skips every odd frame, over a pass, whose frames
+// outnumber the meshes of the ring one mesh deeper (mesh_wiring's holds): no
+// odd frame is ever drawn, the frame before stays live meanwhile, the next
+// one follows, and the ring never runs out.
 TEST_F(StreamPlayerTest, ASkippedFrameIsNeverDrawnAndTheRingNeverRunsOut) {
   constexpr std::uint64_t kPasses = 1;
   hooks_.emplace();

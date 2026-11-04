@@ -26,7 +26,7 @@ the whole suite: every bug caught before is still caught.
   ControlsTest's, the rebuild StreamPlayerTest's).
 - **Shorter, with the same claims:** `ARefusedFrameReturnsItsMeshSlot` over
   2 passes, `ASkippedFrameIsNeverDrawnAndTheRingNeverRunsOut` over 1, which
-  still has more frames than the ring has slots,
+  still has more frames than the ring holds,
   `DeviceIdleNeedsTwoTimedBatchesInARow` over `kFrames + 2` takes, the
   two-track live stream for 1 s, the audio-free and the offset live streams
   for 0.5 s, `ALiveViewsStatsFitAPhone` at `kProgramLine` alone, and the
