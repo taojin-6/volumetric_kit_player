@@ -137,27 +137,19 @@ core::Status write_stream(core::Device& device, core::Allocator& allocator,
   VKC_ASSIGN(std::unique_ptr<stream::StreamWriter> writer,
              stream::StreamWriter::create(path, session));
   for (std::uint64_t i = 0; i < kFrames; ++i) {
-    VKC_TRY(grid.clear());
+    // The grid holds this frame's sphere and nothing else; frame `empty`'s
+    // mesh has no triangle, which leaves it empty.
+    HostMesh mesh;
     if (i != empty) {
-      const HostMesh mesh =
-          sphere(grid::Vec3f(8.0f * voxel * static_cast<float>(i), 0, 0),
-                 i == grown ? grown_radius : kRadius);
-      const auto vertex_count =
-          static_cast<std::uint32_t>(mesh.vertices.size());
-      const auto triangle_count =
-          static_cast<std::uint32_t>(mesh.indices.size() / 3);
-      VKC_ASSIGN(const std::uint32_t failed,
-                 grid.map().allocate_from_triangles(
-                     mesh.vertices.data(), vertex_count, mesh.indices.data(),
-                     triangle_count));
-      if (failed != 0) {
-        return core::Status::out_of_memory("the sphere outgrew the grid");
-      }
-      VKC_TRY(integrator
-                  .integrate(grid, mesh.vertices.data(), vertex_count,
-                             mesh.indices.data(), triangle_count)
-                  .status());
+      mesh = sphere(grid::Vec3f(8.0f * voxel * static_cast<float>(i), 0, 0),
+                    i == grown ? grown_radius : kRadius);
     }
+    VKC_TRY(integrator
+                .convert(grid, mesh.vertices.data(),
+                         static_cast<std::uint32_t>(mesh.vertices.size()),
+                         mesh.indices.data(),
+                         static_cast<std::uint32_t>(mesh.indices.size() / 3))
+                .status());
     VKC_ASSIGN(const std::vector<std::uint8_t> frame, encoder.encode(grid));
     VKC_ASSIGN(const grid::codec::FrameInfo info,
                grid::codec::read_frame_info(frame.data(), frame.size()));

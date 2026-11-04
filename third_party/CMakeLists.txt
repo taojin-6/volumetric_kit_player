@@ -52,26 +52,29 @@ vkc_require_core(0.44.0 VULKAN CONFIG)
 
 # --- volumetric_kit_grid -----------------------------------------------------
 # The stream reader, the codec's decode grid and its deblock, Marching Cubes,
-# the mesh exchange, the live stream's client, and for vp_probe's --save-meshes
-# and the tests' stream writer the PLY writer and the mesh integrator. Its tests
-# and examples are off, as is its -Werror in a subproject, so its library's core
-# floor is the one checked (0.43.0, the first core with the net tier); its own
-# core pin is the player's. The pin is grid main at #19's merge (fb1e492,
-# 0.11.0), whose live stream sits on the core's net tier, every client message
-# the player's live_reason reads kept. Since 0.6.0: StreamServer::finish, which
-# ends a stream after each viewer's last record, CodecStream::finish through it
-# (0.7.0); BBR for a viewer off loopback on Linux (0.7.1);
-# StreamServer::draining (0.8.0); a sender that dials its reader, which grid
-# 0.11.0 moved to the core (0.9.0); and volume::RayCaster (0.10.0). The player
-# calls none of them; a StreamServer's destructor still closes its viewers at
-# once, as the tests' senders end. Before them, #11's merge (cf7c99a, 0.6.0),
-# whose StreamServer serves every track of a session, track 0's keys starting
-# each GOP, so a sender serves its Audio track beside the geometry
-# (live_audio.hpp); #10 (0.5.0) muxes a CodecStream's Audio tracks by pts, so
-# each record rides right after the first frame at or past its pts. #9's merge
-# (0.4.0) brought TrackKind::Audio and stream/audio.hpp, the Audio track the
-# player plays (audio_feeder.hpp). Since its first commits (cbf7a6e), recon
-# #309's grid/ under grid's names (DECISIONS.md, 2026-10-29), it has also
+# the mesh exchange, the live stream's client, the PLY writer for vp_probe's
+# --save-meshes, and MeshIntegrator::convert for the tests' stream writer. Its
+# tests and examples are off, as is its -Werror in a subproject, so its
+# library's core floor is the one checked (0.43.0, the first core with the net
+# tier); its own core pin is the player's. The pin is grid main at #20's merge
+# (224ecf0, 0.13.0), whose convert empties a grid and writes one mesh's band in
+# one call, in place of the allocate and integrate 0.13.0 removed; the player
+# uses neither 0.12.0's RGB-D track kinds nor 0.12.1's examples' codec setup.
+# Before it, #19's merge (fb1e492, 0.11.0), whose live stream sits on the core's
+# net tier, every client message the player's live_reason reads kept. Since
+# 0.6.0: StreamServer::finish, which ends a stream after each viewer's last
+# record, CodecStream::finish through it (0.7.0); BBR for a viewer off loopback
+# on Linux (0.7.1); StreamServer::draining (0.8.0); a sender that dials its
+# reader, which grid 0.11.0 moved to the core (0.9.0); and volume::RayCaster
+# (0.10.0). The player calls none of them; a StreamServer's destructor still
+# closes its viewers at once, as the tests' senders end. Before them, #11's
+# merge (cf7c99a, 0.6.0), whose StreamServer serves every track of a session,
+# track 0's keys starting each GOP, so a sender serves its Audio track beside
+# the geometry (live_audio.hpp); #10 (0.5.0) muxes a CodecStream's Audio tracks
+# by pts, so each record rides right after the first frame at or past its pts.
+# #9's merge (0.4.0) brought TrackKind::Audio and stream/audio.hpp, the Audio
+# track the player plays (audio_feeder.hpp). Since its first commits (cbf7a6e),
+# recon #309's grid/ under grid's names (DECISIONS.md, 2026-10-29), it has also
 # brought marching-cubes vertex normals from the field's gradient (0.2.1),
 # StreamServer::viewers (0.2.0), the core floor 0.30.0 (0.3.0) and an Encoder
 # that holds P-frames a quantization step against their reference (0.3.1), which
@@ -92,11 +95,11 @@ set(VGRID_BUILD_EXAMPLES OFF)
 FetchContent_Declare(
   volumetric_kit_grid
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
-  GIT_TAG fb1e49255a7f234353e8717edbd96843f084ab86)
+  GIT_TAG 224ecf0f5ff85a39fcf08cee5093194f97bc77b5)
 FetchContent_MakeAvailable(volumetric_kit_grid)
 vkc_require_sibling(
   volumetric_kit::grid
-  0.11.0
+  0.13.0
   TARGETS
   volumetric_kit::grid_codec
   volumetric_kit::grid_mesh

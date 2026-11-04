@@ -264,6 +264,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: grid at #20's merge (224ecf0, 0.13.0), which the player requires:
+  the tests' stream writer makes each frame's grid with one
+  `MeshIntegrator::convert`, which 0.13.0 put in place of the allocate and
+  integrate it removed. The player uses neither 0.12.0's RGB-D track kinds
+  nor 0.12.1's examples' codec setup.
 - A live address is read by the core's parser: `parse_live_address` is
   `net::parse_host_port` on the sender's default port, and
   `parse_live_source`'s port `net::parse_port`. Their refusals give the
