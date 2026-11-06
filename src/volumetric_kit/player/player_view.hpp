@@ -206,9 +206,9 @@ class PlayerView {
   ///        gfx::Profiler for the stats' "draw (mesh+UI)" row, which
   ///        @ref frame attaches to the frame loop while the draw is timed
   ///        (PlayerViewConfig::device_timing). Aim the camera at the start
-  ///        view (@ref reset_camera) about the up it keeps (@ref view_up). Make
-  ///        the hooks (PlayerViewConfig::make_hooks). Then start @p player at
-  ///        the config's tile depth, with the hooks; its worker builds its
+  ///        view (@ref reset_camera) about the up it keeps. Make the hooks
+  ///        (PlayerViewConfig::make_hooks). Then start @p player at the
+  ///        config's tile depth, with the hooks; its worker builds its
   ///        kernels, and it plays unless the caller paused it.
   /// @param surface  The window system's source; its window or layer must
   ///                 outlive the view.
