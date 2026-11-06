@@ -56,14 +56,14 @@ vkc_require_core(0.44.0 VULKAN CONFIG)
 # --save-meshes, and MeshIntegrator::convert for the tests' stream writer. Its
 # tests and examples are off, as is its -Werror in a subproject, so its
 # library's core floor is the one checked (0.43.0, the first core with the net
-# tier); its own core pin is the player's. The pin is 1bf8226 (0.14.0), whose
-# Session::up names the world's up, in a file and to a live client, which the
-# view keeps (view_up). Before it, #20's merge (224ecf0, 0.13.0), whose convert
-# empties a grid and writes one mesh's band in one call, in place of the
-# allocate and integrate 0.13.0 removed; the player uses neither 0.12.0's RGB-D
-# track kinds nor 0.12.1's examples' codec setup. Before it, #19's merge
-# (fb1e492, 0.11.0), whose live stream sits on the core's net tier, every client
-# message the player's live_reason reads kept. Since 0.6.0:
+# tier); its own core pin is the player's. The pin is grid main at #23's merge
+# (368e111, 0.14.0), whose Session::up names the world's up, in a file and to a
+# live client, which the view keeps (view_up). Before it, #20's merge (224ecf0,
+# 0.13.0), whose convert empties a grid and writes one mesh's band in one call,
+# in place of the allocate and integrate 0.13.0 removed; the player uses neither
+# 0.12.0's RGB-D track kinds nor 0.12.1's examples' codec setup. Before it,
+# #19's merge (fb1e492, 0.11.0), whose live stream sits on the core's net tier,
+# every client message the player's live_reason reads kept. Since 0.6.0:
 # StreamServer::finish, which ends a stream after each viewer's last record,
 # CodecStream::finish through it (0.7.0); BBR for a viewer off loopback on Linux
 # (0.7.1); StreamServer::draining (0.8.0); a sender that dials its reader, which
@@ -97,7 +97,7 @@ set(VGRID_BUILD_EXAMPLES OFF)
 FetchContent_Declare(
   volumetric_kit_grid
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
-  GIT_TAG 1bf82260f5d753d15249ee587994b2fc749f4641)
+  GIT_TAG 368e1112d66ed4f3200fc8d224fdee3e1603e43f)
 FetchContent_MakeAvailable(volumetric_kit_grid)
 vkc_require_sibling(
   volumetric_kit::grid
@@ -115,33 +115,34 @@ vkc_require_sibling(
 # controls and stats panels (ImGui) and the profiler that times the draw. Its
 # tests, examples and -Werror stay off in a subproject. Its GLFW tier is built
 # for player_desktop alone, so not on iOS: the library links no window system
-# (the top-level CMakeLists.txt checks). The pin is 02482ef, whose OrbitCamera
-# takes a settable world up and has no stop at the poles: the eye passes over
-# the top, the picture upside down, and the view never rolls. Before it, #173's
-# merge (ffc1a17), for HybridMeshFlags' kHybridMeshCullBackFaces and
-# kHybridMeshWireframe (#172), the edges alone (#173), whose line pass needs the
-# device's fillModeNonSolid. Before it, main at #168's merge (df3a0de), whose
-# windows render at 4x MSAA (#167, #168): the swapchain's layout().samples is 4,
-# so the view's pipelines draw multisampled, and the tests' offscreen targets
-# take the view's layout with offscreen_desc. Before it, #166's ui::DockedPanel,
-# which lays out a program's panel and draws its handle and header, on main at
-# #165's merge (928146c), for HybridMeshFrame::viewport, which draws the mesh in
-# the scene's part. What the player uses besides is as at #153's merge
-# (123d013): ui::draw_stage_table's host, wait and GPU columns under a
-# ui::StageWindow, and the frame loop's own wait, submit and present rows;
-# beside them, #150's FIFO present by default, which the view takes, #148's
-# ImGuiOverlayConfig::min_frame_height and ui::begin_collapsible_panel, #146's
-# windowing::SurfaceSource and glfw::Library, #145's ImGuiTouch, #144's sRGB
-# ImGui fix and #143's orbit drag gestures. Since #158,
-# pipelines::HybridMeshTextureSet::create, which makes a set a program's
-# before_draw binds, takes an allocator (HookContext::commit_allocator). The
-# view's pipelines::HybridMeshDraw keeps #160's default, no second view, as the
-# player's meshes carry none, so on Apple GPUs it draws at its cost before #159.
+# (the top-level CMakeLists.txt checks). The pin is gfx main at #176's merge
+# (51a82ad), whose OrbitCamera takes a settable world up and has no stop at the
+# poles: the eye passes over the top, the picture upside down, and the view
+# never rolls. Before it, #173's merge (ffc1a17), for HybridMeshFlags'
+# kHybridMeshCullBackFaces and kHybridMeshWireframe (#172), the edges alone
+# (#173), whose line pass needs the device's fillModeNonSolid. Before it, main
+# at #168's merge (df3a0de), whose windows render at 4x MSAA (#167, #168): the
+# swapchain's layout().samples is 4, so the view's pipelines draw multisampled,
+# and the tests' offscreen targets take the view's layout with offscreen_desc.
+# Before it, #166's ui::DockedPanel, which lays out a program's panel and draws
+# its handle and header, on main at #165's merge (928146c), for
+# HybridMeshFrame::viewport, which draws the mesh in the scene's part. What the
+# player uses besides is as at #153's merge (123d013): ui::draw_stage_table's
+# host, wait and GPU columns under a ui::StageWindow, and the frame loop's own
+# wait, submit and present rows; beside them, #150's FIFO present by default,
+# which the view takes, #148's ImGuiOverlayConfig::min_frame_height and
+# ui::begin_collapsible_panel, #146's windowing::SurfaceSource and
+# glfw::Library, #145's ImGuiTouch, #144's sRGB ImGui fix and #143's orbit drag
+# gestures. Since #158, pipelines::HybridMeshTextureSet::create, which makes a
+# set a program's before_draw binds, takes an allocator
+# (HookContext::commit_allocator). The view's pipelines::HybridMeshDraw keeps
+# #160's default, no second view, as the player's meshes carry none, so on Apple
+# GPUs it draws at its cost before #159.
 set(VG_WITH_GLFW ${VP_DESKTOP_APP})
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  GIT_TAG 02482ef0d93d941aee507eff1f5d61f465fbd816)
+  GIT_TAG 51a82ada4f3b885c7e26ac1bc39e48644d55d2b6)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
 if(VP_BUILD_TESTS)

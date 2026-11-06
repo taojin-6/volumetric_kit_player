@@ -461,10 +461,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   specialized families, which no longer reruns the stats' phone fit or the
   draw row); and the `consumer` builds are a CI step of their own after the
   tests.
-- build: gfx with `OrbitCamera`'s settable world up and no stop at the poles:
-  the eye passes over the top and under the bottom, the picture upside down,
-  and the view never rolls. grid 0.14.0, whose `Session::up` the view keeps,
-  which the player requires.
+- build: gfx at #176's merge (51a82ad), with `OrbitCamera`'s settable world up
+  and no stop at the poles: the eye passes over the top and under the bottom,
+  the picture upside down, and the view never rolls. grid at #23's merge
+  (368e111, 0.14.0), whose `Session::up` the view keeps, which the player
+  requires.
 
 ### Fixed
 
