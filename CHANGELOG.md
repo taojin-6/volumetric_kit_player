@@ -269,7 +269,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   names) and the iOS dialog's Up field set the override.
 - `PlayerView::reset_camera` returns the camera to its start view, on a double
   click or a double tap on the scene; over a program's panel they stay the
-  panel's.
+  panel's. A press dragged away, even back again, is no first click
+  (`DoubleClick::moved`), on the scene or the panel.
 
 ### Changed
 

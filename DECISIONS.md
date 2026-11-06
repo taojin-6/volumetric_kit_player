@@ -38,9 +38,12 @@ is implemented.
   launch takes none, as vp_probe does, so timings hang on no kept setting.
 - **Reset is a double click or a double tap on the scene.** Over a program's
   panel they stay the panel's, and over the controls `ui_wants_pointer` refuses
-  them. On iOS the double tap now takes every touch, with `onPanel` chosen when
-  it is recognized; its `delaysTouchesEnded` stays off, so a tap's end still
-  reaches ImGui at once.
+  them. On iOS the double tap takes every touch, with `onPanel` chosen when it
+  is recognized; its `delaysTouchesEnded` stays off, so a tap's end still
+  reaches ImGui at once. On the desktop a press the pointer, held, took past the
+  click's distance is no first click (`DoubleClick::moved`). Why: a drag is the
+  scene's main gesture, and a flick and back must not reset it; iOS's recognizer
+  already fails on movement.
 
 ## 2026-11-04 — Tests: the round-2 budget
 

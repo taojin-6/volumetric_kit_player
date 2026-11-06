@@ -155,10 +155,13 @@ core::Status run(const cfg::Config& settings, const AppConfig& config,
     double points_x = 0.0;
     double points_y = 0.0;
     glfwGetCursorPos(w, &points_x, &points_y);  // window points, as ImGui's
-    const bool double_click = left && !was_left &&
-                              clicks.press({static_cast<float>(points_x),
-                                            static_cast<float>(points_y)},
-                                           glfwGetTime());
+    const glm::vec2 points(static_cast<float>(points_x),
+                           static_cast<float>(points_y));
+    const bool double_click =
+        left && !was_left && clicks.press(points, glfwGetTime());
+    if (left) {
+      clicks.moved(points);
+    }
     const float height = static_cast<float>(
         view->scene_rect().extent.height > 0 ? view->scene_rect().extent.height
                                              : size.height);

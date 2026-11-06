@@ -43,12 +43,17 @@ class PointerTarget {
 };
 
 /// @brief A desktop's double click: a press within @ref kSeconds and
-///        @ref kPoints of the press before, which ImGui's defaults set.
+///        @ref kPoints of the press before, which ImGui's defaults set, unless
+///        the pointer, held, left @ref kPoints of that press: a drag is no
+///        click.
 ///
 /// @code
 /// DoubleClick clicks;
 /// if (pressed_now && clicks.press(cursor_points, glfwGetTime())) {
 ///   pointer.double_tap = true;
+/// }
+/// if (held) {
+///   clicks.moved(cursor_points);
 /// }
 /// @endcode
 class DoubleClick {
@@ -62,6 +67,11 @@ class DoubleClick {
   /// @return Whether it completes a double click; the press after one starts
   ///         a new pair.
   bool press(glm::vec2 at, double seconds) noexcept;
+
+  /// @brief The pointer while a button is held: past @ref kPoints of the last
+  ///        press, that press was a drag's, and the next press starts a pair.
+  /// @param at  Where, in window points.
+  void moved(glm::vec2 at) noexcept;
 
  private:
   struct Press {

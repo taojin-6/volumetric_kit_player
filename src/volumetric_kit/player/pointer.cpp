@@ -26,4 +26,10 @@ bool DoubleClick::press(glm::vec2 at, double seconds) noexcept {
   return second;
 }
 
+void DoubleClick::moved(glm::vec2 at) noexcept {
+  if (first_ && glm::distance(at, first_->at) > kPoints) {
+    first_.reset();
+  }
+}
+
 }  // namespace volumetric_kit::player
