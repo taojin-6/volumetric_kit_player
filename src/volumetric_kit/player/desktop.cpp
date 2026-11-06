@@ -96,7 +96,8 @@ void on_scroll(GLFWwindow* window, double /*dx*/, double dy) {
   input_of(window).wheel += dy;
 }
 
-core::Status run(const cfg::Config& settings, const AppConfig& config) {
+core::Status run(const cfg::Config& settings, const AppConfig& config,
+                 const DesktopArgs& args) {
   // Refusals before GLFW; a live player does no I/O. A file's audio plays
   // through the platform's output, made at start.
   VKC_ASSIGN(std::unique_ptr<StreamPlayer> player,
@@ -122,7 +123,7 @@ core::Status run(const cfg::Config& settings, const AppConfig& config) {
   VKC_ASSIGN(const std::unique_ptr<PlayerView> view,
              PlayerView::create(surface, vg::glfw::framebuffer_extent(w),
                                 std::move(player),
-                                desktop_view_config(config, settings)));
+                                desktop_view_config(config, settings, args)));
   VKC_ASSIGN(const std::unique_ptr<vg::glfw::ImGuiGlfw> ui,  // goes first
              vg::glfw::ImGuiGlfw::create(w, view->ui_context()));
   input.view = view.get();
@@ -154,10 +155,13 @@ core::Status run(const cfg::Config& settings, const AppConfig& config) {
     double points_x = 0.0;
     double points_y = 0.0;
     glfwGetCursorPos(w, &points_x, &points_y);  // window points, as ImGui's
-    const bool double_click = left && !was_left &&
-                              clicks.press({static_cast<float>(points_x),
-                                            static_cast<float>(points_y)},
-                                           glfwGetTime());
+    const glm::vec2 points(static_cast<float>(points_x),
+                           static_cast<float>(points_y));
+    const bool double_click =
+        left && !was_left && clicks.press(points, glfwGetTime());
+    if (left) {
+      clicks.moved(points);
+    }
     const float height = static_cast<float>(
         view->scene_rect().extent.height > 0 ? view->scene_rect().extent.height
                                              : size.height);
@@ -184,6 +188,9 @@ core::Status run(const cfg::Config& settings, const AppConfig& config) {
       }
       camera.zoom(std::pow(vg::camera::OrbitCamera::kZoomPerNotch,
                            static_cast<float>(input.wheel)));
+      if (double_click) {
+        view->reset_camera();
+      }
     }
     last = cursor;
     was_left = left;
@@ -217,32 +224,36 @@ int report(const core::Status& refused, int exit_code) {
 }  // namespace
 
 PlayerViewConfig desktop_view_config(const AppConfig& config,
-                                     const core::config::Config& scenario) {
+                                     const core::config::Config& scenario,
+                                     const DesktopArgs& args) {
   PlayerViewConfig view = config.view;
   view.validation = scenario.window.validation;
 #ifndef NDEBUG
   view.validation = true;
 #endif
+  if (args.up) {
+    view.up = args.up;
+  }
   return view;
 }
 
 int run_desktop(int argc, char** argv, const AppConfig& config) {
-  const core::Result<cfg::Arguments> args = cfg::parse_args(argc, argv);
+  const core::Result<DesktopArgs> args = parse_desktop_args(argc, argv);
   if (!args.ok()) {
     std::fprintf(stderr, "volumetric_kit_player: %s\n%s",
-                 args.status().message().c_str(), cfg::usage());
+                 args.status().message().c_str(), desktop_usage());
     return 2;
   }
-  if (args.value().help) {
-    std::fputs(cfg::usage(), stdout);
+  if (args->help) {
+    std::fputs(desktop_usage(), stdout);
     return 0;
   }
   const core::Result<cfg::Config> settings =
-      cfg::load(args.value().config_path, cfg::Application::Player);
+      cfg::load(args->config_path, cfg::Application::Player);
   if (!settings.ok()) {
     return report(settings.status(), 2);
   }
-  const core::Status status = run(settings.value(), config);
+  const core::Status status = run(settings.value(), config, *args);
   return status.ok() ? 0 : report(status, 1);
 }
 

@@ -8,6 +8,7 @@
 ///        sender: a worker thread decodes and meshes its frames on the GPU,
 ///        and hands each mesh to the thread that draws it.
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -377,6 +378,11 @@ class StreamPlayer {
   /// @return A live player's connection, under the mutex, so safe from any
   ///         thread; a file's is never anything but the default.
   LiveStatus live_status() const;
+  /// @return The world's up its stream's session names, as grid has it
+  ///         (grid::stream::Session::up: all zero for none): a file's from
+  ///         open; live, the newest session's, kept while it reconnects. Under
+  ///         the mutex, so safe from any thread.
+  std::array<float, 3> world_up() const;
   /// @return A live player's playout clock (live_clock.hpp), which lives as
   ///         long as the player; null for a file.
   const LiveClock* live_clock() const noexcept {
@@ -819,6 +825,7 @@ class StreamPlayer {
   std::uint64_t last_pts_ns_ = 0;  // the last frame shown
   bool last_by_step_ = false;      // it went by a step
   LiveStatus live_status_;
+  std::array<float, 3> world_up_{};  // world_up()
   core::Status status_;
 };
 

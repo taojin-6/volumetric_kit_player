@@ -284,7 +284,8 @@ StreamPlayer::StreamPlayer(std::unique_ptr<stream::StreamReader> reader,
       audio_track_(std::move(audio)),
       make_audio_(std::move(make_audio)),
       clock_(reader_->session().tracks[track].rate.num,
-             reader_->session().tracks[track].rate.den) {}
+             reader_->session().tracks[track].rate.den),
+      world_up_(reader_->session().up) {}
 
 StreamPlayer::StreamPlayer(LiveAddress address, AudioOutMaker make_audio)
     : address_(std::move(address)), clock_(0, 0) {
@@ -313,6 +314,11 @@ stream::Rate StreamPlayer::rate() const noexcept {
 LiveStatus StreamPlayer::live_status() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return live_status_;
+}
+
+std::array<float, 3> StreamPlayer::world_up() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return world_up_;
 }
 
 core::Status StreamPlayer::start(core::Device& device,
@@ -1053,6 +1059,7 @@ core::Result<bool> StreamPlayer::read_records(networking::StreamClient& client,
       }
       std::lock_guard<std::mutex> lock(mutex_);
       live_status_.state = LiveState::kConnected;
+      world_up_ = session.up;
     }
     if (!*got) {
       break;

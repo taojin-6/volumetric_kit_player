@@ -59,7 +59,8 @@ namespace volumetric_kit::player {
 /// `config.view.device_requirements`, as the view's. The command line's
 /// settings replace `config.view`'s: validation, device timing, tile depth,
 /// labels, vertex sharing and whether the panel is open at start
-/// (@ref probe_view_config).
+/// (@ref probe_view_config). It names no world up, so the view keeps the
+/// stream's or a program's `config.view.up`.
 ///
 /// @code
 /// int main(int argc, char** argv) {

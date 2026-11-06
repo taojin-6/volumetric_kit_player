@@ -3,11 +3,13 @@
 
 #include "volumetric_kit/player/player_view.hpp"
 
+#include <cmath>
 #include <utility>
 
 #include <glm/geometric.hpp>
 #include <glm/mat3x3.hpp>
 #include <glm/matrix.hpp>
+#include <glm/vec3.hpp>
 
 #include "imgui.h"
 #include "volumetric_kit/core/base/exception_status.hpp"
@@ -41,6 +43,9 @@ pipelines::LiveMesh live_mesh(const grid::mesh::DeviceMesh& mesh) {
   return live;
 }
 
+// In double, as squaring a float up underflows or overflows at extreme lengths.
+double length_of(const glm::vec3& up) { return glm::length(glm::dvec3(up)); }
+
 }  // namespace
 
 core::Result<core::DeviceRequirements> worker_requirements(
@@ -72,6 +77,15 @@ glm::vec3 headlight(const glm::mat4& view) {
   return glm::normalize(glm::transpose(glm::mat3(view)) * in_view);
 }
 
+glm::vec3 view_up(const std::optional<glm::vec3>& given,
+                  const std::array<float, 3>& stream) noexcept {
+  const glm::vec3 up =
+      given.value_or(stream == std::array<float, 3>{}
+                         ? glm::vec3(0.0f, 1.0f, 0.0f)
+                         : glm::vec3(stream[0], stream[1], stream[2]));
+  return glm::vec3(glm::dvec3(up) / length_of(up));
+}
+
 core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
     const gfx::windowing::SurfaceSource& surface, VkExtent2D extent,
     std::unique_ptr<StreamPlayer> player, const PlayerViewConfig& config) try {
@@ -81,6 +95,13 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
   if (extent.width == 0 || extent.height == 0) {
     return core::Status::invalid_argument(
         "PlayerView::create needs a drawable of at least 1 x 1");
+  }
+  if (config.up) {
+    const double length = length_of(*config.up);
+    if (!std::isfinite(length) || length == 0.0) {
+      return core::Status::invalid_argument(
+          "PlayerView::create needs an up that is finite and not zero");
+    }
   }
   app::WindowedAppConfig app_config;
   app_config.swapchain = view_swapchain(extent, player->live());
@@ -131,8 +152,9 @@ core::Result<std::unique_ptr<PlayerView>> PlayerView::create(
                      std::move(profiler), std::move(grid_device),
                      std::move(grid_allocator), std::move(mesh_pipeline),
                      std::move(overlay), wiring.exchange, std::move(player)));
-  view->camera_.set_target({0.0f, 0.85f, 0.0f});
-  view->camera_.set_distance(3.0f);
+  view->given_up_ = config.up;
+  view->up_ = view_up(config.up, view->player_->world_up());
+  view->reset_camera();
   view->source_button_ = config.source_button;
   view->textured_ = config.textured;
   view->panel_ = gfx::ui::DockedPanel(config.panel);
@@ -197,6 +219,14 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
   VKC_TRY(hook_failure_);
   // An interruption, or the audio's device gone, pauses the player.
   player_->follow_audio();
+  // A live session arrives after create, and a reconnect may bring another
+  // world. Against up_, not the camera's up: each side is view_up's own result,
+  // so the same session compares equal, bit for bit, and a drag stays.
+  const glm::vec3 up = view_up(given_up_, player_->world_up());
+  if (up != up_) {
+    up_ = up;
+    reset_camera();
+  }
   // 1. The draw is timed as the worker is, while the stats show it as of the
   // last frame: gfx's profiler marks every frame it is attached to, so it is
   // attached only then, in its place (the loop keeps its address; the
@@ -354,6 +384,14 @@ core::Result<bool> PlayerView::frame(VkExtent2D extent) try {
 const gfx::FrameMetrics& PlayerView::render_metrics() const noexcept {
   static const gfx::FrameMetrics kUnprofiled;
   return profiled_ ? profiler_.metrics() : kUnprofiled;
+}
+
+void PlayerView::reset_camera() noexcept {
+  camera_.set_world_up(up_);
+  camera_.set_target(0.85f * up_);
+  camera_.set_distance(3.0f);
+  camera_.set_azimuth(0.0f);
+  camera_.set_elevation(0.0f);
 }
 
 std::uint32_t PlayerView::mesh_flags() const noexcept {

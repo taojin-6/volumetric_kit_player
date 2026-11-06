@@ -36,7 +36,12 @@
 // it and staying; a binding of no set applies with Texture off as on; Back
 // faces' culling and the wireframe set the mesh's flags; the headlight lights
 // what faces the viewer from every side, on the device, and from cameras in
-// worlds of any axes, on the host (headlight); a commit hook holds and skips
+// worlds of any axes, upside down too, on the host (headlight); the view keeps
+// the up of its override, else its stream, else +y (view_up, on the host), and
+// refuses an override that is zero or not finite, a stream's up stands the mesh
+// upright, a live session's is taken when it arrives, and a drag after that
+// stays, as it does over a reconnect to the same up, while one to another is a
+// new start view; reset_camera returns to it; a commit hook holds and skips
 // frames; the hooks' stats line is the stats' last; and a before_draw failure
 // stops the view. A program's panel (FrameHooks::panel), open, docks right on a
 // landscape drawable and at the bottom on a portrait one, or where its content
@@ -74,6 +79,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -157,6 +163,7 @@ using volumetric_kit::player::StatsPanel;
 using volumetric_kit::player::status_line;
 using volumetric_kit::player::StreamPlayer;
 using volumetric_kit::player::view_swapchain;
+using volumetric_kit::player::view_up;
 using volumetric_kit::player::worker_requirements;
 using SteadyClock = std::chrono::steady_clock;
 using DockSide = volumetric_kit::gfx::ui::DockSide;
@@ -351,10 +358,9 @@ class PlayerViewTest : public core::test::VulkanTest {
     VulkanTest::TearDown();
   }
 
-  // The view's config: at `ui_scale_` and `ui_min_frame_height_`, with
-  // Source while `source_button_`, validated as the test policy asks,
-  // Texture as `textured_` and with `make_hooks_`'s hooks and
-  // `device_requirements_`.
+  // The view's config: at `ui_scale_` and `ui_min_frame_height_`, with Source
+  // while `source_button_`, validated as the test policy asks, Texture as
+  // `textured_`, with `make_hooks_`'s hooks, `device_requirements_` and `up_`.
   PlayerViewConfig config() {
     PlayerViewConfig config;
     config.ui_scale = ui_scale_;
@@ -367,6 +373,7 @@ class PlayerViewTest : public core::test::VulkanTest {
     config.textured = textured_;
     config.panel = panel_;
     config.device_requirements = device_requirements_;
+    config.up = up_;
     if (make_hooks_) {
       // The context's devices and pipeline noted, for the test's own work on
       // them; they live as long as the view.
@@ -778,6 +785,7 @@ class PlayerViewTest : public core::test::VulkanTest {
   bool share_vertices_ = PlayerViewConfig{}.share_vertices;
   bool textured_ = PlayerViewConfig{}.textured;
   gfx::ui::DockedPanelConfig panel_ = PlayerViewConfig{}.panel;
+  std::optional<glm::vec3> up_ = PlayerViewConfig{}.up;
   MakeHooks make_hooks_;  // the view's hooks, with the context noted
   // mesh_pixel's pixel, from the middle, in pixels, +y down: the middle
   // unless a test moves it.
@@ -829,6 +837,19 @@ TEST_F(PlayerViewTest, CreateRefusesWhatItCannotUse) {
   EXPECT_EQ(no_height.domain(), core::Status::Code::InvalidArgument);
   EXPECT_NE(no_height.message().find("min_frame_height"), std::string::npos)
       << no_height.message();
+
+  for (const glm::vec3& up :
+       {glm::vec3(0.0f), glm::vec3(0.0f, std::nanf(""), 1.0f),
+        glm::vec3(0.0f, 0.0f, std::numeric_limits<float>::infinity())}) {
+    PlayerViewConfig unrooted = config();
+    unrooted.up = up;
+    const core::Status no_up =
+        PlayerView::create(surface_, kExtent, open(), unrooted).status();
+    EXPECT_EQ(no_up.domain(), core::Status::Code::InvalidArgument);
+    EXPECT_NE(no_up.message().find("an up that is finite and not zero"),
+              std::string::npos)
+        << no_up.message();
+  }
 
   // start refuses a stopped player, and the view goes with no worker.
   std::unique_ptr<StreamPlayer> stopped = open();
@@ -1301,9 +1322,11 @@ TEST_F(PlayerViewTest, ATapOnSourceIsOneRequest) {
 // record, past a refresh so the stats hold a frame's figures, with
 // kProgramLine, the longest a program's line may be: the renderer's table has
 // the draw row and its loop's frame wait and present, and they fit the phone
-// (expect_stats_fit). Then a file view's, whose worker column is its own (its
-// three stages, the read row among them), on the landscape phone, where a
-// fourth line in that column runs the stats over the controls.
+// (expect_stats_fit). Its session names +z: the camera takes that up and the
+// start view about it when the session arrives, and a drag after that stays.
+// Then a file view's, whose worker column is its own (its three stages, the
+// read row among them), on the landscape phone, where a fourth line in that
+// column runs the stats over the controls.
 TEST_F(PlayerViewTest, ALiveViewsStatsFitAPhone) {
   size_as_a_phone();
   core::Result<std::unique_ptr<grid::stream::StreamReader>> reader =
@@ -1317,11 +1340,19 @@ TEST_F(PlayerViewTest, ALiveViewsStatsFitAPhone) {
     grid::networking::ServerOptions options;
     options.host = "127.0.0.1";
     options.port = 0;  // a free one: other tests serve at the same time
+    grid::stream::Session session = (*reader)->session();
+    session.up = {0.0f, 0.0f, 1.0f};
     core::Result<std::unique_ptr<grid::networking::StreamServer>> server =
-        grid::networking::StreamServer::start((*reader)->session(), options);
+        grid::networking::StreamServer::start(session, options);
     ASSERT_TRUE(server.ok()) << server.status().message();
     ASSERT_TRUE(make_live_view(**reader, **server));
+    EXPECT_EQ(view_->camera().world_up(), glm::vec3(0.0f, 0.0f, 1.0f));
+    EXPECT_EQ(view_->camera().target(), glm::vec3(0.0f, 0.0f, 0.85f));
+    view_->camera().drag_orbit({0.1f, 0.0f});
+    const float azimuth = view_->camera().azimuth();
+    EXPECT_NE(azimuth, 0.0f);
     tick_for(2 * StatsPanel::kRefresh);
+    EXPECT_EQ(view_->camera().azimuth(), azimuth) << "the drag stays";
     ImGui::SetCurrentContext(view_->ui_context());
     EXPECT_EQ(stats_rows("render"), 3);
     expect_stats_fit();
@@ -1613,10 +1644,11 @@ struct Pose {
   glm::vec3 target;
 };
 
-// The view's orbit camera round `target` at the given angles.
+// The view's orbit camera round `target` at the given angles about `up`.
 Pose orbit_pose(const char* name, const glm::vec3& target, float azimuth,
-                float elevation) {
+                float elevation, const glm::vec3& up = {0.0f, 1.0f, 0.0f}) {
   gfx::camera::OrbitCamera orbit;
+  orbit.set_world_up(up);
   orbit.set_target(target);
   orbit.set_distance(2.5f);
   orbit.set_azimuth(azimuth);
@@ -1634,10 +1666,11 @@ Pose upright_pose(const char* name, const glm::vec3& eye,
 
 // From each pose, in a world with +y up, one with +z up and a rig's, its
 // first camera's own frame (+y down, +z forward), as the view's orbit camera
-// takes them or upright in that world, the light is a unit direction on the
-// viewer's side (dot(light, eye - target) > 0): a surface that faces the
-// viewer is lit to over 0.85 of full, and its back not at all; and it comes
-// from above, left of and toward the eye (in view space, x < 0, y > 0, z > 0).
+// takes them, upside down past a pole too, or upright in that world, the light
+// is a unit direction on the viewer's side (dot(light, eye - target) > 0): a
+// surface that faces the viewer is lit to over 0.85 of full, and its back not
+// at all; and it comes from above, left of and toward the eye (in view space,
+// x < 0, y > 0, z > 0).
 TEST(Headlight, LightsWhatFacesTheViewerWhateverTheWorldsAxes) {
   const glm::vec3 y_up{0.0f, 0.85f, 0.0f};
   const glm::vec3 z_up{0.0f, 0.0f, 0.9f};
@@ -1645,6 +1678,11 @@ TEST(Headlight, LightsWhatFacesTheViewerWhateverTheWorldsAxes) {
   const Pose poses[] = {
       orbit_pose("+y up, the view's first", y_up, 0.0f, 0.0f),
       orbit_pose("+y up, from above and behind", y_up, 2.5f, 1.2f),
+      orbit_pose("+y up, upside down past the top", y_up, 0.5f, 2.2f),
+      orbit_pose("+z up, the view's first", z_up, 0.0f, 0.0f,
+                 {0.0f, 0.0f, 1.0f}),
+      orbit_pose("+z up, upside down past the bottom", z_up, -1.0f, -2.5f,
+                 {0.0f, 0.0f, 1.0f}),
       upright_pose("+z up", {2.5f, -2.0f, 1.6f}, z_up, {0.0f, 0.0f, 1.0f}),
       upright_pose("+z up, from below", {-1.0f, 1.5f, -1.2f}, z_up,
                    {0.0f, 0.0f, 1.0f}),
@@ -1667,6 +1705,31 @@ TEST(Headlight, LightsWhatFacesTheViewerWhateverTheWorldsAxes) {
     EXPECT_LT(in_view.x, 0.0f) << "left of the eye";
     EXPECT_GT(in_view.y, 0.0f) << "above it";
     EXPECT_GT(in_view.z, 0.0f) << "toward it";
+  }
+}
+
+// The up a view keeps: the given over the stream's over +y. A stream's all zero
+// names none, and each comes out unit, whatever its length.
+TEST(ViewUp, TheGivenOverTheStreamsOverPlusY) {
+  const glm::vec3 y(0.0f, 1.0f, 0.0f);
+  const glm::vec3 z(0.0f, 0.0f, 1.0f);
+  const glm::vec3 minus_x(-1.0f, 0.0f, 0.0f);
+  const std::array<float, 3> none{};
+  const std::array<float, 3> named{0.0f, 0.0f, 1.0f};
+  EXPECT_EQ(view_up(std::nullopt, none), y);
+  EXPECT_EQ(view_up(std::nullopt, {-0.0f, -0.0f, -0.0f}), y);
+  EXPECT_EQ(view_up(std::nullopt, named), z);
+  EXPECT_EQ(view_up(minus_x, none), minus_x);
+  EXPECT_EQ(view_up(minus_x, named), minus_x);
+  EXPECT_EQ(view_up(std::nullopt, {0.0f, 0.0f, 1.00009f}), z);
+  const float most = std::numeric_limits<float>::max();
+  for (const float length :
+       {2.0f, 1e-30f, most, std::numeric_limits<float>::denorm_min()}) {
+    EXPECT_EQ(view_up(length * z, none), z) << length;
+  }
+  for (const glm::vec3& given :
+       {glm::vec3(1.0f, 2.0f, 3.0f), glm::vec3(most), glm::vec3(1e-30f)}) {
+    EXPECT_NEAR(glm::length(view_up(given, named)), 1.0f, 1e-6f);
   }
 }
 
@@ -2231,6 +2294,188 @@ TEST_F(PlayerViewTest, TheHeadlightLightsWhatFacesTheViewerFromEverySide) {
   }
   EXPECT_TRUE(view_->player().status().ok())
       << view_->player().status().message();
+}
+
+// The start view about the up the view keeps, as create aims it: with none
+// named, as a view has always had it; with +z, the eye on the world's -y side,
+// each 3 m from the point 0.85 m up the up from the origin, level, the world's
+// +x to the right. reset_camera brings it back, bit for bit, from past a pole,
+// panned and zoomed.
+TEST_F(PlayerViewTest, ResetCameraReturnsToTheStartView) {
+  struct Case {
+    const char* name;
+    std::optional<glm::vec3> up;
+    glm::vec3 eye;
+    glm::vec3 screen_up;
+  };
+  const Case cases[] = {
+      {"none named: +y", std::nullopt, {0.0f, 0.85f, 3.0f}, {0.0f, 1.0f, 0.0f}},
+      {"+z",
+       glm::vec3(0.0f, 0.0f, 1.0f),
+       {0.0f, -3.0f, 0.85f},
+       {0.0f, 0.0f, 1.0f}},
+  };
+  for (const Case& given : cases) {
+    SCOPED_TRACE(given.name);
+    touch_.reset();
+    view_.reset();
+    up_ = given.up;
+    ASSERT_TRUE(make_view(/*playing=*/false));
+    gfx::camera::OrbitCamera& camera = view_->camera();
+    const glm::mat4 start = camera.view();
+    const glm::vec3 right(start[0][0], start[1][0], start[2][0]);
+    const glm::vec3 screen_up(start[0][1], start[1][1], start[2][1]);
+    for (int i = 0; i < 3; ++i) {
+      EXPECT_NEAR(camera.eye()[i], given.eye[i], 1e-5f) << i;
+      EXPECT_NEAR(right[i], i == 0 ? 1.0f : 0.0f, 1e-5f) << i;
+      EXPECT_NEAR(screen_up[i], given.screen_up[i], 1e-5f) << i;
+    }
+    camera.drag_orbit({0.3f, 0.7f});
+    camera.drag_pan({0.1f, 0.2f}, PlayerView::kFovY);
+    camera.zoom(0.5f);
+    ASSERT_TRUE(present());
+    EXPECT_NE(camera.view(), start);
+    view_->reset_camera();
+    EXPECT_EQ(camera.view(), start);
+    EXPECT_EQ(camera.distance(), 3.0f);
+    ASSERT_TRUE(present());
+    EXPECT_EQ(camera.view(), start);
+  }
+}
+
+// A stream's up, with no override, stands the view upright: a file whose
+// session names +z, in Normals, which colours each pixel by its world normal
+// (+x red, +y green, +z blue), under the camera aimed at the sphere from 0.6 m,
+// level (aim_at). Above the picture's middle the normal leans up the up, below
+// it down, so that axis's colour is well over half there and well under here.
+// An override of y over it shows +y's green the same way. On the true-SDF
+// stream, which masks no voxel, so no side looks through a hole.
+TEST_F(PlayerViewTest, AStreamsUpStandsTheViewUpright) {
+  make_hooks_ = [](const HookContext&) {
+    return core::Result<FrameHooks>(FrameHooks{});
+  };
+  const std::string plain =
+      scratch_.copy(VP_TEST_STREAMS, vp_test::kTrueSdfStream);
+  ASSERT_FALSE(plain.empty());
+  const std::string path = scratch_.file("z_up.vrst");
+  const core::Status copied =
+      vp_test::copy_with_up(plain, path, {0.0f, 0.0f, 1.0f});
+  ASSERT_TRUE(copied.ok()) << copied.message();
+  struct Case {
+    const char* name;
+    std::optional<glm::vec3> up;
+    std::size_t colour;  // the up axis's: R, G or B
+  };
+  const Case cases[] = {{"the stream's +z", std::nullopt, 2},
+                        {"an override of +y", glm::vec3(0.0f, 1.0f, 0.0f), 1}};
+  for (const Case& given : cases) {
+    SCOPED_TRACE(given.name);
+    touch_.reset();
+    view_.reset();
+    context_.reset();
+    up_ = given.up;
+    ASSERT_TRUE(make_view(path, /*playing=*/false));
+    view_->player().step();
+    ASSERT_TRUE(tick_until([&] { return view_->shown().has_value(); }));
+    aim_at(view_->shown()->index);
+    view_->set_normals(true);
+    ASSERT_TRUE(present());
+    // 10 pixels above and below the middle of mesh_pixel's 64: about 0.6 of
+    // the normal along the up, so a colour of about 0.8 and 0.2.
+    probe_ = {0, -10};
+    const std::vector<int> above = mesh_pixel();
+    probe_ = {0, 10};
+    const std::vector<int> below = mesh_pixel();
+    ASSERT_EQ(above.size(), 4u);
+    ASSERT_EQ(below.size(), 4u);
+    EXPECT_GT(above[given.colour], 170) << "the normal leans up the up";
+    EXPECT_LT(below[given.colour], 85) << "and down it below";
+  }
+}
+
+// The view takes an up once: a drag stays over the frames after it. This up's
+// unit vector, normalized again as the camera does, comes out in other bits,
+// so a view comparing its up with the camera's would aim again every frame.
+TEST_F(PlayerViewTest, ADragStaysOverTheFramesAfterIt) {
+  up_ = glm::vec3(6.0f, 7.0f, 9.0f);
+  ASSERT_TRUE(make_view(/*playing=*/false));
+  view_->camera().drag_orbit({0.1f, 0.1f});
+  const float azimuth = view_->camera().azimuth();
+  const float elevation = view_->camera().elevation();
+  EXPECT_NE(azimuth, 0.0f);
+  EXPECT_NE(elevation, 0.0f);
+  ASSERT_TRUE(present());
+  ASSERT_TRUE(present());
+  EXPECT_EQ(view_->camera().azimuth(), azimuth);
+  EXPECT_EQ(view_->camera().elevation(), elevation);
+}
+
+// A live view's camera holds while the player retries. A new sender naming the
+// same up leaves it, a drag and a zoom included; one naming another up is the
+// start view about that up.
+TEST_F(PlayerViewTest,
+       AReconnectToAnotherUpIsANewStartViewToTheSameKeepsADrag) {
+  core::Result<std::unique_ptr<grid::stream::StreamReader>> reader =
+      grid::stream::StreamReader::open(path_);
+  ASSERT_TRUE(reader.ok()) << reader.status().message();
+  grid::stream::Session session = (*reader)->session();
+  session.up = {0.0f, 0.0f, 1.0f};
+  grid::networking::ServerOptions options;
+  options.host = "127.0.0.1";
+  options.port = 0;  // a free one: other tests serve at the same time
+  core::Result<std::unique_ptr<grid::networking::StreamServer>> first =
+      grid::networking::StreamServer::start(session, options);
+  ASSERT_TRUE(first.ok()) << first.status().message();
+  std::unique_ptr<grid::networking::StreamServer> server =
+      std::move(first).value();
+  ASSERT_TRUE(make_live_view(**reader, *server));
+  options.port = server->port();
+  gfx::camera::OrbitCamera& camera = view_->camera();
+  camera.drag_orbit({0.1f, 0.05f});
+  camera.zoom(0.5f);
+  const float azimuth = camera.azimuth();
+  const float elevation = camera.elevation();
+  const float distance = camera.distance();
+  EXPECT_NE(azimuth, 0.0f);
+  EXPECT_NE(elevation, 0.0f);
+  EXPECT_NE(distance, 3.0f);
+  const auto reconnect = [&](const std::array<float, 3>& up) {
+    server.reset();
+    ASSERT_TRUE(tick_until([&] {
+      return view_->player().live_status().state == LiveState::kConnecting;
+    }));
+    EXPECT_EQ(camera.azimuth(), azimuth) << "held while it retries";
+    session.up = up;
+    core::Result<std::unique_ptr<grid::networking::StreamServer>> next =
+        grid::networking::StreamServer::start(session, options);
+    ASSERT_TRUE(next.ok()) << next.status().message();
+    server = std::move(next).value();
+    ASSERT_TRUE(tick_until([&] {
+      return view_->player().live_status().state == LiveState::kConnected;
+    }));
+    ASSERT_TRUE(present());
+  };
+  {
+    SCOPED_TRACE("the same up");
+    ASSERT_NO_FATAL_FAILURE(reconnect({0.0f, 0.0f, 1.0f}));
+    EXPECT_EQ(camera.world_up(), glm::vec3(0.0f, 0.0f, 1.0f));
+    EXPECT_EQ(camera.azimuth(), azimuth);
+    EXPECT_EQ(camera.elevation(), elevation);
+    EXPECT_EQ(camera.distance(), distance);
+  }
+  {
+    SCOPED_TRACE("another up");
+    ASSERT_NO_FATAL_FAILURE(reconnect({0.0f, -1.0f, 0.0f}));
+    EXPECT_EQ(camera.world_up(), glm::vec3(0.0f, -1.0f, 0.0f));
+    EXPECT_EQ(camera.target(), glm::vec3(0.0f, -0.85f, 0.0f));
+    EXPECT_EQ(camera.azimuth(), 0.0f);
+    EXPECT_EQ(camera.elevation(), 0.0f);
+    EXPECT_EQ(camera.distance(), 3.0f);
+    EXPECT_NEAR(camera.eye().z, -3.0f, 1e-5f);
+  }
+  // The view goes before its sender.
+  touch_.reset();
+  view_.reset();
 }
 
 // A commit hook that skips frame 2 and holds frame 3 for five asks, through

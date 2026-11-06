@@ -84,6 +84,14 @@ play_file.json's `source.path` to point at a `.vrst`, or put one at
   --config "$root/config/examples/play_file.json"
 ```
 
+The camera orbits about the world's up and keeps it up on screen, with no stop
+at the top or the bottom: past them the picture is upside down. The up is the
+one the stream names (grid's `Session::up`), or +y for a stream that names
+none. `--up-axis AXIS`, one of `x`, `y`, `z`, `-x`, `-y` or `-z`, sets it over
+the stream's, such as `z` for a recording in a rig's tag world that names none.
+The start view is level, 3 m from the point 0.85 m up it from the world's
+origin.
+
 A Debug build runs under the Khronos validation layer, and a Release build
 when the scenario's `window.validation` is true. On macOS, put Homebrew's
 layer on the search path, as the tests do (AGENTS.md):
@@ -133,6 +141,7 @@ are the panel's shortcuts:
 | Left drag | orbits the camera |
 | Right drag | pans it |
 | Wheel | zooms |
+| Double click (on the scene) | returns the camera to its start view |
 | Space | plays or pauses |
 | Right arrow | steps one frame |
 | L | turns looping on or off |
@@ -238,9 +247,11 @@ shows whether the signed app has it.
 Source, at the top right, opens iOS's dialog: Connect plays the sender at
 Host and Port, on the sender's default port when Port is empty, and Play
 file, offered while the app's folder holds a `.vrst`, plays the first one,
-by name. What the dialog refuses it shows with why, keeping what was typed.
-The app remembers the choice: at launch it connects to the last sender, if
-that was the choice, or else plays the first `.vrst`. For the lab's sender
+by name. Up is the world's up axis over the stream's, as `--up-axis` takes
+it: empty means the stream's, and a typed axis holds for every file and sender
+until cleared. What the dialog refuses it shows with why, keeping what was
+typed. The app remembers the choice: at launch it connects to the last sender,
+if that was the choice, or else plays the first `.vrst`. For the lab's sender
 (above), put the phone on the VPN or the sender's network. On the sender's
 network, not over the VPN, the first connection asks for local network
 access; once refused, Settings › Privacy & Security › Local Network allows
@@ -267,7 +278,8 @@ Unless a sender is the choice, the app looks each time it builds its view,
 and with no `.vrst` asks: at launch, on a choice, and on coming back to the
 foreground with nothing playing. A file plays with loop on. A tap works the
 panel, Source and the stats' header, one finger orbits the camera, two pan
-it, and a pinch zooms, each but over a program's panel.
+it, a pinch zooms, and a double tap returns it to its start view, each but over
+a program's panel.
 
 It logs the view's bring-up time, each park's wait and any failure, which
 Console.app shows. The owner checks the app on a device by hand
