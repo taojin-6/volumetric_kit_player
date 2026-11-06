@@ -20,10 +20,9 @@
 // arguments parse with the system's left alone, the tile depth, the labels
 // and the vertex sharing too, and what is wrong is named; the timings',
 // depths' and switches' names round-trip, and the core's up axes parse. On a
-// device: its line names it, its
-// driver, the core's memory facts, its timestamps and its clocks' calibration,
-// each as the device says, and its rings run in place exactly where its
-// device-mapped memory is cached.
+// device: its line names it, its driver, the core's memory facts, its
+// timestamps and its clocks' calibration, each as the device says, and its
+// rings run in place exactly where its device-mapped memory is cached.
 
 #include "volumetric_kit/player/measure_log.hpp"
 

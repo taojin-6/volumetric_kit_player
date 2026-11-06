@@ -5,19 +5,19 @@
 // call of run_desktop (desktop.hpp). A command line parse_desktop_args
 // refuses, the core's parse_args' refusals and the old one's included, and a
 // bad --up-axis, exits 2 with its message and the usage on stderr; --help and
-// -h exit 0 with the usage on stdout. A scenario the core
-// cannot load, or refuses, exits 2 with its message. One it loads runs: a
-// missing stream and a file that is not one exit 1 with StreamPlayer::open's
-// refusal and nothing else, before glfwInit. Each runs with VP_NO_WINDOW set,
-// which stops the app just before glfwInit with a refusal that names what the
-// window would play, its title (DECISIONS.md); a stream that opens, and a live
-// scenario, which nothing refuses, exit 1 with that refusal. A run not back
-// within kPrompt, as a window's loop would not be, is killed and fails the
-// test. On the host: the command line (parse_desktop_args), --up-axis once
-// anywhere and the rest the core's; the view's settings run_desktop plays a
-// scenario with (desktop_view_config), the program's with the scenario's
-// validation and --up-axis's up; the scenarios in config/examples/, and
-// parse_count, which vp_probe's --frames takes.
+// -h exit 0 with the usage on stdout. A scenario the core cannot load, or
+// refuses, exits 2 with its message. One it loads runs: a missing stream and a
+// file that is not one exit 1 with StreamPlayer::open's refusal and nothing
+// else, before glfwInit. Each runs with VP_NO_WINDOW set, which stops the app
+// just before glfwInit with a refusal that names what the window would play,
+// its title (DECISIONS.md); a stream that opens, and a live scenario, which
+// nothing refuses, exit 1 with that refusal. A run not back within kPrompt, as
+// a window's loop would not be, is killed and fails the test. On the host: the
+// command line (parse_desktop_args), --up-axis once anywhere and the rest the
+// core's; the view's settings run_desktop plays a scenario with
+// (desktop_view_config), the program's with the scenario's validation and
+// --up-axis's up; the scenarios in config/examples/, and parse_count, which
+// vp_probe's --frames takes.
 
 #include <gtest/gtest.h>
 #include <poll.h>

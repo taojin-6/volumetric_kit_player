@@ -250,8 +250,8 @@ file, offered while the app's folder holds a `.vrst`, plays the first one,
 by name. Up is the world's up axis over the stream's, as `--up-axis` takes
 it: empty means the stream's, and a typed axis holds for every file and sender
 until cleared. What the dialog refuses it shows with why, keeping what was
-typed. The app remembers the choice: at launch it connects to the last sender, if
-that was the choice, or else plays the first `.vrst`. For the lab's sender
+typed. The app remembers the choice: at launch it connects to the last sender,
+if that was the choice, or else plays the first `.vrst`. For the lab's sender
 (above), put the phone on the VPN or the sender's network. On the sender's
 network, not over the VPN, the first connection asks for local network
 access; once refused, Settings › Privacy & Security › Local Network allows

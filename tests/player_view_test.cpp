@@ -40,7 +40,8 @@
 // the up of its override, else its stream, else +y (view_up, on the host), and
 // refuses an override that is zero or not finite, a stream's up stands the mesh
 // upright, a live session's is taken when it arrives, and a drag after that
-// stays; reset_camera returns to the start view; a commit hook holds and skips
+// stays, as it does over a reconnect to the same up, while one to another is a
+// new start view; reset_camera returns to it; a commit hook holds and skips
 // frames; the hooks' stats line is the stats' last; and a before_draw failure
 // stops the view. A program's panel (FrameHooks::panel), open, docks right on a
 // landscape drawable and at the bottom on a portrait one, or where its content
@@ -357,10 +358,9 @@ class PlayerViewTest : public core::test::VulkanTest {
     VulkanTest::TearDown();
   }
 
-  // The view's config: at `ui_scale_` and `ui_min_frame_height_`, with
-  // Source while `source_button_`, validated as the test policy asks,
-  // Texture as `textured_`, with `make_hooks_`'s hooks,
-  // `device_requirements_` and `up_`.
+  // The view's config: at `ui_scale_` and `ui_min_frame_height_`, with Source
+  // while `source_button_`, validated as the test policy asks, Texture as
+  // `textured_`, with `make_hooks_`'s hooks, `device_requirements_` and `up_`.
   PlayerViewConfig config() {
     PlayerViewConfig config;
     config.ui_scale = ui_scale_;
@@ -1668,9 +1668,9 @@ Pose upright_pose(const char* name, const glm::vec3& eye,
 // first camera's own frame (+y down, +z forward), as the view's orbit camera
 // takes them, upside down past a pole too, or upright in that world, the light
 // is a unit direction on the viewer's side (dot(light, eye - target) > 0): a
-// surface that faces the
-// viewer is lit to over 0.85 of full, and its back not at all; and it comes
-// from above, left of and toward the eye (in view space, x < 0, y > 0, z > 0).
+// surface that faces the viewer is lit to over 0.85 of full, and its back not
+// at all; and it comes from above, left of and toward the eye (in view space,
+// x < 0, y > 0, z > 0).
 TEST(Headlight, LightsWhatFacesTheViewerWhateverTheWorldsAxes) {
   const glm::vec3 y_up{0.0f, 0.85f, 0.0f};
   const glm::vec3 z_up{0.0f, 0.0f, 0.9f};
@@ -2408,6 +2408,74 @@ TEST_F(PlayerViewTest, ADragStaysOverTheFramesAfterIt) {
   ASSERT_TRUE(present());
   EXPECT_EQ(view_->camera().azimuth(), azimuth);
   EXPECT_EQ(view_->camera().elevation(), elevation);
+}
+
+// A live view's camera holds while the player retries. A new sender naming the
+// same up leaves it, a drag and a zoom included; one naming another up is the
+// start view about that up.
+TEST_F(PlayerViewTest,
+       AReconnectToAnotherUpIsANewStartViewToTheSameKeepsADrag) {
+  core::Result<std::unique_ptr<grid::stream::StreamReader>> reader =
+      grid::stream::StreamReader::open(path_);
+  ASSERT_TRUE(reader.ok()) << reader.status().message();
+  grid::stream::Session session = (*reader)->session();
+  session.up = {0.0f, 0.0f, 1.0f};
+  grid::networking::ServerOptions options;
+  options.host = "127.0.0.1";
+  options.port = 0;  // a free one: other tests serve at the same time
+  core::Result<std::unique_ptr<grid::networking::StreamServer>> first =
+      grid::networking::StreamServer::start(session, options);
+  ASSERT_TRUE(first.ok()) << first.status().message();
+  std::unique_ptr<grid::networking::StreamServer> server =
+      std::move(first).value();
+  ASSERT_TRUE(make_live_view(**reader, *server));
+  options.port = server->port();
+  gfx::camera::OrbitCamera& camera = view_->camera();
+  camera.drag_orbit({0.1f, 0.05f});
+  camera.zoom(0.5f);
+  const float azimuth = camera.azimuth();
+  const float elevation = camera.elevation();
+  const float distance = camera.distance();
+  EXPECT_NE(azimuth, 0.0f);
+  EXPECT_NE(elevation, 0.0f);
+  EXPECT_NE(distance, 3.0f);
+  const auto reconnect = [&](const std::array<float, 3>& up) {
+    server.reset();
+    ASSERT_TRUE(tick_until([&] {
+      return view_->player().live_status().state == LiveState::kConnecting;
+    }));
+    EXPECT_EQ(camera.azimuth(), azimuth) << "held while it retries";
+    session.up = up;
+    core::Result<std::unique_ptr<grid::networking::StreamServer>> next =
+        grid::networking::StreamServer::start(session, options);
+    ASSERT_TRUE(next.ok()) << next.status().message();
+    server = std::move(next).value();
+    ASSERT_TRUE(tick_until([&] {
+      return view_->player().live_status().state == LiveState::kConnected;
+    }));
+    ASSERT_TRUE(present());
+  };
+  {
+    SCOPED_TRACE("the same up");
+    ASSERT_NO_FATAL_FAILURE(reconnect({0.0f, 0.0f, 1.0f}));
+    EXPECT_EQ(camera.world_up(), glm::vec3(0.0f, 0.0f, 1.0f));
+    EXPECT_EQ(camera.azimuth(), azimuth);
+    EXPECT_EQ(camera.elevation(), elevation);
+    EXPECT_EQ(camera.distance(), distance);
+  }
+  {
+    SCOPED_TRACE("another up");
+    ASSERT_NO_FATAL_FAILURE(reconnect({0.0f, -1.0f, 0.0f}));
+    EXPECT_EQ(camera.world_up(), glm::vec3(0.0f, -1.0f, 0.0f));
+    EXPECT_EQ(camera.target(), glm::vec3(0.0f, -0.85f, 0.0f));
+    EXPECT_EQ(camera.azimuth(), 0.0f);
+    EXPECT_EQ(camera.elevation(), 0.0f);
+    EXPECT_EQ(camera.distance(), 3.0f);
+    EXPECT_NEAR(camera.eye().z, -3.0f, 1e-5f);
+  }
+  // The view goes before its sender.
+  touch_.reset();
+  view_.reset();
 }
 
 // A commit hook that skips frame 2 and holds frame 3 for five asks, through

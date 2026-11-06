@@ -18,7 +18,9 @@ is implemented.
 - **A new up is a new start view.** `frame()` asks `view_up` each tick, as a
   live session arrives after `create`, before any mesh, and a reconnect may
   bring another world. Why reset: the target and the angles mean something only
-  about their up. The same session again changes nothing.
+  about their up. The same session again changes nothing. After a reconnect to
+  another up the old mesh draws under the new view until the new session's first
+  frame.
 - **`frame()` compares with the up it kept, not with the camera's.** Why: gfx
   normalizes what it is given, and for some ups a second normalize changes the
   last bit, so that compare would aim the camera again every tick. `view_up`'s
@@ -1586,8 +1588,8 @@ How `PlayerView` shows playback; its header says what each call does.
   `drag_orbit`, `drag_pan` and `zoom`, in viewport heights, unless
   `ui_wants_pointer()`; the player keeps the viewport: the first view, about
   the up it keeps since 2026-11-05, `kFovY` and the clip planes. Why: mouse and
-  touch need one mapping, which
-  calib's camera writes out too; in gfx it has one home.
+  touch need one mapping, which calib's camera writes out too; in gfx it has one
+  home.
 
 ## 2026-10-18 — Decode and mesh on one worker thread, paced by pts
 

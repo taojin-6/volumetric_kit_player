@@ -2,9 +2,8 @@
 // Copyright (c) 2026 Tao Jin
 
 // StreamPlayer on a device, over the tests' stream (test_stream.hpp). Its
-// track's counts and rate are what was written, and its world's up the
-// session's, a live one's the newest's, kept while it reconnects. Paused and
-// stepped, so each
+// track's counts and rate are what was written, its world's up the session's,
+// a live one's newest, kept while it reconnects. Paused and stepped, so each
 // frame goes when the test says: frames arrive in order with their index,
 // pts, payload bytes, key, set (kNoSet for a record that names none), stage
 // times (read, decode, mesh, submit, the wait

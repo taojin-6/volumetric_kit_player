@@ -278,17 +278,18 @@ set_tests_properties(${hooked} PROPERTIES FIXTURES_REQUIRED vp_streams TIMEOUT
 # view's tests cross families rather than skip: on MoltenVK's default families
 # above, and again on its specialized ones, as the core's cross-family tests do,
 # where any skip but the one without a device fails. The rerun leaves out the
-# stats' phone layout and the draw row's timing, which the default run keeps:
-# neither checks a crossing, and a live view, whose worker is on grid's family,
-# still crosses in AProgramsHooksHaveTheLiveClockAndNoneForAFile. It is no
-# threading variable, so the ThreadSanitizer leg leaves it out (label no_tsan).
+# stats' phone layout, the draw row's timing and a reconnect's up, which the
+# default run keeps: none checks a crossing, and a live view, whose worker is on
+# grid's family, still crosses in AProgramsHooksHaveTheLiveClockAndNoneForAFile.
+# It is no threading variable, so the ThreadSanitizer leg leaves it out (label
+# no_tsan).
 if(APPLE)
   add_test(
     NAME vp_player_view_on_moltenvk_specialized
     COMMAND
       "${CMAKE_COMMAND}" -E env MVK_CONFIG_SPECIALIZED_QUEUE_FAMILIES=1
       ${VP_TEST_ENVIRONMENT} "$<TARGET_FILE:vp_player_view_test>"
-      "--gtest_filter=PlayerViewTest.*:-PlayerViewTest.ALiveViewsStatsFitAPhone:PlayerViewTest.TheDrawRowTimesTheWholePass"
+      "--gtest_filter=PlayerViewTest.*:-PlayerViewTest.ALiveViewsStatsFitAPhone:PlayerViewTest.TheDrawRowTimesTheWholePass:PlayerViewTest.AReconnectToAnotherUpIsANewStartViewToTheSameKeepsADrag"
   )
   set_tests_properties(
     vp_player_view_on_moltenvk_specialized

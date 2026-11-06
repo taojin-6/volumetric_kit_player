@@ -219,14 +219,13 @@ class PlayerView {
   ///                 sharing, the hooks and their device requirements, Texture
   ///                 and the world's up.
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
-  ///         @p player, an empty @p extent or an up that is zero or not
-  ///         finite; or the first failure (device,
-  ///         `Unsupported` for a GPU without line fill (`fillModeNonSolid`,
-  ///         for Wire; every Mac, iPhone, iPad and NVIDIA box has it) or
-  ///         naming what no GPU offers of a program's required
-  ///         extensions or features among them, swapchain, pipeline, overlay,
-  ///         profiler, make_hooks, StreamPlayer::start). Host allocation
-  ///         failures return `OutOfMemory`.
+  ///         @p player, an empty @p extent or an up that is zero or not finite;
+  ///         or the first failure (device, `Unsupported` for a GPU without line
+  ///         fill (`fillModeNonSolid`, for Wire; every Mac, iPhone, iPad and
+  ///         NVIDIA box has it) or naming what no GPU offers of a program's
+  ///         required extensions or features among them, swapchain, pipeline,
+  ///         overlay, profiler, make_hooks, StreamPlayer::start). Host
+  ///         allocation failures return `OutOfMemory`.
   static core::Result<std::unique_ptr<PlayerView>> create(
       const gfx::windowing::SurfaceSource& surface, VkExtent2D extent,
       std::unique_ptr<StreamPlayer> player,
@@ -244,15 +243,14 @@ class PlayerView {
   ///        (StreamPlayer::follow_audio), take a new up if @ref view_up now
   ///        gives another, as a live session that arrives or a reconnect to
   ///        another world does, and with it the start view (@ref reset_camera),
-  ///        lay out the scene beside a program's panel while it
-  ///        is open, draw the controls and the stats in the scene's part and
-  ///        the panel's chrome, take the newest mesh (FrameTaker, with the
-  ///        commit hook), run before_draw and the panel's prepare, draw the
-  ///        mesh into the scene behind a GPU wait on its `ready` value
-  ///        (already reached, so it stalls nothing; it carries the worker's
-  ///        writes across queues) with the binding it returned, unless
-  ///        Texture is off and it names a texture set (@ref textured), then
-  ///        the panel's record, and present
+  ///        lay out the scene beside a program's panel while it is open, draw
+  ///        the controls and the stats in the scene's part and the panel's
+  ///        chrome, take the newest mesh (FrameTaker, with the commit hook),
+  ///        run before_draw and the panel's prepare, draw the mesh into the
+  ///        scene behind a GPU wait on its `ready` value (already reached, so
+  ///        it stalls nothing; it carries the worker's writes across queues)
+  ///        with the binding it returned, unless Texture is off and it names a
+  ///        texture set (@ref textured), then the panel's record, and present
   ///        (PanelHooks). A frame taken is stamped when taken and when
   ///        presented (FrameStamp::taken, presented), and counted in the
   ///        stats once presented; a skipped frame is neither.
