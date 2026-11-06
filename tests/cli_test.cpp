@@ -2,9 +2,10 @@
 // Copyright (c) 2026 Tao Jin
 
 // The desktop app's entry point, the app run as a process: its main is one
-// call of run_desktop (desktop.hpp). A command line the core's parse_args
-// refuses, the old one's included, exits 2 with its message and the usage on
-// stderr; --help and -h exit 0 with the usage on stdout. A scenario the core
+// call of run_desktop (desktop.hpp). A command line parse_desktop_args
+// refuses, the core's parse_args' refusals and the old one's included, and a
+// bad --up-axis, exits 2 with its message and the usage on stderr; --help and
+// -h exit 0 with the usage on stdout. A scenario the core
 // cannot load, or refuses, exits 2 with its message. One it loads runs: a
 // missing stream and a file that is not one exit 1 with StreamPlayer::open's
 // refusal and nothing else, before glfwInit. Each runs with VP_NO_WINDOW set,
@@ -12,10 +13,11 @@
 // window would play, its title (DECISIONS.md); a stream that opens, and a live
 // scenario, which nothing refuses, exit 1 with that refusal. A run not back
 // within kPrompt, as a window's loop would not be, is killed and fails the
-// test. On the host: the view's settings run_desktop plays a scenario with
-// (desktop_view_config), the program's with the scenario's validation; the
-// scenarios in config/examples/, and parse_count, which vp_probe's --frames
-// takes.
+// test. On the host: the command line (parse_desktop_args), --up-axis once
+// anywhere and the rest the core's; the view's settings run_desktop plays a
+// scenario with (desktop_view_config), the program's with the scenario's
+// validation and --up-axis's up; the scenarios in config/examples/, and
+// parse_count, which vp_probe's --frames takes.
 
 #include <gtest/gtest.h>
 #include <poll.h>
@@ -32,8 +34,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
+
+#include <glm/vec3.hpp>
 
 #include "test_stream.hpp"
 #include "volumetric_kit/core/base/result.hpp"
@@ -197,21 +202,25 @@ std::string line_of(const core::Status& refused) {
          refused.message() + "\n";
 }
 
-// The app on `args`, which the core's parse_args refuses: exit 2, with its
-// message and then the usage on stderr.
-void expect_usage(const std::vector<std::string>& args) {
+// parse_desktop_args on `args`, after the program's name.
+core::Result<vkp::DesktopArgs> parse(const std::vector<std::string>& args) {
   std::vector<const char*> argv{kApp};
   for (const std::string& arg : args) {
     argv.push_back(arg.c_str());
   }
-  const core::Result<cfg::Arguments> parsed =
-      cfg::parse_args(static_cast<int>(argv.size()), argv.data());
+  return vkp::parse_desktop_args(static_cast<int>(argv.size()), argv.data());
+}
+
+// The app on `args`, which parse_desktop_args refuses: exit 2, with its
+// message and then the usage on stderr.
+void expect_usage(const std::vector<std::string>& args) {
+  const core::Result<vkp::DesktopArgs> parsed = parse(args);
   ASSERT_FALSE(parsed.ok());
   const Outcome run = run_app(args);
   EXPECT_EQ(run.exit_code, 2) << run.err;
   EXPECT_EQ(run.out, "");
   EXPECT_EQ(run.err, "volumetric_kit_player: " + parsed.status().message() +
-                         "\n" + cfg::usage());
+                         "\n" + vkp::desktop_usage());
 }
 
 // The app on the scenario at `path`, which the core refuses for `reason`:
@@ -241,12 +250,16 @@ void expect_refused(const Outcome& run, const std::string& domain,
 }
 
 // The core's config_test has parse_args's rules; these show only that the app
-// passes on its refusal: of no argument, of --config with no path, and of the
-// command line before the scenario.
-TEST(CliTest, ACommandLineTheCoreRefusesExits2WithTheUsage) {
+// passes on its refusal: of no argument, of --config with no path, of the
+// command line before the scenario, and its own of a bad --up-axis
+// (DesktopArgs, below, has its rules).
+TEST(CliTest, ACommandLineItRefusesExits2WithTheUsage) {
   for (const std::vector<std::string>& args :
        std::vector<std::vector<std::string>>{
-           {}, {"--config"}, {"--frames", "60", "stream.vrst"}}) {
+           {},
+           {"--config"},
+           {"--frames", "60", "stream.vrst"},
+           {"--config", "play.json", "--up-axis", "up"}}) {
     expect_usage(args);
   }
 }
@@ -255,8 +268,69 @@ TEST(CliTest, HelpPrintsTheUsageOnStdout) {
   for (const char* help : {"--help", "-h"}) {
     const Outcome run = run_app({help});
     EXPECT_EQ(run.exit_code, 0) << help << "\n" << run.err;
-    EXPECT_EQ(run.out, cfg::usage());
+    EXPECT_EQ(run.out, vkp::desktop_usage());
     EXPECT_EQ(run.err, "");
+  }
+  const std::string usage = vkp::desktop_usage();
+  EXPECT_EQ(
+      usage.rfind("Usage: <executable> --config PATH [--up-axis AXIS]\n", 0),
+      0u)
+      << usage;
+  EXPECT_NE(usage.find("  --up-axis AXIS  "), std::string::npos) << usage;
+}
+
+// --up-axis once, before or after the core's arguments, as the core's axes
+// name it; without it, no up, which leaves the program's. The core's
+// refusals pass on with their messages; the player's name --up-axis.
+TEST(DesktopArgs, TakeAnUpAxisAnywhereAndTheRestAsTheCores) {
+  struct Case {
+    std::vector<std::string> args;
+    std::optional<glm::vec3> up;
+  };
+  const Case cases[] = {{{"--config", "play.json"}, std::nullopt},
+                        {{"--config", "play.json", "--up-axis", "z"},
+                         glm::vec3(0.0f, 0.0f, 1.0f)},
+                        {{"--up-axis", "-y", "--config", "play.json"},
+                         glm::vec3(0.0f, -1.0f, 0.0f)},
+                        {{"--up-axis", "+y", "--config", "play.json"},
+                         glm::vec3(0.0f, 1.0f, 0.0f)}};
+  for (const Case& given : cases) {
+    SCOPED_TRACE(given.args.back());
+    const core::Result<vkp::DesktopArgs> parsed = parse(given.args);
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    EXPECT_FALSE(parsed->help);
+    EXPECT_EQ(parsed->config_path, "play.json");
+    EXPECT_EQ(parsed->up, given.up);
+  }
+  const core::Result<vkp::DesktopArgs> help = parse({"-h", "--up-axis", "z"});
+  ASSERT_TRUE(help.ok()) << help.status().message();
+  EXPECT_TRUE(help->help);
+  EXPECT_EQ(help->up, std::optional<glm::vec3>(glm::vec3(0.0f, 0.0f, 1.0f)));
+
+  const std::vector<const char*> core_refused{kApp, "--frames", "60"};
+  const core::Result<cfg::Arguments> core_says = cfg::parse_args(
+      static_cast<int>(core_refused.size()), core_refused.data());
+  ASSERT_FALSE(core_says.ok());
+  const core::Result<vkp::DesktopArgs> passed_on =
+      parse({"--up-axis", "z", "--frames", "60"});
+  ASSERT_FALSE(passed_on.ok());
+  EXPECT_EQ(passed_on.status().message(), core_says.status().message());
+  EXPECT_FALSE(parse({"--up-axis", "z"}).ok()) << "no scenario";
+  struct Refused {
+    std::vector<std::string> args;
+    const char* message;
+  };
+  const Refused refused[] = {
+      {{"--config", "play.json", "--up-axis"}, "--up-axis requires an axis"},
+      {{"--config", "play.json", "--up-axis", "Z"},
+       "--up-axis 'Z': expected x, y, z, -x, -y or -z"},
+      {{"--up-axis", "z", "--up-axis", "y", "--config", "play.json"},
+       "--up-axis was supplied twice"}};
+  for (const Refused& bad : refused) {
+    const core::Result<vkp::DesktopArgs> parsed = parse(bad.args);
+    ASSERT_FALSE(parsed.ok()) << bad.message;
+    EXPECT_EQ(parsed.status().domain(), core::Status::Code::InvalidArgument);
+    EXPECT_EQ(parsed.status().message(), bad.message);
   }
 }
 
@@ -359,8 +433,9 @@ core::Result<vkp::FrameHooks> no_hooks(const vkp::HookContext& /*context*/) {
 }
 
 // The view's settings the app plays a scenario with: the program's, its
-// make_hooks and device requirements included, with the scenario's
-// window.validation in place of the program's, which a Debug build turns on.
+// make_hooks, device requirements and up included, with the scenario's
+// window.validation in place of the program's, which a Debug build turns on,
+// and --up-axis's up in place of the program's, if given.
 TEST(DesktopViewConfig, KeepsTheProgramsSettingsWithTheScenariosValidation) {
   using MakeHooksFn =
       core::Result<vkp::FrameHooks> (*)(const vkp::HookContext&);
@@ -376,6 +451,7 @@ TEST(DesktopViewConfig, KeepsTheProgramsSettingsWithTheScenariosValidation) {
   config.view.textured = true;
   config.view.make_hooks = &no_hooks;
   config.view.device_requirements.optional_extensions = {"VK_VP_test_kept"};
+  config.view.up = glm::vec3(0.0f, 0.0f, 2.0f);
   const Scratch scratch;
   const std::string path = scratch.file("play.json");
   for (const bool validation : {false, true}) {
@@ -402,11 +478,18 @@ TEST(DesktopViewConfig, KeepsTheProgramsSettingsWithTheScenariosValidation) {
     EXPECT_EQ(*kept, &no_hooks);
     EXPECT_EQ(view.device_requirements.optional_extensions,
               std::vector<std::string>{"VK_VP_test_kept"});
+    EXPECT_EQ(view.up, std::optional<glm::vec3>(glm::vec3(0.0f, 0.0f, 2.0f)))
+        << "the program's up";
 #ifdef NDEBUG
     EXPECT_EQ(view.validation, validation);
 #else
     EXPECT_TRUE(view.validation);
 #endif
+    vkp::DesktopArgs args;
+    args.up = glm::vec3(0.0f, -1.0f, 0.0f);
+    EXPECT_EQ(vkp::desktop_view_config(config, *loaded, args).up,
+              std::optional<glm::vec3>(glm::vec3(0.0f, -1.0f, 0.0f)))
+        << "--up-axis's";
   }
 }
 

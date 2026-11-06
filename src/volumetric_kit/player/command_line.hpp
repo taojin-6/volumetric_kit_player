@@ -4,8 +4,8 @@
 #pragma once
 
 /// @file command_line.hpp
-/// @brief What vp_probe's command line and the iOS app's measure launch share
-///        in parsing their text. Player-internal.
+/// @brief What the desktop app's and vp_probe's command lines, the iOS app's
+///        dialog and its measure launch share in parsing their text.
 
 #include <cstdint>
 #include <optional>
@@ -13,7 +13,10 @@
 #include <string_view>
 #include <vector>
 
+#include <glm/vec3.hpp>
+
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/player/stream_player.hpp"
 
@@ -66,6 +69,61 @@ std::optional<bool> parse_switch(std::string_view text);
 /// @param text  `WxH`, each side decimal digits alone, from 1 to 16384.
 /// @return The size; none for any other text.
 std::optional<VkExtent2D> parse_size(std::string_view text);
+
+/// @brief A world's up axis as the core's scenario names one
+///        (`source.up_axis`): x, y or z, signed or not. The desktop app's
+///        `--up-axis` and the iOS app's Up field (PlayerViewConfig::up).
+///
+/// @code
+/// const std::optional<glm::vec3> up = parse_up_axis("z");  // (0, 0, 1)
+/// @endcode
+/// @param text  The axis: `x`, `y`, `z`, `+x`, `+y`, `+z`, `-x`, `-y` or `-z`.
+/// @return The unit vector along it; none for any other text.
+std::optional<glm::vec3> parse_up_axis(std::string_view text);
+
+/// @brief The desktop app's command line: the core's, `--config PATH` or
+///        `--help`/`-h` (core::config::parse_args), and the player's own
+///        `--up-axis AXIS` (@ref parse_up_axis), for which the core's Player
+///        scenario has no field.
+///
+/// @code
+/// VKC_ASSIGN(const DesktopArgs args, parse_desktop_args(argc, argv));
+/// VKC_ASSIGN(const core::config::Config scenario,
+///            core::config::load(args.config_path,
+///                               core::config::Application::Player));
+/// @endcode
+struct DesktopArgs : core::config::Arguments {
+  /// `--up-axis`'s world up (PlayerViewConfig::up); empty, the program's.
+  std::optional<glm::vec3> up;
+};
+
+/// @brief Parse the desktop app's command line, on the host alone:
+///        `--up-axis AXIS` once at most, anywhere, and the rest as the core's.
+///
+/// @code
+/// VKC_ASSIGN(const DesktopArgs args, parse_desktop_args(argc, argv));
+/// @endcode
+/// @param argc  The command line's count, as main has it.
+/// @param argv  Its arguments, as main has them.
+/// @return The arguments; `core::Status::Code::InvalidArgument` naming
+///         `--up-axis` given twice, with no axis or one @ref parse_up_axis
+///         refuses; or what core::config::parse_args refuses of the rest.
+core::Result<DesktopArgs> parse_desktop_args(int argc, const char* const* argv);
+
+/// @brief The desktop app's usage: the core's (core::config::usage) with
+///        `--up-axis`.
+///
+/// @code
+/// std::fputs(desktop_usage(), stdout);
+/// @endcode
+/// @return A static, NUL-terminated text.
+constexpr const char* desktop_usage() noexcept {
+  return "Usage: <executable> --config PATH [--up-axis AXIS]\n"
+         "       <executable> --help\n"
+         "  --up-axis AXIS  the world's up, kept up on screen, over the "
+         "stream's:\n"
+         "                  x, y, z, -x, -y or -z\n";
+}
 
 /// @brief A measurement the iOS app's launch arguments ask for (README.md,
 ///        tools/measure/).

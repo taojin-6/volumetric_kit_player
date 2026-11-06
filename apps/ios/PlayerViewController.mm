@@ -3,16 +3,17 @@
 
 // The iOS shell over PlayerView (DECISIONS.md), all on main: a MetalView hosts
 // the CAMetalLayer, a display link ticks the view, every touch phase reaches
-// gfx's ImGuiTouch for the controls panel, three recognizers drive the camera
-// unless the panel holds the finger, or a program's panel where they begin
-// over its content, with a double tap there, and the scene's activation parks
-// and unparks the worker and a file's audio, which plays through the Apple
-// output (AudioOut::open_default). The Source button, at the top right, opens
-// iOS's dialog, which chooses a sender by host and port, or the first .vrst in
-// the app's Documents folder, which the Files app and Finder show
-// (Info.plist.in); the choice is kept for the next launch. A measure launch
-// (--measure, the runner's, tools/measure/) plays the stream it names instead
-// and logs its frames into Documents/measure/, or there why it could not.
+// gfx's ImGuiTouch for the controls panel, four recognizers drive the camera,
+// a double tap returning it to its start view, unless the panel holds the
+// finger, or a program's panel where they begin over its content, and the
+// scene's activation parks and unparks the worker and a file's audio, which
+// plays through the Apple output (AudioOut::open_default). The Source button,
+// at the top right, opens iOS's dialog, which chooses a sender by host and
+// port, or the first .vrst in the app's Documents folder, which the Files app
+// and Finder show (Info.plist.in), and the world's up axis over the stream's;
+// the choice is kept for the next launch. A measure launch (--measure, the
+// runner's, tools/measure/) plays the stream it names instead and logs its
+// frames into Documents/measure/, or there why it could not.
 
 #import "PlayerViewController.h"
 
@@ -27,6 +28,7 @@
 #include <vector>
 
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/config/config.hpp"
@@ -53,10 +55,12 @@ constexpr std::chrono::seconds kParkWait{1};
 // The last choice, in the standard user defaults (DECISIONS.md): whether it
 // was a sender, and the sender's host and port as parse_live_source took
 // them, the port empty for the sender's default. The host and port stay for
-// the dialog when a file is chosen.
+// the dialog when a file is chosen. And the world's up axis, as parse_up_axis
+// took it or empty for the stream's, for a file or a sender.
 NSString* const kLiveKey = @"live";
 NSString* const kHostKey = @"live.host";
 NSString* const kPortKey = @"live.port";
+NSString* const kUpKey = @"up";
 
 // `text`, empty for nil.
 std::string Utf8(NSString* text) { return text != nil ? text.UTF8String : ""; }
@@ -108,6 +112,13 @@ vkc::Result<std::optional<cfg::Source>> ChosenSource() {
   return DocumentsStream();
 }
 
+// The world's up of the last choice (vkp::PlayerViewConfig::up): its kept
+// axis, or none for the stream's.
+std::optional<glm::vec3> ChosenUp() {
+  return vkp::parse_up_axis(
+      Utf8([NSUserDefaults.standardUserDefaults stringForKey:kUpKey]));
+}
+
 // Documents/measure/, made if missing: where a measure launch writes.
 NSString* MeasureFolder() {
   NSString* folder =
@@ -152,7 +163,9 @@ vkc::Result<std::optional<cfg::Source>> MeasureSource(
 // set, as a view before had them; the worker's device timing,
 // its tile depth, the labels and the vertex sharing as a `measure` launch
 // fixes them, or else timed while the stats panel is open, and the panel open
-// at start as it asks. No validation: iOS has no layer to load (DECISIONS.md).
+// at start as it asks; the world's up as last chosen (ChosenUp), or the
+// stream's for a measure launch, so its timings hang on no kept setting. No
+// validation: iOS has no layer to load (DECISIONS.md).
 vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
     CAMetalLayer* layer, VkExtent2D pixels, const cfg::Source& source,
     const std::optional<vkp::MeasureArgs>& measure, std::optional<bool> deblock,
@@ -168,6 +181,7 @@ vkc::Result<std::unique_ptr<vkp::PlayerView>> MakeView(
   config.ui_scale = 1.3f;              // 17-pt text, near iOS body text
   config.ui_min_frame_height = 44.0f;  // Apple's least touch target
   config.source_button = true;
+  config.up = measure ? std::nullopt : ChosenUp();
   const bool phone =
       UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
   config.compact_stats = phone;
@@ -263,12 +277,13 @@ glm::vec2 Pixels(CGPoint at, UIView* view) {
   UIPanGestureRecognizer* _orbit;  // one finger
   UIPanGestureRecognizer* _pan;    // two fingers, with the pinch
   UIPinchGestureRecognizer* _pinch;
-  UITapGestureRecognizer* _doubleTap;  // over a program's panel alone
+  UITapGestureRecognizer* _doubleTap;
   // Each recognizer's target, the program's panel or the scene, chosen where
   // it began and kept until it ends.
   BOOL _orbitOnPanel;
   BOOL _panOnPanel;
   BOOL _pinchOnPanel;
+  BOOL _doubleTapOnPanel;
   std::unique_ptr<vkp::PlayerView> _view;
   std::unique_ptr<vg::ui::ImGuiTouch> _touch;  // after _view: goes first
   BOOL _failed;    // the label is up until the next activation or choice
@@ -575,11 +590,13 @@ glm::vec2 Pixels(CGPoint at, UIView* view) {
                  error:nil];
 }
 
-// The dialog over what to play, with the last sender's host and port.
+// The dialog over what to play, with the last sender's host and port and the
+// last up axis.
 - (void)ask {
   NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
   [self askWithHost:[defaults stringForKey:kHostKey]
                port:[defaults stringForKey:kPortKey]
+                 up:[defaults stringForKey:kUpKey]
              reason:nil];
 }
 
@@ -592,12 +609,14 @@ glm::vec2 Pixels(CGPoint at, UIView* view) {
   }
 }
 
-// iOS's own dialog (DECISIONS.md): Host and Port on the system keyboard, then
-// Connect, Play file while Documents holds a .vrst, or Cancel. `reason`, a
-// refusal of the values it is given, is its message. An alert needs no
-// popover anchor on an iPad. One at a time.
+// iOS's own dialog (DECISIONS.md): Host, Port and Up on the system keyboard,
+// then Connect, Play file while Documents holds a .vrst, or Cancel. Up is the
+// world's up axis, the stream's when empty, as Port is the sender's default.
+// `reason`, a refusal of the values it is given, is its message. An alert needs
+// no popover anchor on an iPad. One at a time.
 - (void)askWithHost:(NSString*)host
                port:(NSString*)port
+                 up:(NSString*)up
              reason:(NSString*)reason {
   if (self.presentedViewController != nil) {
     return;
@@ -620,6 +639,20 @@ glm::vec2 Pixels(CGPoint at, UIView* view) {
     field.text = port;
     field.keyboardType = UIKeyboardTypeNumberPad;
   }];
+  [alert addTextFieldWithConfigurationHandler:^(UITextField* field) {
+    UILabel* label = [[UILabel alloc] init];
+    label.text = @"Up ";
+    label.textColor = UIColor.secondaryLabelColor;
+    [label sizeToFit];
+    field.leftView = label;  // a kept axis fills the field: keep it named
+    field.leftViewMode = UITextFieldViewModeAlways;
+    field.placeholder = @"stream";
+    field.text = up;
+    field.keyboardType = UIKeyboardTypeASCIICapable;
+    field.autocorrectionType = UITextAutocorrectionTypeNo;
+    field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    field.spellCheckingType = UITextSpellCheckingTypeNo;
+  }];
   // Weak: the alert holds the actions, and they would hold it.
   __weak PlayerViewController* weakSelf = self;
   __weak UIAlertController* weakAlert = alert;
@@ -628,15 +661,21 @@ glm::vec2 Pixels(CGPoint at, UIView* view) {
                 style:UIAlertActionStyleDefault
               handler:^(UIAlertAction*) {
                 [weakSelf connectHost:weakAlert.textFields[0].text
-                                 port:weakAlert.textFields[1].text];
+                                 port:weakAlert.textFields[1].text
+                                   up:weakAlert.textFields[2].text];
               }];
   [alert addAction:connect];
   if (DocumentsStream()) {
-    [alert addAction:[UIAlertAction actionWithTitle:@"Play file"
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(UIAlertAction*) {
-                                              [weakSelf playFile];
-                                            }]];
+    [alert
+        addAction:[UIAlertAction
+                      actionWithTitle:@"Play file"
+                                style:UIAlertActionStyleDefault
+                              handler:^(UIAlertAction*) {
+                                [weakSelf
+                                    playFileHost:weakAlert.textFields[0].text
+                                            port:weakAlert.textFields[1].text
+                                              up:weakAlert.textFields[2].text];
+                              }]];
   }
   [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
                                             style:UIAlertActionStyleCancel
@@ -645,13 +684,19 @@ glm::vec2 Pixels(CGPoint at, UIView* view) {
   [self presentViewController:alert animated:YES completion:nil];
 }
 
-// Connect: values parse_live_source takes are kept and played; a refusal
-// asks again, with why and with what was typed.
-- (void)connectHost:(NSString*)host port:(NSString*)port {
+// Connect: values parse_live_source and parse_up_axis take are kept and
+// played; a refusal asks again, with why and with what was typed.
+- (void)connectHost:(NSString*)host port:(NSString*)port up:(NSString*)up {
   const vkc::Result<cfg::Source> live =
       vkp::parse_live_source(Utf8(host), Utf8(port));
   if (!live.ok()) {
-    [self askWithHost:host port:port reason:@(live.status().message().c_str())];
+    [self askWithHost:host
+                 port:port
+                   up:up
+               reason:@(live.status().message().c_str())];
+    return;
+  }
+  if (![self keepUp:up host:host port:port]) {
     return;
   }
   NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
@@ -662,9 +707,32 @@ glm::vec2 Pixels(CGPoint at, UIView* view) {
   [self rebuild];
 }
 
-- (void)playFile {
+// Play file: an Up parse_up_axis takes is kept and the file played; a refusal
+// asks again, as Connect's.
+- (void)playFileHost:(NSString*)host port:(NSString*)port up:(NSString*)up {
+  if (![self keepUp:up host:host port:port]) {
+    return;
+  }
   [NSUserDefaults.standardUserDefaults setBool:NO forKey:kLiveKey];
   [self rebuild];
+}
+
+// Keep the Up field's axis for the next view (ChosenUp), if it is empty, for
+// the stream's, or parse_up_axis takes it; else NO, and the dialog asks again,
+// with why and with what was typed.
+- (BOOL)keepUp:(NSString*)up host:(NSString*)host port:(NSString*)port {
+  if (up.length > 0 && !vkp::parse_up_axis(Utf8(up))) {
+    [self askWithHost:host
+                 port:port
+                   up:up
+               reason:[NSString stringWithFormat:
+                                    @"Up '%@': type x, y, z, -x, -y or -z, or "
+                                    @"nothing for the stream's",
+                                    up]];
+    return NO;
+  }
+  [NSUserDefaults.standardUserDefaults setObject:up forKey:kUpKey];
+  return YES;
 }
 
 // The view anew on the choice just kept, as after a timed-out park. connect
@@ -743,18 +811,10 @@ glm::vec2 Pixels(CGPoint at, UIView* view) {
   return _view && _view->over_panel(Pixels(at, _metal));
 }
 
-// The double tap takes only touches over a program's panel's content.
-- (BOOL)gestureRecognizer:(UIGestureRecognizer*)recognizer
-       shouldReceiveTouch:(UITouch*)touch {
-  return recognizer != _doubleTap ||
-         [self overPanel:[touch locationInView:_metal]];
-}
-
 // None until the view exists, and none from the panels: the controls, the
 // stats' header and the program's panel's header and handle, which reaches
 // over its content's edge. Over the content a recognizer drives the
-// program's panel, kept until it ends; elsewhere the camera. The double tap
-// begins over the content alone.
+// program's panel, kept until it ends; elsewhere the camera.
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)recognizer {
   if (!_view || _view->ui_wants_pointer()) {
     return NO;
@@ -766,8 +826,10 @@ glm::vec2 Pixels(CGPoint at, UIView* view) {
     _panOnPanel = onPanel;
   } else if (recognizer == _pinch) {
     _pinchOnPanel = onPanel;
+  } else if (recognizer == _doubleTap) {
+    _doubleTapOnPanel = onPanel;
   }
-  return recognizer != _doubleTap || onPanel;
+  return YES;
 }
 
 // A two-finger pan and a pinch compose.
@@ -842,13 +904,15 @@ glm::vec2 Pixels(CGPoint at, UIView* view) {
   recognizer.scale = 1.0;
 }
 
-// A double tap over the program's panel.
+// A double tap: the program's panel's, or the camera back to its start view.
 - (void)onDoubleTap:(UITapGestureRecognizer*)recognizer {
-  if (_view) {
+  if (_view && _doubleTapOnPanel) {
     vkp::PanelPointer pointer;
     pointer.at = Pixels([recognizer locationInView:_metal], _metal);
     pointer.double_tap = true;
     _view->panel_pointer(pointer);
+  } else if (_view) {
+    _view->reset_camera();
   }
 }
 

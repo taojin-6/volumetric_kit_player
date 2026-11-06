@@ -8,6 +8,7 @@
 ///        grid and gfx share, a swapchain, the newest mesh under an orbit
 ///        camera, the controls and the stats, beside a program's panel.
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -98,6 +99,10 @@ struct PlayerViewConfig {
   /// shares and its handle's detents. A shell carries its state across a
   /// rebuild of the view (PlayerView::panel_state).
   gfx::ui::DockedPanelConfig panel;
+  /// The world's up, over the stream's (StreamPlayer::world_up): the desktop
+  /// app's --up-axis, the iOS Up field. Empty, the default: the stream's, or +y
+  /// for a stream that names none. Any length; finite and not zero.
+  std::optional<glm::vec3> up;
 };
 
 /// @brief The requirements of the device the worker decodes and meshes on, as
@@ -146,12 +151,26 @@ gfx::windowing::SwapchainConfig view_swapchain(VkExtent2D extent, bool live);
 /// frame.view_proj = camera.view_proj();
 /// frame.light_dir = headlight(camera.view());
 /// @endcode
-/// @pre @p view is a rotation and a translation, as a look-at's is
+/// @pre @p view is a rotation and a translation, upside down too
 ///      (gfx::camera::OrbitCamera::view).
 /// @param view  The camera's world-to-view matrix: it looks down view -z,
 ///              with view +y up on screen and +x to the right.
 /// @return The unit world-space direction toward the light.
 glm::vec3 headlight(const glm::mat4& view);
+
+/// @brief The up a view keeps: @p given, else @p stream if it names one, else
+///        +y.
+///
+/// @code
+/// const glm::vec3 up = view_up(config.up, player->world_up());
+/// @endcode
+/// @pre @p given, if any, is finite and not zero; @p stream is all zero, or
+///      finite and not zero, as grid's reader has it.
+/// @param given   PlayerViewConfig::up.
+/// @param stream  StreamPlayer::world_up.
+/// @return The unit up.
+glm::vec3 view_up(const std::optional<glm::vec3>& given,
+                  const std::array<float, 3>& stream) noexcept;
 
 /// @brief The window side of playback. It holds one device that the worker
 ///        and the renderer share, a FIFO swapchain, and the newest mesh drawn
@@ -186,10 +205,10 @@ class PlayerView {
   ///        grid. Build the mesh pipeline, the overlay (no imgui.ini) and a
   ///        gfx::Profiler for the stats' "draw (mesh+UI)" row, which
   ///        @ref frame attaches to the frame loop while the draw is timed
-  ///        (PlayerViewConfig::device_timing). Aim the camera at the first
-  ///        view: target (0, 0.85, 0), 3 m. Make the hooks
-  ///        (PlayerViewConfig::make_hooks). Then start @p player at the
-  ///        config's tile depth, with the hooks; its worker builds its
+  ///        (PlayerViewConfig::device_timing). Aim the camera at the start
+  ///        view (@ref reset_camera) about the up it keeps (@ref view_up). Make
+  ///        the hooks (PlayerViewConfig::make_hooks). Then start @p player at
+  ///        the config's tile depth, with the hooks; its worker builds its
   ///        kernels, and it plays unless the caller paused it.
   /// @param surface  The window system's source; its window or layer must
   ///                 outlive the view.
@@ -197,10 +216,11 @@ class PlayerView {
   /// @param player   An opened player, not started.
   /// @param config   The UI's sizes, the Source button, validation, a
   ///                 measurement's timing, tile depth and labels, vertex
-  ///                 sharing, the hooks and their device requirements, and
-  ///                 Texture.
+  ///                 sharing, the hooks and their device requirements, Texture
+  ///                 and the world's up.
   /// @return The view; `core::Status::Code::InvalidArgument` for a null
-  ///         @p player or an empty @p extent; or the first failure (device,
+  ///         @p player, an empty @p extent or an up that is zero or not
+  ///         finite; or the first failure (device,
   ///         `Unsupported` for a GPU without line fill (`fillModeNonSolid`,
   ///         for Wire; every Mac, iPhone, iPad and NVIDIA box has it) or
   ///         naming what no GPU offers of a program's required
@@ -221,8 +241,10 @@ class PlayerView {
   PlayerView& operator=(PlayerView&&) = delete;
 
   /// @brief One tick: pause the player if its audio asked to
-  ///        (StreamPlayer::follow_audio), lay out the scene beside a
-  ///        program's panel while it
+  ///        (StreamPlayer::follow_audio), take a new up if @ref view_up now
+  ///        gives another, as a live session that arrives or a reconnect to
+  ///        another world does, and with it the start view (@ref reset_camera),
+  ///        lay out the scene beside a program's panel while it
   ///        is open, draw the controls and the stats in the scene's part and
   ///        the panel's chrome, take the newest mesh (FrameTaker, with the
   ///        commit hook), run before_draw and the panel's prepare, draw the
@@ -253,6 +275,10 @@ class PlayerView {
   StreamPlayer& player() noexcept { return *player_; }
   /// @return The camera, for G1's drag verbs (gfx::camera::OrbitCamera).
   gfx::camera::OrbitCamera& camera() noexcept { return camera_; }
+  /// @brief Back to the start view: level, azimuth 0 about the view's up, 3 m
+  ///        from the point 0.85 m up it from the world's origin. The shells'
+  ///        double click and double tap on the scene.
+  void reset_camera() noexcept;
   /// @return Whether the mesh is coloured by its world-space normals rather
   ///         than lit; false at first. The panel's Normals flips it.
   bool normals() const noexcept { return normals_; }
@@ -436,6 +462,9 @@ class PlayerView {
   gfx::ui::ImGuiOverlay overlay_;
   FrameExchange exchange_;
   gfx::camera::OrbitCamera camera_;
+  // PlayerViewConfig::up, and the up the view keeps (view_up).
+  std::optional<glm::vec3> given_up_;
+  glm::vec3 up_{0.0f, 1.0f, 0.0f};
   bool normals_ = false;          // the mesh's shading (mesh_flags)
   bool textured_ = false;         // drawn with before_draw's texture set
   bool cull_back_faces_ = false;  // back faces culled (mesh_flags)

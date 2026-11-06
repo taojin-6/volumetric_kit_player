@@ -4,6 +4,44 @@ The choices made for `volumetric_kit_player`, newest first, and why.
 [AGENTS.md](AGENTS.md) is the working guide; [README.md](README.md) says what
 is implemented.
 
+## 2026-11-05 — The view keeps the stream's up
+
+`view_up`, `PlayerViewConfig::up`, `StreamPlayer::world_up` and
+`PlayerView::reset_camera`; the desktop app's `--up-axis`
+(`parse_desktop_args`) and the iOS dialog's Up field, both through
+`parse_up_axis`. README.md says how to use them.
+
+- **One order: the override, the stream's, +y.** Why: a stream that names its
+  world (grid's `Session::up`) stands upright with nothing to set; a stream that
+  names none is +y, as every stream was drawn before. The override is for those
+  recorded in another world, and for a stream that names the wrong one.
+- **A new up is a new start view.** `frame()` asks `view_up` each tick, as a
+  live session arrives after `create`, before any mesh, and a reconnect may
+  bring another world. Why reset: the target and the angles mean something only
+  about their up. The same session again changes nothing.
+- **`frame()` compares with the up it kept, not with the camera's.** Why: gfx
+  normalizes what it is given, and for some ups a second normalize changes the
+  last bit, so that compare would aim the camera again every tick. `view_up`'s
+  answer for the same inputs is the same bits.
+- **A flag and a field, not a scenario key.** Why: the core's Player profile
+  refuses `source.up_axis` and has no extension object, so a key is a core
+  release.
+- **`parse_up_axis` is a recorded copy of the core's axis grammar** (its
+  `axis_vector`, config.cpp). Why: sharing 14 lines would cost a core release
+  and the re-pins behind it.
+- **The command line's parsing sits in the library** (`command_line.hpp`), not
+  in `player_desktop`. Why: a program's own command-line code sits in a library
+  its probe and host tests link with no GLFW, and it must resolve there.
+- **iOS: empty Up is the stream's, and a typed axis stays until cleared.** Why:
+  it is kept with the choice, and one value holds for files and senders alike.
+  Nothing outside the dialog shows it, so a stale axis is found there. A measure
+  launch takes none, as vp_probe does, so timings hang on no kept setting.
+- **Reset is a double click or a double tap on the scene.** Over a program's
+  panel they stay the panel's, and over the controls `ui_wants_pointer` refuses
+  them. On iOS the double tap now takes every touch, with `onPanel` chosen when
+  it is recognized; its `delaysTouchesEnded` stays off, so a tap's end still
+  reaches ImGui at once.
+
 ## 2026-11-04 — Tests: the round-2 budget
 
 The owner's answers to the round-2 test-budget proposal. The budget is about
@@ -1543,8 +1581,9 @@ How `PlayerView` shows playback; its header says what each call does.
   spends power; and FIFO is the one mode every surface offers.
 - **The camera takes gfx's gestures.** The shells drive `OrbitCamera`'s
   `drag_orbit`, `drag_pan` and `zoom`, in viewport heights, unless
-  `ui_wants_pointer()`; the player keeps the viewport: the first view,
-  `kFovY` and the clip planes. Why: mouse and touch need one mapping, which
+  `ui_wants_pointer()`; the player keeps the viewport: the first view, about
+  the up it keeps since 2026-11-05, `kFovY` and the clip planes. Why: mouse and
+  touch need one mapping, which
   calib's camera writes out too; in gfx it has one home.
 
 ## 2026-10-18 — Decode and mesh on one worker thread, paced by pts

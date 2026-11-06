@@ -18,12 +18,13 @@
 /// and the codec grows the grid and decodes it again at its finish; and with
 /// that frame a sphere of more blocks than those slots, so the codec grows
 /// the grid before it records the frame. A copy of one of them, with an
-/// Audio track added or not, and a stream that opens but never decodes, in a
-/// scratch directory of the test's own.
+/// Audio track added or a world's up named or neither, and a stream that opens
+/// but never decodes, in a scratch directory of the test's own.
 
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -202,6 +203,30 @@ inline core::Status copy_with_audio(const std::string& from,
     info.pts_ns = record.info.pts_ns;
     info.seq = seq;
     VKC_TRY(writer->append(info, silence, 2));
+  }
+  return writer->finish();
+}
+
+// The stream at `from` copied to `to`, its session naming the world's up `up`.
+inline core::Status copy_with_up(const std::string& from, const std::string& to,
+                                 const std::array<float, 3>& up) {
+  namespace stream = grid::stream;
+  VKC_ASSIGN(std::unique_ptr<stream::StreamReader> reader,
+             stream::StreamReader::open(from));
+  stream::Session session = reader->session();
+  session.up = up;
+  VKC_ASSIGN(std::unique_ptr<stream::StreamWriter> writer,
+             stream::StreamWriter::create(to, session));
+  stream::Position pos = reader->begin();
+  stream::Record record;
+  std::vector<std::uint8_t> payload;
+  for (;;) {
+    VKC_ASSIGN(const bool more, reader->next(&pos, &record));
+    if (!more) {
+      break;
+    }
+    VKC_TRY(reader->read(record, &payload));
+    VKC_TRY(writer->append(record.info, payload.data(), payload.size()));
   }
   return writer->finish();
 }

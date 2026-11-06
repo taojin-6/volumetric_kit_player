@@ -7,6 +7,8 @@
 #include <system_error>
 #include <utility>
 
+#include "volumetric_kit/core/base/exception_status.hpp"
+
 namespace volumetric_kit::player {
 
 namespace {
@@ -67,6 +69,53 @@ std::optional<VkExtent2D> parse_size(std::string_view text) {
   }
   return VkExtent2D{static_cast<std::uint32_t>(*width),
                     static_cast<std::uint32_t>(*height)};
+}
+
+std::optional<glm::vec3> parse_up_axis(std::string_view text) {
+  float sign = 1.0f;
+  if (!text.empty() && (text[0] == '+' || text[0] == '-')) {
+    sign = text[0] == '-' ? -1.0f : 1.0f;
+    text.remove_prefix(1);
+  }
+  if (text.size() != 1 || text[0] < 'x' || text[0] > 'z') {
+    return std::nullopt;
+  }
+  glm::vec3 up(0.0f);
+  up[text[0] - 'x'] = sign;
+  return up;
+}
+
+core::Result<DesktopArgs> parse_desktop_args(int argc,
+                                             const char* const* argv) try {
+  DesktopArgs args;
+  std::vector<const char*> rest;  // the core's
+  for (int i = 0; i < argc && argv != nullptr; ++i) {
+    if (i == 0 || argv[i] == nullptr ||
+        std::string_view(argv[i]) != "--up-axis") {
+      rest.push_back(argv[i]);
+      continue;
+    }
+    if (args.up) {
+      return core::Status::invalid_argument("--up-axis was supplied twice");
+    }
+    if (i + 1 == argc || argv[i + 1] == nullptr) {
+      return core::Status::invalid_argument("--up-axis requires an axis");
+    }
+    const std::string_view axis = argv[++i];
+    args.up = parse_up_axis(axis);
+    if (!args.up) {
+      return core::Status::invalid_argument(
+          "--up-axis '" + std::string(axis) +
+          "': expected x, y, z, -x, -y or -z");
+    }
+  }
+  VKC_ASSIGN(
+      static_cast<core::config::Arguments&>(args),
+      core::config::parse_args(static_cast<int>(rest.size()), rest.data()));
+  return args;
+} catch (...) {
+  return core::exception_status("parse_desktop_args",
+                                core::Status::Code::InvalidArgument);
 }
 
 core::Result<std::optional<MeasureArgs>> parse_measure_args(

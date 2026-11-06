@@ -2,7 +2,9 @@
 // Copyright (c) 2026 Tao Jin
 
 // StreamPlayer on a device, over the tests' stream (test_stream.hpp). Its
-// track's counts and rate are what was written. Paused and stepped, so each
+// track's counts and rate are what was written, and its world's up the
+// session's, a live one's the newest's, kept while it reconnects. Paused and
+// stepped, so each
 // frame goes when the test says: frames arrive in order with their index,
 // pts, payload bytes, key, set (kNoSet for a record that names none), stage
 // times (read, decode, mesh, submit, the wait
@@ -1153,6 +1155,21 @@ TEST_F(StreamPlayerTest, TheTracksCountsAndRateAreWhatWasWritten) {
   EXPECT_EQ(track.max_pts_ns, pts_of(kFrames - 1));
   EXPECT_EQ((*opened)->rate().num, 25u);
   EXPECT_EQ((*opened)->rate().den, 1u);
+}
+
+// A file's world's up is its session's: all zero for one that names none.
+TEST_F(StreamPlayerTest, AFilesWorldUpIsItsSessions) {
+  core::Result<std::unique_ptr<StreamPlayer>> none = StreamPlayer::open(path_);
+  ASSERT_TRUE(none.ok()) << none.status().message();
+  EXPECT_EQ((*none)->world_up(), (std::array<float, 3>{}));
+  const std::string named = scratch_.file("named.vrst");
+  const std::array<float, 3> up{0.0f, 0.0f, 1.0f};
+  const core::Status copied = vp_test::copy_with_up(path_, named, up);
+  ASSERT_TRUE(copied.ok()) << copied.message();
+  core::Result<std::unique_ptr<StreamPlayer>> opened =
+      StreamPlayer::open(named);
+  ASSERT_TRUE(opened.ok()) << opened.status().message();
+  EXPECT_EQ((*opened)->world_up(), up);
 }
 
 // Untimed, as until set_device_timing asks: each frame's read, decode, mesh,
@@ -4888,12 +4905,16 @@ TEST_F(LivePlayerTest, RecordsFasterThanTheirDecodeStillShowNewerFrames) {
 }
 
 TEST_F(LivePlayerTest, AServerGoneIsARetryAndANewOneOnItsPortGivesFrames) {
+  const std::array<float, 3> first_up{0.0f, 0.0f, 1.0f};
+  const std::array<float, 3> second_up{0.0f, -1.0f, 0.0f};
+  recording_.session.up = first_up;
   std::unique_ptr<networking::StreamServer> server = serve();
   ASSERT_NE(server, nullptr);
   const std::uint16_t port = server->port();
   StreamPlayer* player = start_live(port);
   ASSERT_NE(player, nullptr);
   ASSERT_TRUE(reaches(LiveState::kConnected));
+  EXPECT_EQ(player->world_up(), first_up);
   ASSERT_NO_FATAL_FAILURE(publish(*server, 0));
   const std::optional<FrameStamp> first = next_frame();
   ASSERT_TRUE(first.has_value());
@@ -4906,15 +4927,19 @@ TEST_F(LivePlayerTest, AServerGoneIsARetryAndANewOneOnItsPortGivesFrames) {
   EXPECT_EQ(player->live_status().last_error,
             "the sender closed the connection");
   EXPECT_TRUE(player->status().ok()) << player->status().message();
+  EXPECT_EQ(player->world_up(), first_up) << "kept while it reconnects";
   // A new server on the same port, of the stream at twice the voxel size,
-  // which a grid of the last connection's would refuse: frames again.
+  // which a grid of the last connection's would refuse: frames again, and its
+  // up.
   const std::string coarse =
       scratch_.copy(VP_TEST_STREAMS, vp_test::kCoarseStream);
   ASSERT_FALSE(coarse.empty());
   ASSERT_NO_FATAL_FAILURE(read_recording(coarse, &recording_));
+  recording_.session.up = second_up;
   server = serve(port);
   ASSERT_NE(server, nullptr);
   ASSERT_TRUE(reaches(LiveState::kConnected));
+  EXPECT_EQ(player->world_up(), second_up);
   for (std::uint64_t i = 0; i < kIntraPeriod; ++i) {
     ASSERT_NO_FATAL_FAILURE(publish(*server, i));
     const std::optional<FrameStamp> frame = next_frame();

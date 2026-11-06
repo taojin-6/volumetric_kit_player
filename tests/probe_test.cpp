@@ -53,6 +53,8 @@
 #include <utility>
 #include <vector>
 
+#include <glm/vec3.hpp>
+
 #include "program_requirements.hpp"
 #include "test_stream.hpp"
 #include "volumetric_kit/core/base/result.hpp"
@@ -531,7 +533,7 @@ TEST(RunProbe, ItsHooksOptionsWithAProgramsMakeHooksExit2) {
 }
 
 // The view's settings run_probe plays with: the program's, its make_hooks
-// (never made) and device requirements included, with the command line's
+// (never made), device requirements and up included, with the command line's
 // validation, timing, tile depth, labels and vertex sharing, given or its
 // defaults; none for the usage.
 TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
@@ -550,6 +552,7 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
   config.view.device_requirements.optional_extensions = {"VK_VP_test_kept"};
   config.view.panel.state.open = true;
   config.view.panel.state.right_share = 0.3f;
+  config.view.up = glm::vec3(0.0f, 0.0f, 2.0f);
 #ifdef NDEBUG
   const bool validation = test::requested_validation() != test::Validation::Off;
 #else
@@ -566,6 +569,8 @@ TEST(RunProbe, TheViewKeepsTheProgramsSettingsUnderTheCommandLines) {
     EXPECT_EQ(view.device_requirements.optional_extensions,
               std::vector<std::string>{"VK_VP_test_kept"});
     EXPECT_EQ(view.panel.state.right_share, 0.3f) << "the panel's share";
+    EXPECT_EQ(view.up, std::optional<glm::vec3>(glm::vec3(0.0f, 0.0f, 2.0f)))
+        << "the world's up";
   };
   const std::optional<vkp::PlayerViewConfig> defaults =
       view_of({"--worker", "--file", "s.vrst"}, config);

@@ -19,7 +19,8 @@
 // failed launch's, is it and the player's commit. The iOS app's measure
 // arguments parse with the system's left alone, the tile depth, the labels
 // and the vertex sharing too, and what is wrong is named; the timings',
-// depths' and switches' names round-trip. On a device: its line names it, its
+// depths' and switches' names round-trip, and the core's up axes parse. On a
+// device: its line names it, its
 // driver, the core's memory facts, its timestamps and its clocks' calibration,
 // each as the device says, and its rings run in place exactly where its
 // device-mapped memory is cached.
@@ -39,6 +40,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <glm/vec3.hpp>
 
 #include "test_stream.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
@@ -482,6 +485,25 @@ TEST(Size, IsWidthByHeightInPixelsTo16384) {
        {"", "640", "640x", "x480", "0x480", "640x0", "16385x8", "8x16385",
         "640X480", "640x480x2", " 640x480", "-640x480", "640*480"}) {
     EXPECT_FALSE(vkp::parse_size(text).has_value()) << "'" << text << "'";
+  }
+}
+
+// The core's up_axis names (its config.cpp's axis_vector): an axis, signed or
+// not, each the unit vector along it; nothing else.
+TEST(UpAxis, TakesTheCoresAxesSignedOrNot) {
+  const std::pair<const char*, glm::vec3> axes[] = {
+      {"x", {1.0f, 0.0f, 0.0f}},   {"y", {0.0f, 1.0f, 0.0f}},
+      {"z", {0.0f, 0.0f, 1.0f}},   {"+x", {1.0f, 0.0f, 0.0f}},
+      {"+y", {0.0f, 1.0f, 0.0f}},  {"+z", {0.0f, 0.0f, 1.0f}},
+      {"-x", {-1.0f, 0.0f, 0.0f}}, {"-y", {0.0f, -1.0f, 0.0f}},
+      {"-z", {0.0f, 0.0f, -1.0f}}};
+  for (const auto& [text, up] : axes) {
+    EXPECT_EQ(vkp::parse_up_axis(text), std::optional<glm::vec3>(up))
+        << "'" << text << "'";
+  }
+  for (const char* text :
+       {"", "Z", "w", "+", "-", "xy", "--z", "+-z", " z", "z ", "0,0,1"}) {
+    EXPECT_FALSE(vkp::parse_up_axis(text).has_value()) << "'" << text << "'";
   }
 }
 

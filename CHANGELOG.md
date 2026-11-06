@@ -261,6 +261,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   removed (`PlayerView::wireframe`), and Cull culls its back faces
   (`PlayerView::cull_back_faces`). The view requires line fill
   (`fillModeNonSolid`), which every Mac, iPhone, iPad and NVIDIA box has.
+- The view keeps the stream's up: `StreamPlayer::world_up` reads grid's
+  `Session::up`, and `view_up` chooses `PlayerViewConfig::up` over it over +y.
+  A stream that names its up stands upright with nothing to set, and a live
+  session's is taken when it arrives. The desktop app's `--up-axis AXIS`
+  (`parse_desktop_args`, `desktop_usage`, `parse_up_axis`: the core's `up_axis`
+  names) and the iOS dialog's Up field set the override.
+- `PlayerView::reset_camera` returns the camera to its start view, on a double
+  click or a double tap on the scene; over a program's panel they stay the
+  panel's.
 
 ### Changed
 
@@ -452,6 +461,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   specialized families, which no longer reruns the stats' phone fit or the
   draw row); and the `consumer` builds are a CI step of their own after the
   tests.
+- build: gfx with `OrbitCamera`'s settable world up and no stop at the poles:
+  the eye passes over the top and under the bottom, the picture upside down,
+  and the view never rolls. grid 0.14.0, whose `Session::up` the view keeps,
+  which the player requires.
 
 ### Fixed
 
@@ -515,3 +528,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   requirements, such as importing external memory, asks for it in
   `PlayerViewConfig::device_requirements` (`AppConfig::view` for
   `run_desktop` and `run_probe`).
+- `desktop_view_config` takes the command line too
+  (`desktop_view_config(config, scenario, args)`; left out, no `--up-axis`, so
+  two-argument calls still build); a program that reads the desktop app's
+  command line before `run_desktop` parses it with `parse_desktop_args`, which
+  takes `--up-axis` beside the core's arguments.
